@@ -1,0 +1,306 @@
+@page "/reportes"
+@rendermode InteractiveServer
+@inject ReportExportAppService Reports
+@inject CurrentUserService CurrentUser
+@inject RegNeps.Web.Export.TempExportStore TempStore
+@inject NavigationManager Nav
+
+<PageTitle>Reportes profesionales — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para exportar reportes.</div>
+}
+else
+{
+    <h1 class="mb-3">Reportes profesionales</h1>
+    <p class="text-muted mb-3">
+        Vista previa y descarga de un informe <strong>consolidado</strong> con todos los registros
+        entre la fecha inicial y la final (ambas incluidas).
+    </p>
+
+    <div class="row g-2 mb-3 align-items-end" style="max-width: 720px;">
+        <div class="col-md-3">
+            <label class="form-label">Desde</label>
+            <InputDate class="form-control" @bind-Value="_fromLocal" />
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Hasta</label>
+            <InputDate class="form-control" @bind-Value="_toLocal" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Telar</label>
+            <input class="form-control" @bind="_telar" placeholder="Opcional" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Tela</label>
+            <input class="form-control" @bind="_tela" placeholder="Opcional" />
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-primary w-100" @onclick="PreviewAsync" disabled="@_loading">
+                @(_loading ? "…" : "Vista previa")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-warning">@_error</div>
+    }
+
+    @if (_preview is not null)
+    {
+        @if (_preview.Records.Count == 0)
+        {
+            <div class="alert alert-info">
+                No hay registros en el rango seleccionado
+                (@(_fromLocal?.ToString("dd/MM/yyyy")) – @_toLocal?.ToString("dd/MM/yyyy")).
+                Ajuste las fechas e intente de nuevo.
+            </div>
+        }
+        else
+        {
+            <div class="alert alert-success py-2">
+                Consolidado: <strong>@_preview.Records.Count</strong> registros
+                del @_fromLocal?.ToString("dd/MM/yyyy") al @_toLocal?.ToString("dd/MM/yyyy")
+                (orden cronológico).
+            </div>
+
+            <div class="mb-3">
+                <h5>Conclusiones</h5>
+                <ul>
+                    @foreach (var c in _preview.Conclusions)
+                    {
+                        <li>@c</li>
+                    }
+                </ul>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-3">
+                    <div class="card border-0 shadow-sm"><div class="card-body">
+                        <div class="text-muted small">Registros</div>
+                        <div class="fs-5 fw-semibold">@_preview.Summary.TotalRecords</div>
+                    </div></div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card border-0 shadow-sm"><div class="card-body">
+                        <div class="text-muted small">Promedio</div>
+                        <div class="fs-5 fw-semibold">@_preview.Summary.AverageNeps.ToString("0.##")</div>
+                    </div></div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card border-0 shadow-sm"><div class="card-body">
+                        <div class="text-muted small">Críticos</div>
+                        <div class="fs-5 fw-semibold text-danger">@_preview.Summary.CriticalCount</div>
+                    </div></div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card border-0 shadow-sm"><div class="card-body">
+                        <div class="text-muted small">Calidad</div>
+                        <div class="fs-5 fw-semibold">@_preview.Summary.QualityIndex.ToString("0.#")%</div>
+                    </div></div>
+                </div>
+            </div>
+
+            <div class="row g-4 mb-4">
+                <div class="col-lg-6">
+                    <h5>Peores telares</h5>
+                    @if (_preview.Summary.WorstTelars.Count == 0)
+                    {
+                        <p class="text-muted">Sin datos.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped">
+                                <thead>
+                                    <tr><th>Telar</th><th>Promedio</th><th>Regs</th><th>Crít.</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var t in _preview.Summary.WorstTelars)
+                                    {
+                                        <tr>
+                                            <td>@t.Key</td>
+                                            <td>@t.AverageNeps.ToString("0.##")</td>
+                                            <td>@t.RecordCount</td>
+                                            <td>@t.CriticalCount</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+                <div class="col-lg-6">
+                    <h5>Mejores telares</h5>
+                    @if (_preview.Summary.BestTelars.Count == 0)
+                    {
+                        <p class="text-muted">Sin datos.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped">
+                                <thead>
+                                    <tr><th>Telar</th><th>Promedio</th><th>Regs</th><th>Crít.</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var t in _preview.Summary.BestTelars)
+                                    {
+                                        <tr>
+                                            <td>@t.Key</td>
+                                            <td>@t.AverageNeps.ToString("0.##")</td>
+                                            <td>@t.RecordCount</td>
+                                            <td>@t.CriticalCount</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <h5>Tendencia diaria</h5>
+            @if (_preview.Summary.ByDay.Count == 0)
+            {
+                <p class="text-muted">Sin puntos en el periodo.</p>
+            }
+            else
+            {
+                <div class="table-responsive mb-4" style="max-width: 480px;">
+                    <table class="table table-sm table-striped">
+                        <thead><tr><th>Fecha</th><th>Promedio</th><th>Cantidad</th></tr></thead>
+                        <tbody>
+                            @foreach (var d in _preview.Summary.ByDay)
+                            {
+                                <tr>
+                                    <td>@d.Date.ToString("dd/MM/yyyy")</td>
+                                    <td>@d.AverageNeps.ToString("0.##")</td>
+                                    <td>@d.Count</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <div class="d-flex gap-2 flex-wrap align-items-center">
+                <select class="form-select form-select-sm" style="width: auto;" @bind="_style">
+                    <option value="completo">Estilo Completo</option>
+                    <option value="clasico">Estilo Clásico</option>
+                </select>
+                <button class="btn btn-outline-danger" disabled="@_exporting" @onclick='() => DownloadAsync("pdf")'>Exportar PDF</button>
+                <button class="btn btn-outline-success" disabled="@_exporting" @onclick='() => DownloadAsync("xlsx")'>Exportar Excel</button>
+                <button class="btn btn-outline-secondary" disabled="@_exporting" @onclick='() => DownloadAsync("csv")'>Exportar CSV</button>
+            </div>
+        }
+    }
+}
+
+@code {
+    private bool _allowed;
+    private UserSession? _session;
+    private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
+    private DateTime? _toLocal = DateTime.Today;
+    private string _telar = "";
+    private string _tela = "";
+    private string _style = "completo";
+    private ProfessionalReportPreview? _preview;
+    private bool _loading;
+    private bool _exporting;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ExportReports) == true;
+    }
+
+    private bool TryBuildRange(out ReportDateRange range)
+    {
+        range = default;
+        if (_fromLocal is null || _toLocal is null)
+        {
+            _error = "Debe indicar fecha inicial y fecha final.";
+            return false;
+        }
+
+        if (_fromLocal.Value.Date > _toLocal.Value.Date)
+        {
+            _error = "La fecha inicial no puede ser posterior a la fecha final.";
+            return false;
+        }
+
+        range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
+        return true;
+    }
+
+    private async Task PreviewAsync()
+    {
+        if (_session is null || !TryBuildRange(out var range))
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            _preview = await Reports.BuildProfessionalPreviewAsync(
+                range.FromUtc,
+                range.ToInclusiveUtc,
+                _session.UserId,
+                _session.SeesAllRecords,
+                _telar,
+                _tela);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _preview = null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task DownloadAsync(string format)
+    {
+        if (_session is null || !TryBuildRange(out var range))
+        {
+            return;
+        }
+
+        _exporting = true;
+        _error = null;
+        try
+        {
+            var filters = new RecordFilters
+            {
+                Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
+                Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
+            };
+            range.ApplyTo(filters);
+
+            var file = await Reports.ExportAsync(
+                format, filters, _session.UserId, _session.SeesAllRecords, _style);
+            var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName);
+            Nav.NavigateTo($"/api/export/temp/{id}", forceLoad: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+}

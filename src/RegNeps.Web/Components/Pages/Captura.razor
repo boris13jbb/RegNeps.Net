@@ -1,0 +1,561 @@
+@page "/captura"
+@rendermode InteractiveServer
+@inject NepRecordService RecordService
+@inject IFabricRepository FabricRepository
+@inject ILoteTramaRepository LoteTramaRepository
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Captura — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para capturar registros.</div>
+}
+else
+{
+    <div class="capture-page">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+            <div>
+                <h1 class="capture-title mb-1">Captura de registros</h1>
+                <p class="capture-subtitle mb-0">Su tabla personal. Guarde informes para compartir con el equipo.</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+                <a class="btn btn-sm btn-outline-secondary" href="/telas">Telas</a>
+                <a class="btn btn-sm btn-outline-secondary" href="/lotes">Lotes</a>
+                <a class="btn btn-sm btn-outline-secondary" href="/registros">Filtros</a>
+                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="NewSessionAsync">Nueva sesión</button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_success))
+        {
+            <div class="alert alert-success py-2">@_success</div>
+        }
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger py-2">@_error</div>
+        }
+
+        <div class="row g-2 mb-3">
+            <div class="col-6 col-lg-3">
+                <div class="capture-kpi">
+                    <div class="capture-kpi-label">Registros</div>
+                    <div class="capture-kpi-value">@_sessionRecords.Count</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="capture-kpi">
+                    <div class="capture-kpi-label">Neps totales</div>
+                    <div class="capture-kpi-value">@_totalNeps.ToString("0.##")</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="capture-kpi">
+                    <div class="capture-kpi-label">Mts calculados</div>
+                    <div class="capture-kpi-value">@_totalMts.ToString("0")</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="capture-kpi">
+                    <div class="capture-kpi-label">Telares</div>
+                    <div class="capture-kpi-value">@_loomCount</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="capture-bar card border-0 shadow-sm mb-3">
+            <div class="card-body">
+                <div class="row g-3 align-items-end">
+                    <div class="col-lg-4">
+                        <label class="capture-label">Tela / Tejido</label>
+                        <select class="form-select" value="@_telaSelect" @onchange="OnTelaSelectChanged">
+                            <option value="">— Seleccionar tela —</option>
+                            @foreach (var fabric in _fabrics)
+                            {
+                                <option value="@fabric.Name">@fabric.Name</option>
+                            }
+                            <option value="@ManualOption">Manual</option>
+                        </select>
+                        @if (_useManualTela)
+                        {
+                            <label class="capture-label mt-2">Tela manual</label>
+                            <input class="form-control text-uppercase"
+                                   @bind="_manualTela" @bind:event="oninput"
+                                   placeholder="Escriba el nombre de la tela" maxlength="120" />
+                        }
+                        <p class="text-muted small mb-0 mt-2">
+                            Catálogo en <a href="/telas">Telas</a>. Use <strong>Manual</strong> para escribir una tela nueva.
+                        </p>
+                    </div>
+                    <div class="col-lg-8">
+                        <label class="capture-label">Lote de trama</label>
+                        <select class="form-select mb-2" value="@_loteSelect" @onchange="OnLoteSelectChanged">
+                            <option value="">Seleccionar lote...</option>
+                            @foreach (var lote in _lotes)
+                            {
+                                <option value="@lote.Code">@lote.Code</option>
+                            }
+                            <option value="@ManualOption">Manual</option>
+                        </select>
+                        <label class="capture-label">@(_useManualLote ? "Lote manual (completo)" : "Lote completo")</label>
+                        <input class="form-control font-monospace fw-semibold text-uppercase"
+                               @bind="_model.LoteTrama" @bind:event="oninput"
+                               placeholder="63E264H10A" maxlength="64" />
+                        <p class="text-muted small mb-0 mt-2">
+                            Gestionar catálogo en <a href="/lotes">Lotes de trama</a> (@_lotes.Count).
+                            Use <strong>Manual</strong> para escribir un lote nuevo.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-3">
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <h5 class="card-title mb-3">Nuevo registro</h5>
+                        <EditForm Model="_model" OnValidSubmit="SaveAsync">
+                            <div class="mb-2">
+                                <label class="capture-label">Telar *</label>
+                                <InputText class="form-control capture-input" @bind-Value="_model.Telar" placeholder="Ej: 102" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="capture-label">Neps *</label>
+                                <InputNumber class="form-control capture-input" @bind-Value="_model.Neps" placeholder="Ej: 53" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="capture-label">Turno</label>
+                                <InputSelect class="form-select capture-input" @bind-Value="_model.Turno">
+                                    <option value="">—</option>
+                                    <option value="A">A</option>
+                                    <option value="B">B</option>
+                                    <option value="C">C</option>
+                                </InputSelect>
+                            </div>
+                            <div class="mb-2">
+                                <label class="capture-label">Operario</label>
+                                <InputText class="form-control capture-input" @bind-Value="_model.Operario" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="capture-label">Línea</label>
+                                <InputText class="form-control capture-input" @bind-Value="_model.LineaProduccion" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="capture-label">Observación</label>
+                                <InputTextArea class="form-control capture-input" @bind-Value="_model.Observacion" rows="2" />
+                            </div>
+                            <div class="capture-mts mb-3">
+                                <span>Mts = Neps / @NepsConstants.TestLengthM.ToString("0.##")</span>
+                                <strong>@((_model.Neps / NepsConstants.TestLengthM).ToString("0"))</strong>
+                                @if (_previewLevel is not null)
+                                {
+                                    <span class="ms-2">· @_previewLevel.Value.ToDisplayLabel()</span>
+                                }
+                            </div>
+                            <button type="submit" class="btn capture-add-btn w-100" disabled="@_saving">
+                                @(_saving ? "Guardando…" : "+ Agregar")
+                            </button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-8">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-header capture-table-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <span>Registros (@_sessionRecords.Count)</span>
+                        <span class="small opacity-75">Neps: @_totalNeps.ToString("0.##") · Mts: @_totalMts.ToString("0")</span>
+                    </div>
+                    <div class="card-body p-0">
+                        @if (_sessionRecords.Count == 0)
+                        {
+                            <p class="text-muted p-3 mb-0">Sin registros en esta sesión. Agregue mediciones con el formulario.</p>
+                        }
+                        else
+                        {
+                            <div class="table-responsive">
+                                <table class="table table-sm table-hover mb-0 capture-table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Hora</th>
+                                            <th>Telar</th>
+                                            <th>Neps</th>
+                                            <th>Mts</th>
+                                            <th>Lote</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @{
+                                            var n = _sessionRecords.Count;
+                                        }
+                                        @foreach (var r in _sessionRecords)
+                                        {
+                                            <tr>
+                                                <td>@n</td>
+                                                <td>@r.CreatedAt.ToLocalTime().ToString("HH:mm")</td>
+                                                <td>@r.Telar</td>
+                                                <td>@r.Neps.ToString("0.##")</td>
+                                                <td>@r.MtsCalculados.ToString("0")</td>
+                                                <td class="font-monospace small">@r.LoteTrama</td>
+                                                <td class="text-nowrap">
+                                                    @if (_canEdit)
+                                                    {
+                                                        <button type="button" class="btn btn-link btn-sm p-0 text-primary me-2" @onclick="() => StartEditRecord(r)" title="Editar">✎</button>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 text-danger" @onclick="() => DeleteRecordAsync(r.Id)" title="Eliminar">×</button>
+                                                    }
+                                                </td>
+                                            </tr>
+                                            n--;
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @if (_editingRecord is not null)
+        {
+            <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.35);">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Editar registro</h5>
+                            <button type="button" class="btn-close" @onclick="CancelEditRecord"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-2">
+                                <label class="form-label">Telar</label>
+                                <input class="form-control" @bind="_editTelar" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Neps</label>
+                                <InputNumber class="form-control" @bind-Value="_editNeps" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Tela</label>
+                                <InputSelect class="form-select" @bind-Value="_editTela">
+                                    <option value="">—</option>
+                                    @foreach (var f in _fabrics)
+                                    {
+                                        <option value="@f.Name">@f.Name</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Lote</label>
+                                <input class="form-control font-monospace text-uppercase" @bind="_editLote" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Observación</label>
+                                <input class="form-control" @bind="_editObs" />
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" @onclick="CancelEditRecord">Cancelar</button>
+                            <button type="button" class="btn btn-primary" @onclick="SaveEditRecordAsync" disabled="@_saving">Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private const string ManualOption = "__MANUAL__";
+
+    private readonly CreateNepRecordRequest _model = new();
+
+    private IReadOnlyList<Fabric> _fabrics = [];
+    private IReadOnlyList<LoteTramaItem> _lotes = [];
+    private IReadOnlyList<NepRecord> _sessionRecords = [];
+    private AlertLevel? _previewLevel;
+    private string? _success;
+    private string? _error;
+    private bool _saving;
+    private bool _allowed;
+    private bool _canEdit;
+    private UserSession? _session;
+    private DateTime _sessionFromUtc = DateTime.UtcNow.Date;
+
+    private string _telaSelect = "";
+    private bool _useManualTela;
+    private string _manualTela = "";
+
+    private string _loteSelect = "";
+    private bool _useManualLote;
+
+    private NepRecord? _editingRecord;
+    private string _editTelar = "";
+    private double _editNeps;
+    private string _editTela = "";
+    private string _editLote = "";
+    private string _editObs = "";
+
+    private double _totalNeps;
+    private double _totalMts;
+    private int _loomCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.CaptureRecords) == true;
+        _canEdit = _session?.Has(AppPermission.EditRecords) == true;
+        if (!_allowed || _session is null)
+        {
+            return;
+        }
+
+        _fabrics = await FabricRepository.GetActiveAsync();
+        await ReloadLotesAsync();
+        if (string.IsNullOrWhiteSpace(_model.Operario))
+        {
+            _model.Operario = _session.DisplayName;
+        }
+
+        if (_lotes.Count > 0)
+        {
+            _loteSelect = _lotes[0].Code;
+            _model.LoteTrama = _lotes[0].Code;
+            _useManualLote = false;
+        }
+        else
+        {
+            _loteSelect = ManualOption;
+            _useManualLote = true;
+        }
+
+        _sessionFromUtc = DateTime.Today.ToUniversalTime();
+        await ReloadSessionAsync();
+    }
+
+    private async Task ReloadLotesAsync()
+    {
+        _lotes = await LoteTramaRepository.GetActiveAsync();
+    }
+
+    private async Task ReloadFabricsAsync()
+    {
+        _fabrics = await FabricRepository.GetActiveAsync();
+    }
+
+    private async Task ReloadSessionAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        var filters = new RecordFilters { FromUtc = _sessionFromUtc };
+        _sessionRecords = await RecordService.QueryAsync(filters, _session.UserId, viewerSeesAll: false, take: 500);
+        _totalNeps = _sessionRecords.Sum(r => r.Neps);
+        _totalMts = _sessionRecords.Sum(r => r.MtsCalculados);
+        _loomCount = _sessionRecords.Select(r => r.Telar).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    }
+
+    private void OnTelaSelectChanged(ChangeEventArgs e)
+    {
+        _telaSelect = e.Value?.ToString() ?? "";
+        if (_telaSelect == ManualOption)
+        {
+            _useManualTela = true;
+            _model.Tela = "";
+            _manualTela = "";
+            return;
+        }
+
+        _useManualTela = false;
+        _manualTela = "";
+        _model.Tela = _telaSelect;
+    }
+
+    private void OnLoteSelectChanged(ChangeEventArgs e)
+    {
+        _loteSelect = e.Value?.ToString() ?? "";
+        if (_loteSelect == ManualOption)
+        {
+            _useManualLote = true;
+            _model.LoteTrama = "";
+            return;
+        }
+
+        _useManualLote = false;
+        _model.LoteTrama = _loteSelect;
+    }
+
+    private static string NormalizeLote(string? value) =>
+        (value ?? "").Trim().ToUpperInvariant().Replace(" ", "", StringComparison.Ordinal);
+
+    private static string NormalizeTela(string? value) =>
+        (value ?? "").Trim();
+
+    private string ResolveTelaForSave()
+    {
+        if (_useManualTela || _telaSelect == ManualOption)
+        {
+            return NormalizeTela(_manualTela);
+        }
+
+        return NormalizeTela(_model.Tela);
+    }
+
+    private async Task NewSessionAsync()
+    {
+        _sessionFromUtc = DateTime.UtcNow;
+        _model.Telar = "";
+        _model.Neps = 0;
+        _model.Observacion = "";
+        _success = "Nueva sesión iniciada. La tabla muestra solo registros desde ahora.";
+        _error = null;
+        await ReloadSessionAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _error = null;
+        _success = null;
+        _saving = true;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_model.Telar))
+            {
+                throw new ArgumentException("El telar es obligatorio.");
+            }
+
+            if (_model.Neps < 0)
+            {
+                throw new ArgumentException("Los neps no pueden ser negativos.");
+            }
+
+            var tela = ResolveTelaForSave();
+            if (string.IsNullOrWhiteSpace(tela))
+            {
+                throw new ArgumentException(_useManualTela
+                    ? "Escriba el nombre de la tela manual."
+                    : "Seleccione una tela o use Manual.");
+            }
+
+            _model.Tela = tela;
+            _model.LoteTrama = NormalizeLote(_model.LoteTrama);
+            if (string.IsNullOrWhiteSpace(_model.LoteTrama))
+            {
+                throw new ArgumentException(_useManualLote
+                    ? "Escriba el lote de trama manual."
+                    : "Seleccione un lote o use Manual.");
+            }
+
+            // Catálogo: agregar tela/lote nuevos al guardar (paridad Flutter).
+            if (_fabrics.All(x => !string.Equals(x.Name, tela, StringComparison.OrdinalIgnoreCase)))
+            {
+                await FabricRepository.AddAsync(new Fabric { Name = tela, IsActive = true });
+                await ReloadFabricsAsync();
+                _telaSelect = tela;
+                _useManualTela = false;
+                _manualTela = "";
+            }
+
+            if (_lotes.All(x => !string.Equals(x.Code, _model.LoteTrama, StringComparison.OrdinalIgnoreCase)))
+            {
+                await LoteTramaRepository.AddAsync(new LoteTramaItem { Code = _model.LoteTrama, IsActive = true });
+                await ReloadLotesAsync();
+                _loteSelect = _model.LoteTrama;
+                _useManualLote = false;
+            }
+
+            _model.CreatedByUserId = _session.UserId;
+            _model.CreatedByEmail = _session.Username;
+            _model.CreatedByRole = _session.EffectiveRole.ToString();
+
+            var saved = await RecordService.CreateAsync(_model);
+            var eval = await RecordService.EvaluateAsync(saved.Neps, saved.Telar);
+            _previewLevel = eval.Level;
+            _success = $"Agregado: telar {saved.Telar}, {saved.Neps} neps, {saved.MtsCalculados:0} mts — {eval.Level.ToDisplayLabel()}.";
+            _model.Telar = "";
+            _model.Neps = 0;
+            _model.Observacion = "";
+            await ReloadSessionAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void StartEditRecord(NepRecord r)
+    {
+        _editingRecord = r;
+        _editTelar = r.Telar;
+        _editNeps = r.Neps;
+        _editTela = r.Tela;
+        _editLote = r.LoteTrama;
+        _editObs = r.Observacion;
+    }
+
+    private void CancelEditRecord() => _editingRecord = null;
+
+    private async Task SaveEditRecordAsync()
+    {
+        if (_editingRecord is null || _session is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+        try
+        {
+            await RecordService.UpdateAsync(new UpdateNepRecordRequest
+            {
+                Id = _editingRecord.Id,
+                Telar = _editTelar,
+                Neps = _editNeps,
+                Tela = _editTela,
+                LoteTrama = NormalizeLote(_editLote),
+                Turno = _editingRecord.Turno,
+                Operario = _editingRecord.Operario,
+                LineaProduccion = _editingRecord.LineaProduccion,
+                Observacion = _editObs
+            });
+            _editingRecord = null;
+            _success = "Registro actualizado.";
+            await ReloadSessionAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteRecordAsync(Guid id)
+    {
+        try
+        {
+            await RecordService.DeleteAsync(id);
+            _success = "Registro eliminado.";
+            await ReloadSessionAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

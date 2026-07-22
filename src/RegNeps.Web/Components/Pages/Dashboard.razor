@@ -1,0 +1,134 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+@inject NepRecordService RecordService
+@inject CurrentUserService CurrentUser
+@inject NavigationManager Navigation
+
+<PageTitle>Dashboard — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para ver el dashboard.</div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="mb-0">Dashboard</h1>
+        <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
+            @(_loading ? "Cargando…" : "Actualizar")
+        </button>
+    </div>
+
+    @if (_summary is null)
+    {
+        <p>Cargando panel…</p>
+    }
+    else
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="text-muted small">Registros</div>
+                        <div class="fs-4 fw-semibold">@_summary.TotalRegistros</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="text-muted small">Promedio neps</div>
+                        <div class="fs-4 fw-semibold">@_summary.PromedioNeps.ToString("0.##")</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="text-muted small">Total mts</div>
+                        <div class="fs-4 fw-semibold">@_summary.TotalMts.ToString("0.##")</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="text-muted small">Críticos</div>
+                        <div class="fs-4 fw-semibold text-danger">@_summary.Criticos</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="text-muted small">Advertencias</div>
+                        <div class="fs-4 fw-semibold text-warning">@_summary.Advertencias</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="text-muted small">Pendientes</div>
+                        <div class="fs-4 fw-semibold">@_summary.PendientesRevision</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <h5>Últimos registros</h5>
+        @if (_summary.Ultimos.Count == 0)
+        {
+            <p class="text-muted">Sin datos. Capture la primera medición.</p>
+        }
+        else
+        {
+            <ul class="list-group" style="max-width: 720px;">
+                @foreach (var r in _summary.Ultimos)
+                {
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>@r.CreatedAt.ToLocalTime().ToString("dd/MM HH:mm") — Telar @r.Telar — @r.Neps neps</span>
+                        <span class="text-muted">@r.MtsCalculados.ToString("0.##") mts</span>
+                    </li>
+                }
+            </ul>
+        }
+    }
+}
+
+@code {
+    private DashboardSummary? _summary;
+    private bool _loading;
+    private bool _allowed;
+    private UserSession? _session;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ViewDashboard) == true;
+        if (!_allowed)
+        {
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            _summary = await RecordService.GetDashboardSummaryAsync(_session.UserId, _session.SeesAllRecords);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

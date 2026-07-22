@@ -1,0 +1,142 @@
+@page "/exportar"
+@rendermode InteractiveServer
+@inject CurrentUserService CurrentUser
+@inject ReportExportAppService ExportService
+@inject RegNeps.Web.Export.TempExportStore TempStore
+@inject NavigationManager Nav
+
+<PageTitle>Exportar — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para exportar.</div>
+}
+else
+{
+    <h1 class="mb-3">Exportar</h1>
+    <p class="text-muted">
+        Informe consolidado con <strong>todos</strong> los registros entre la fecha inicial y la final (ambas incluidas).
+    </p>
+
+    <div class="row g-2 mb-3" style="max-width: 840px;">
+        <div class="col-md-2">
+            <label class="form-label">Desde</label>
+            <InputDate class="form-control" @bind-Value="_fromLocal" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Hasta</label>
+            <InputDate class="form-control" @bind-Value="_toLocal" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Telar</label>
+            <input class="form-control" @bind="_telar" placeholder="Opcional" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Tela</label>
+            <input class="form-control" @bind="_tela" placeholder="Opcional" />
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Estilo</label>
+            <select class="form-select" @bind="_style">
+                <option value="completo">Completo (recomendado)</option>
+                <option value="clasico">Clásico</option>
+            </select>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-warning">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_info))
+    {
+        <div class="alert alert-success">@_info</div>
+    }
+
+    <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-outline-secondary" disabled="@_busy" @onclick='() => DownloadAsync("csv")'>
+            @(_busy ? "Generando…" : "Descargar CSV")
+        </button>
+        <button class="btn btn-outline-success" disabled="@_busy" @onclick='() => DownloadAsync("xlsx")'>
+            Descargar Excel
+        </button>
+        <button class="btn btn-outline-danger" disabled="@_busy" @onclick='() => DownloadAsync("pdf")'>
+            Descargar PDF
+        </button>
+    </div>
+}
+
+@code {
+    private bool _allowed;
+    private UserSession? _session;
+    private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
+    private DateTime? _toLocal = DateTime.Today;
+    private string _telar = "";
+    private string _tela = "";
+    private string _style = "completo";
+    private bool _busy;
+    private string? _error;
+    private string? _info;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ExportReports) == true;
+    }
+
+    private async Task DownloadAsync(string format)
+    {
+        _error = null;
+        _info = null;
+
+        if (_fromLocal is null || _toLocal is null)
+        {
+            _error = "Debe indicar fecha inicial y fecha final.";
+            return;
+        }
+
+        if (_fromLocal.Value.Date > _toLocal.Value.Date)
+        {
+            _error = "La fecha inicial no puede ser posterior a la fecha final.";
+            return;
+        }
+
+        if (_session is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
+            var filters = new RecordFilters
+            {
+                Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
+                Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
+            };
+            range.ApplyTo(filters);
+
+            var file = await ExportService.ExportAsync(
+                format, filters, _session.UserId, _session.SeesAllRecords, _style);
+
+            var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName);
+            _info =
+                $"Informe consolidado del {range.LabelLocal}: archivo listo. " +
+                "Si la descarga no inicia, use el enlace del navegador.";
+            Nav.NavigateTo($"/api/export/temp/{id}", forceLoad: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

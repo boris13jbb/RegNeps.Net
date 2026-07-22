@@ -1,0 +1,13 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+publish/
+App_Data/
+*.db
+*.db-shm
+*.db-wal
+appsettings.Development.json
+*.log

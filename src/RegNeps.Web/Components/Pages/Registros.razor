@@ -1,0 +1,528 @@
+@page "/registros"
+@rendermode InteractiveServer
+@inject NepRecordService RecordService
+@inject IAlertConfigRepository AlertConfigRepository
+@inject IRecordImportService ImportService
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Registros — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para ver registros.</div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h1 class="mb-0">Registros</h1>
+        <div class="d-flex gap-2 flex-wrap">
+            @if (_canEdit)
+            {
+                <a class="btn btn-outline-secondary btn-sm" href="/api/import/template">Plantilla Excel</a>
+                <label class="btn btn-outline-primary btn-sm mb-0">
+                    Importar
+                    <InputFile OnChange="OnImportAsync" accept=".xlsx,.xls" class="d-none" />
+                </label>
+            }
+            @if (_canClearAll)
+            {
+                <button class="btn btn-outline-danger btn-sm" @onclick="ClearAllAsync" disabled="@_loading">
+                    Vaciar todos
+                </button>
+            }
+            <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
+                @(_loading ? "Cargando…" : "Actualizar")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-info">@_message</div>
+    }
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+
+    <div class="row g-2 mb-3" style="max-width: 1100px;">
+        <div class="col-md-2">
+            <input class="form-control form-control-sm" placeholder="Telar" @bind="_filterTelar" />
+        </div>
+        <div class="col-md-2">
+            <input class="form-control form-control-sm" placeholder="Tela" @bind="_filterTela" />
+        </div>
+        <div class="col-md-2">
+            <input class="form-control form-control-sm" placeholder="Lote" @bind="_filterLote" />
+        </div>
+        <div class="col-md-1">
+            <select class="form-select form-select-sm" @bind="_filterTurno">
+                <option value="">Turno</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <select class="form-select form-select-sm" @bind="_filterAlert">
+                <option value="">Alerta</option>
+                <option value="Normal">Normal</option>
+                <option value="Advertencia">Advertencia</option>
+                <option value="Critico">Crítico</option>
+            </select>
+        </div>
+        <div class="col-md-1">
+            <InputDate class="form-control form-control-sm" @bind-Value="_filterFrom" />
+        </div>
+        <div class="col-md-1">
+            <InputDate class="form-control form-control-sm" @bind-Value="_filterTo" />
+        </div>
+        <div class="col-md-1">
+            <div class="form-check mt-1">
+                <input class="form-check-input" type="checkbox" id="pendientes" @bind="_soloPendientes" />
+                <label class="form-check-label" for="pendientes">Pend.</label>
+            </div>
+        </div>
+        <div class="col-12">
+            <button class="btn btn-primary btn-sm" @onclick="LoadAsync">Filtrar</button>
+        </div>
+    </div>
+
+    @if (_loading && _records.Count == 0)
+    {
+        <p>Cargando registros…</p>
+    }
+    else if (_records.Count == 0)
+    {
+        <div class="alert alert-secondary">No hay registros con los filtros actuales.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Fecha</th>
+                        <th>Telar</th>
+                        <th>Neps</th>
+                        <th>Mts</th>
+                        <th>Tela</th>
+                        <th>Lote</th>
+                        <th>Turno</th>
+                        <th>Operario</th>
+                        <th>Alerta</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _records)
+                    {
+                        var level = r.GetAlertLevel(_config);
+                        <tr>
+                            <td>@r.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td>
+                            <td>@r.Telar</td>
+                            <td>@r.Neps.ToString("0.##")</td>
+                            <td>@r.MtsCalculados.ToString("0.##")</td>
+                            <td>@r.Tela</td>
+                            <td>@r.LoteTrama</td>
+                            <td>@r.Turno</td>
+                            <td>@r.Operario</td>
+                            <td>
+                                <span class="badge @BadgeClass(level)">@level.ToDisplayLabel()</span>
+                            </td>
+                            <td class="text-nowrap">
+                                @if (_canEdit)
+                                {
+                                    <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenEdit(r)">Editar</button>
+                                }
+                                @if (_canCorrect && level != AlertLevel.Normal)
+                                {
+                                    <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenCorrective(r)">Acción</button>
+                                }
+                                @if (_canDelete)
+                                {
+                                    <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(r.Id)">Eliminar</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (_editTarget is not null)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Editar registro — @_editTarget.Telar</h5>
+                        <button type="button" class="btn-close" @onclick="CloseEdit"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <label class="form-label">Telar *</label>
+                                <input class="form-control" @bind="_editTelar" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Neps *</label>
+                                <input class="form-control" type="number" step="0.01" @bind="_editNeps" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Mts (calc.)</label>
+                                <input class="form-control" value="@((_editNeps / 0.09).ToString("0.##"))" disabled />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Tela</label>
+                                <input class="form-control" @bind="_editTela" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Lote/trama</label>
+                                <input class="form-control" @bind="_editLote" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Turno</label>
+                                <select class="form-select" @bind="_editTurno">
+                                    <option value="">—</option>
+                                    <option value="A">A</option>
+                                    <option value="B">B</option>
+                                    <option value="C">C</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Operario</label>
+                                <input class="form-control" @bind="_editOperario" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Línea</label>
+                                <input class="form-control" @bind="_editLinea" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Observación</label>
+                                <textarea class="form-control" rows="2" @bind="_editObservacion"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @onclick="CloseEdit">Cancelar</button>
+                        <button class="btn btn-primary" @onclick="SaveEditAsync" disabled="@_savingEdit">Guardar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_correctiveTarget is not null)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Acción correctiva — Telar @_correctiveTarget.Telar</h5>
+                        <button type="button" class="btn-close" @onclick="CloseCorrective"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Acción *</label>
+                            <textarea class="form-control" rows="3" @bind="_accion"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Responsable</label>
+                            <input class="form-control" @bind="_responsable" />
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="revisado" @bind="_marcarRevisado" />
+                            <label class="form-check-label" for="revisado">Marcar como revisado</label>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @onclick="CloseCorrective">Cancelar</button>
+                        <button class="btn btn-primary" @onclick="SaveCorrectiveAsync" disabled="@_savingCorrective">Guardar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private IReadOnlyList<NepRecord> _records = [];
+    private AlertConfig _config = new();
+    private bool _loading = true;
+    private bool _allowed;
+    private bool _canEdit;
+    private bool _canDelete;
+    private bool _canClearAll;
+    private bool _canCorrect;
+    private UserSession? _session;
+    private string? _message;
+    private string? _error;
+
+    private string _filterTelar = "";
+    private string _filterTela = "";
+    private string _filterLote = "";
+    private string _filterTurno = "";
+    private string _filterAlert = "";
+    private DateTime? _filterFrom;
+    private DateTime? _filterTo;
+    private bool _soloPendientes;
+
+    private NepRecord? _editTarget;
+    private string _editTelar = "";
+    private double _editNeps;
+    private string _editTela = "";
+    private string _editLote = "";
+    private string _editTurno = "";
+    private string _editOperario = "";
+    private string _editLinea = "";
+    private string _editObservacion = "";
+    private bool _savingEdit;
+
+    private NepRecord? _correctiveTarget;
+    private string _accion = "";
+    private string _responsable = "";
+    private bool _marcarRevisado = true;
+    private bool _savingCorrective;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ViewRecords) == true;
+        _canEdit = _session?.Has(AppPermission.EditRecords) == true;
+        _canDelete = _session?.Has(AppPermission.DeleteRecords) == true;
+        _canClearAll = _session?.Has(AppPermission.ClearAllRecords) == true;
+        _canCorrect = _session?.Has(AppPermission.ApplyCorrectiveAction) == true;
+        if (!_allowed || _session is null)
+        {
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            _config = await AlertConfigRepository.GetAsync();
+            AlertLevel? alert = null;
+            if (!string.IsNullOrEmpty(_filterAlert) && Enum.TryParse<AlertLevel>(_filterAlert, out var parsed))
+            {
+                alert = parsed;
+            }
+
+            var filters = new RecordFilters
+            {
+                Telar = string.IsNullOrWhiteSpace(_filterTelar) ? null : _filterTelar.Trim(),
+                Tela = string.IsNullOrWhiteSpace(_filterTela) ? null : _filterTela.Trim(),
+                LoteTrama = string.IsNullOrWhiteSpace(_filterLote) ? null : _filterLote.Trim(),
+                Turno = string.IsNullOrWhiteSpace(_filterTurno) ? null : _filterTurno,
+                AlertLevel = alert,
+                SoloPendientes = _soloPendientes
+            };
+
+            if (_filterFrom is not null || _filterTo is not null)
+            {
+                var fromDay = (_filterFrom ?? _filterTo)!.Value.Date;
+                var toDay = (_filterTo ?? _filterFrom)!.Value.Date;
+                if (fromDay > toDay)
+                {
+                    _error = "La fecha inicial no puede ser posterior a la fecha final.";
+                    _records = [];
+                    return;
+                }
+
+                ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
+            }
+
+            _records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 500);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnImportAsync(InputFileChangeEventArgs e)
+    {
+        if (_session is null || !_canEdit)
+        {
+            return;
+        }
+
+        _message = null;
+        _error = null;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            var result = await ImportService.ImportExcelAsync(
+                stream,
+                _session.UserId,
+                _session.Username,
+                _session.EffectiveRole.ToString());
+            _message = $"Importados: {result.Imported}." +
+                       (result.Errors.Count > 0 ? $" Errores: {string.Join("; ", result.Errors.Take(5))}" : "");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void OpenEdit(NepRecord record)
+    {
+        _editTarget = record;
+        _editTelar = record.Telar;
+        _editNeps = record.Neps;
+        _editTela = record.Tela;
+        _editLote = record.LoteTrama;
+        _editTurno = record.Turno;
+        _editOperario = record.Operario;
+        _editLinea = record.LineaProduccion;
+        _editObservacion = record.Observacion;
+        _error = null;
+    }
+
+    private void CloseEdit() => _editTarget = null;
+
+    private async Task SaveEditAsync()
+    {
+        if (_editTarget is null || !_canEdit)
+        {
+            return;
+        }
+
+        _savingEdit = true;
+        _error = null;
+        try
+        {
+            await RecordService.UpdateAsync(new UpdateNepRecordRequest
+            {
+                Id = _editTarget.Id,
+                Telar = _editTelar,
+                Neps = _editNeps,
+                Tela = _editTela,
+                LoteTrama = _editLote,
+                Turno = _editTurno,
+                Operario = _editOperario,
+                LineaProduccion = _editLinea,
+                Observacion = _editObservacion
+            });
+            _message = "Registro actualizado.";
+            CloseEdit();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingEdit = false;
+        }
+    }
+
+    private void OpenCorrective(NepRecord record)
+    {
+        _correctiveTarget = record;
+        _accion = record.AccionCorrectiva;
+        _responsable = string.IsNullOrWhiteSpace(record.ResponsableRevision)
+            ? _session?.DisplayName ?? ""
+            : record.ResponsableRevision;
+        _marcarRevisado = true;
+    }
+
+    private void CloseCorrective() => _correctiveTarget = null;
+
+    private async Task SaveCorrectiveAsync()
+    {
+        if (_correctiveTarget is null)
+        {
+            return;
+        }
+
+        _savingCorrective = true;
+        _error = null;
+        try
+        {
+            await RecordService.ApplyCorrectiveAsync(new CorrectiveActionRequest
+            {
+                RecordId = _correctiveTarget.Id,
+                Accion = _accion,
+                Responsable = _responsable,
+                MarcarRevisado = _marcarRevisado
+            });
+            CloseCorrective();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingCorrective = false;
+        }
+    }
+
+    private async Task ClearAllAsync()
+    {
+        if (!_canClearAll)
+        {
+            return;
+        }
+
+        _error = null;
+        _message = null;
+        try
+        {
+            await RecordService.ClearAllAsync();
+            _message = "Todos los registros fueron eliminados.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        if (!_canDelete)
+        {
+            return;
+        }
+
+        try
+        {
+            await RecordService.DeleteAsync(id);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private static string BadgeClass(AlertLevel level) => level switch
+    {
+        AlertLevel.Normal => "text-bg-success",
+        AlertLevel.Advertencia => "text-bg-warning",
+        AlertLevel.Critico => "text-bg-danger",
+        _ => "text-bg-secondary"
+    };
+}

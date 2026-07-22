@@ -1,0 +1,250 @@
+@page "/telas"
+@rendermode InteractiveServer
+@inject IFabricRepository Fabrics
+@inject IFabricImportService FabricImport
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Telas — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para gestionar telas.</div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h1 class="mb-0">Telas</h1>
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <InputFile class="form-control form-control-sm" style="max-width: 260px;" OnChange="OnImportFile"
+                       accept=".xlsx,.xls" disabled="@_importing" />
+            <a class="btn btn-outline-secondary btn-sm" href="/api/export/fabrics/csv">CSV</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/api/export/fabrics/xlsx">Excel</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-success">@_message</div>
+    }
+
+    <div class="card border-0 shadow-sm mb-4" style="max-width: 560px;">
+        <div class="card-body">
+            <h5 class="card-title">@( _editing is null ? "Nueva tela" : "Editar tela" )</h5>
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label">Nombre *</label>
+                    <input class="form-control" @bind="_name" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Código</label>
+                    <input class="form-control" @bind="_code" />
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="active" @bind="_isActive" />
+                        <label class="form-check-label" for="active">Activa</label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@_saving">
+                        @(_saving ? "Guardando…" : "Guardar")
+                    </button>
+                    @if (_editing is not null)
+                    {
+                        <button class="btn btn-outline-secondary btn-sm ms-2" @onclick="CancelEdit">Cancelar</button>
+                    }
+                </div>
+            </div>
+            <p class="text-muted small mb-0 mt-2">
+                Importar Excel: columna Tela o Nombre (opcional Codigo). Fusiona sin borrar existentes.
+            </p>
+        </div>
+    </div>
+
+    <div class="table-responsive" style="max-width: 720px;">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th>Nombre</th>
+                    <th>Código</th>
+                    <th>Estado</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var f in _list)
+                {
+                    <tr>
+                        <td>@f.Name</td>
+                        <td>@(f.Code ?? "—")</td>
+                        <td>@(f.IsActive ? "Activa" : "Inactiva")</td>
+                        <td class="text-nowrap">
+                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => StartEdit(f)">Editar</button>
+                            <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(f.Id)">Eliminar</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<Fabric> _list = [];
+    private bool _allowed;
+    private string _name = "";
+    private string _code = "";
+    private bool _isActive = true;
+    private Fabric? _editing;
+    private bool _saving;
+    private bool _importing;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var session = await CurrentUser.GetAsync();
+        _allowed = session?.Has(AppPermission.ManageFabrics) == true;
+        if (_allowed)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync() => _list = await Fabrics.GetAllAsync();
+
+    private void StartEdit(Fabric f)
+    {
+        _editing = f;
+        _name = f.Name;
+        _code = f.Code ?? "";
+        _isActive = f.IsActive;
+        _message = null;
+        _error = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+        _name = "";
+        _code = "";
+        _isActive = true;
+    }
+
+    private async Task OnImportFile(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _message = null;
+        var file = e.File;
+        if (file is null || file.Size == 0)
+        {
+            _error = "Seleccione un archivo Excel válido.";
+            return;
+        }
+
+        if (file.Size > 5 * 1024 * 1024)
+        {
+            _error = "El archivo supera 5 MB.";
+            return;
+        }
+
+        _importing = true;
+        try
+        {
+            await using var stream = file.OpenReadStream(5 * 1024 * 1024);
+            await using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            ms.Position = 0;
+            var result = await FabricImport.ImportExcelAsync(ms);
+            if (result.Errors.Count > 0 && result.Added == 0 && result.Updated == 0)
+            {
+                _error = string.Join(" ", result.Errors);
+            }
+            else
+            {
+                _message = $"Importación: {result.Added} nuevas, {result.Updated} actualizadas, {result.Skipped} omitidas.";
+                if (result.Errors.Count > 0)
+                {
+                    _message += " " + string.Join(" ", result.Errors);
+                }
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = "No se pudo importar el Excel: " + ex.Message;
+        }
+        finally
+        {
+            _importing = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _message = null;
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            _error = "El nombre es obligatorio.";
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editing is null)
+            {
+                await Fabrics.AddAsync(new Fabric
+                {
+                    Name = _name.Trim(),
+                    Code = string.IsNullOrWhiteSpace(_code) ? null : _code.Trim(),
+                    IsActive = _isActive
+                });
+                _message = "Tela creada.";
+            }
+            else
+            {
+                _editing.Name = _name.Trim();
+                _editing.Code = string.IsNullOrWhiteSpace(_code) ? null : _code.Trim();
+                _editing.IsActive = _isActive;
+                await Fabrics.UpdateAsync(_editing);
+                _message = "Tela actualizada.";
+            }
+
+            CancelEdit();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        try
+        {
+            await Fabrics.DeleteAsync(id);
+            if (_editing?.Id == id)
+            {
+                CancelEdit();
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

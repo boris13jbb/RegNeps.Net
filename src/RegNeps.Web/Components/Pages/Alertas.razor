@@ -1,0 +1,189 @@
+@page "/alertas"
+@rendermode InteractiveServer
+@inject NepRecordService RecordService
+@inject IAlertConfigRepository AlertConfigRepository
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Alertas — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para ver alertas.</div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="mb-0">Alertas</h1>
+        <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
+            @(_loading ? "Cargando…" : "Actualizar")
+        </button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+
+    @if (_loading && _alerts.Count == 0)
+    {
+        <p>Cargando alertas…</p>
+    }
+    else if (_alerts.Count == 0)
+    {
+        <div class="alert alert-success">No hay alertas activas.</div>
+    }
+    else
+    {
+        <div class="list-group" style="max-width: 900px;">
+            @foreach (var r in _alerts)
+            {
+                var level = r.GetAlertLevel(_config);
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                            <span class="badge @BadgeClass(level) me-2">@level.ToDisplayLabel()</span>
+                            <strong>Telar @r.Telar</strong> — @r.Neps.ToString("0.##") neps
+                            <div class="small text-muted">
+                                @r.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                                @if (!string.IsNullOrWhiteSpace(r.Tela))
+                                {
+                                    <span> · @r.Tela</span>
+                                }
+                                @if (r.RequiereSeguimiento(_config))
+                                {
+                                    <span class="text-danger"> · Pendiente revisión</span>
+                                }
+                            </div>
+                        </div>
+                        @if (_canCorrect)
+                        {
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => OpenCorrective(r)">Acción correctiva</button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    @if (_correctiveTarget is not null)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Acción correctiva — Telar @_correctiveTarget.Telar</h5>
+                        <button type="button" class="btn-close" @onclick="CloseCorrective"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Acción *</label>
+                            <textarea class="form-control" rows="3" @bind="_accion"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Responsable</label>
+                            <input class="form-control" @bind="_responsable" />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @onclick="CloseCorrective">Cancelar</button>
+                        <button class="btn btn-primary" @onclick="SaveCorrectiveAsync" disabled="@_saving">Guardar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private IReadOnlyList<NepRecord> _alerts = [];
+    private AlertConfig _config = new();
+    private bool _loading = true;
+    private bool _allowed;
+    private bool _canCorrect;
+    private UserSession? _session;
+    private string? _error;
+
+    private NepRecord? _correctiveTarget;
+    private string _accion = "";
+    private string _responsable = "";
+    private bool _saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ViewAlerts) == true;
+        _canCorrect = _session?.Has(AppPermission.ApplyCorrectiveAction) == true;
+        if (!_allowed)
+        {
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            _config = await AlertConfigRepository.GetAsync();
+            _alerts = await RecordService.GetAlertsAsync(_session.UserId, _session.SeesAllRecords);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OpenCorrective(NepRecord record)
+    {
+        _correctiveTarget = record;
+        _accion = record.AccionCorrectiva;
+        _responsable = _session?.DisplayName ?? "";
+    }
+
+    private void CloseCorrective() => _correctiveTarget = null;
+
+    private async Task SaveCorrectiveAsync()
+    {
+        if (_correctiveTarget is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+        try
+        {
+            await RecordService.ApplyCorrectiveAsync(new CorrectiveActionRequest
+            {
+                RecordId = _correctiveTarget.Id,
+                Accion = _accion,
+                Responsable = _responsable,
+                MarcarRevisado = true
+            });
+            CloseCorrective();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static string BadgeClass(AlertLevel level) => level switch
+    {
+        AlertLevel.Advertencia => "text-bg-warning",
+        AlertLevel.Critico => "text-bg-danger",
+        _ => "text-bg-secondary"
+    };
+}

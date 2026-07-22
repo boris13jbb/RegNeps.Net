@@ -1,0 +1,128 @@
+@page "/config"
+@rendermode InteractiveServer
+@inject IAlertConfigRepository AlertConfig
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Configuración — RegNeps</PageTitle>
+
+@if (!_canView)
+{
+    <div class="alert alert-warning">No tiene permiso para ver la configuración.</div>
+}
+else
+{
+    <h1 class="mb-3">Configuración de alertas</h1>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-success">@_message</div>
+    }
+
+    @if (_config is null)
+    {
+        <p>Cargando…</p>
+    }
+    else
+    {
+        <fieldset disabled="@(!_canEdit)" class="row g-3" style="max-width: 560px;">
+            <div class="col-md-6">
+                <label class="form-label">Límite normal máx.</label>
+                <InputNumber class="form-control" @bind-Value="_config.LimiteNormalMax" />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Límite advertencia máx.</label>
+                <InputNumber class="form-control" @bind-Value="_config.LimiteAdvertenciaMax" />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Reincidencias críticas</label>
+                <InputNumber class="form-control" @bind-Value="_config.CantidadReincidenciasCriticas" />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Días para reincidencia</label>
+                <InputNumber class="form-control" @bind-Value="_config.DiasParaReincidencia" />
+            </div>
+            <div class="col-12">
+                <div class="form-check">
+                    <InputCheckbox class="form-check-input" @bind-Value="_config.AlertasActivas" id="alertas" />
+                    <label class="form-check-label" for="alertas">Alertas activas</label>
+                </div>
+            </div>
+            <div class="col-12">
+                <p class="small text-muted mb-0">
+                    Crítico desde: @_config.LimiteCriticoMin · Ventana reincidencias: @_config.VentanaReincidenciasHoras h
+                </p>
+            </div>
+            @if (_canEdit)
+            {
+                <div class="col-12">
+                    <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                        @(_saving ? "Guardando…" : "Guardar")
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="col-12">
+                    <div class="alert alert-info mb-0">Solo lectura. Se requiere permiso EditAlertConfig para guardar.</div>
+                </div>
+            }
+        </fieldset>
+    }
+}
+
+@code {
+    private AlertConfig? _config;
+    private bool _canView;
+    private bool _canEdit;
+    private bool _saving;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var session = await CurrentUser.GetAsync();
+        _canView = session?.Has(AppPermission.ViewSettings) == true
+                   || session?.Has(AppPermission.EditAlertConfig) == true;
+        _canEdit = session?.Has(AppPermission.EditAlertConfig) == true;
+
+        if (_canView)
+        {
+            _config = await AlertConfig.GetAsync();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!_canEdit || _config is null)
+        {
+            return;
+        }
+
+        _error = null;
+        _message = null;
+        _saving = true;
+        try
+        {
+            if (_config.LimiteNormalMax < 0 || _config.LimiteAdvertenciaMax <= _config.LimiteNormalMax)
+            {
+                throw new InvalidOperationException("Los límites deben ser coherentes (advertencia > normal ≥ 0).");
+            }
+
+            await AlertConfig.SaveAsync(_config);
+            _message = "Configuración guardada.";
+            _config = await AlertConfig.GetAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

@@ -1,0 +1,19 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+@inject CurrentUserService CurrentUser
+
+<PageTitle>RegNeps VICUNHA</PageTitle>
+
+<p class="text-muted">Redirigiendo…</p>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        var session = await CurrentUser.GetAsync();
+        if (session is not null)
+        {
+            Navigation.NavigateTo("/dashboard", replace: true);
+        }
+    }
+}

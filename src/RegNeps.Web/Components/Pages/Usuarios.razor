@@ -1,0 +1,270 @@
+@page "/usuarios"
+@rendermode InteractiveServer
+@inject UserAdminService Users
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Usuarios — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para gestionar usuarios.</div>
+}
+else
+{
+    <h1 class="mb-3">Usuarios</h1>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-success">@_message</div>
+    }
+
+    <div class="card border-0 shadow-sm mb-4" style="max-width: 640px;">
+        <div class="card-body">
+            <h5 class="card-title">Crear usuario</h5>
+            <div class="row g-2">
+                <div class="col-md-4">
+                    <label class="form-label">Usuario *</label>
+                    <input class="form-control" @bind="_newUsername" autocomplete="off" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Contraseña *</label>
+                    <input class="form-control" type="password" @bind="_newPassword" autocomplete="new-password" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Rol</label>
+                    <select class="form-select" @bind="_newRole">
+                        @foreach (var role in _creatableRoles)
+                        {
+                            <option value="@role">@role.ToDisplayLabel()</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-primary btn-sm" @onclick="CreateAsync" disabled="@_saving">Crear</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th>Usuario</th>
+                    <th>Nombre</th>
+                    <th>Rol</th>
+                    <th>Estado</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var u in _list.Where(x => x.DeletedAt is null))
+                {
+                    <tr>
+                        <td>@u.Username</td>
+                        <td>@u.EffectiveDisplayName</td>
+                        <td>
+                            @if (_canChangeRoles && !u.IsSuperAdmin && u.Role != AppUserRole.SuperAdmin)
+                            {
+                                <select class="form-select form-select-sm" style="width: auto; min-width: 8rem;"
+                                        @onchange="e => OnRoleChangedAsync(u, e)">
+                                    @foreach (var role in _creatableRoles)
+                                    {
+                                        if (u.EffectiveRole == role)
+                                        {
+                                            <option value="@role" selected>@role.ToDisplayLabel()</option>
+                                        }
+                                        else
+                                        {
+                                            <option value="@role">@role.ToDisplayLabel()</option>
+                                        }
+                                    }
+                                </select>
+                            }
+                            else
+                            {
+                                @u.EffectiveRole.ToDisplayLabel()
+                            }
+                        </td>
+                        <td>@(u.IsActive ? "Activo" : "Inactivo")</td>
+                        <td class="text-nowrap">
+                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => ToggleActiveAsync(u)">
+                                @(u.IsActive ? "Desactivar" : "Activar")
+                            </button>
+                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenReset(u)">Reset pass</button>
+                            @if (_canDelete)
+                            {
+                                <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => SoftDeleteAsync(u.Id)">Eliminar</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (_resetTarget is not null)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Reset contraseña — @_resetTarget.Username</h5>
+                        <button type="button" class="btn-close" @onclick="() => _resetTarget = null"></button>
+                    </div>
+                    <div class="modal-body">
+                        <label class="form-label">Nueva contraseña (mín. 6)</label>
+                        <input class="form-control" type="password" @bind="_resetPassword" />
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @onclick="() => _resetTarget = null">Cancelar</button>
+                        <button class="btn btn-primary" @onclick="ResetPasswordAsync">Guardar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private IReadOnlyList<AppUser> _list = [];
+    private bool _allowed;
+    private bool _canDelete;
+    private bool _canChangeRoles;
+    private bool _saving;
+    private string? _error;
+    private string? _message;
+
+    private string _newUsername = "";
+    private string _newPassword = "";
+    private AppUserRole _newRole = AppUserRole.Operario;
+    private readonly AppUserRole[] _creatableRoles =
+    [
+        AppUserRole.Operario,
+        AppUserRole.Supervisor,
+        AppUserRole.Admin,
+        AppUserRole.Gerencia
+    ];
+
+    private AppUser? _resetTarget;
+    private string _resetPassword = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var session = await CurrentUser.GetAsync();
+        _allowed = session?.Has(AppPermission.ManageUsers) == true;
+        _canDelete = session?.Has(AppPermission.DeleteUsers) == true;
+        _canChangeRoles = session?.Has(AppPermission.ChangeRoles) == true;
+        if (_allowed)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync() => _list = await Users.ListAsync();
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+        _message = null;
+        _saving = true;
+        try
+        {
+            await Users.CreateAsync(_newUsername, _newPassword, _newRole, null, null);
+            _message = "Usuario creado.";
+            _newUsername = "";
+            _newPassword = "";
+            _newRole = AppUserRole.Operario;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task OnRoleChangedAsync(AppUser user, ChangeEventArgs e)
+    {
+        if (e.Value is null || !Enum.TryParse<AppUserRole>(e.Value.ToString(), out var role))
+        {
+            return;
+        }
+
+        if (role == user.EffectiveRole)
+        {
+            return;
+        }
+
+        try
+        {
+            await Users.UpdateRoleAsync(user.Id, role);
+            _message = $"Rol de {user.Username} actualizado a {role.ToDisplayLabel()}.";
+            _error = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            await LoadAsync();
+        }
+    }
+
+    private async Task ToggleActiveAsync(AppUser user)
+    {
+        try
+        {
+            await Users.SetActiveAsync(user.Id, !user.IsActive);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void OpenReset(AppUser user)
+    {
+        _resetTarget = user;
+        _resetPassword = "";
+    }
+
+    private async Task ResetPasswordAsync()
+    {
+        if (_resetTarget is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Users.ResetPasswordAsync(_resetTarget.Id, _resetPassword);
+            _message = "Contraseña actualizada.";
+            _resetTarget = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SoftDeleteAsync(Guid id)
+    {
+        try
+        {
+            await Users.SoftDeleteAsync(id);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

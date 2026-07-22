@@ -1,0 +1,198 @@
+@page "/lotes"
+@rendermode InteractiveServer
+@inject ILoteTramaRepository LoteRepo
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Lotes de trama — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para gestionar lotes de trama.</div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h1 class="mb-0">Lotes de trama</h1>
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <a class="btn btn-outline-secondary btn-sm" href="/api/export/lotes/csv">CSV</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/api/export/lotes/xlsx">Excel</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-success">@_message</div>
+    }
+
+    <div class="card border-0 shadow-sm mb-4" style="max-width: 560px;">
+        <div class="card-body">
+            <h5 class="card-title">@( _editing is null ? "Nuevo lote" : "Editar lote" )</h5>
+            <div class="row g-2">
+                <div class="col-md-8">
+                    <label class="form-label">Código *</label>
+                    <input class="form-control font-monospace text-uppercase" @bind="_code"
+                           placeholder="Ej: 63E264H10A" maxlength="64" />
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="lote-active" @bind="_isActive" />
+                        <label class="form-check-label" for="lote-active">Activo</label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@_saving">
+                        @(_saving ? "Guardando…" : "Guardar")
+                    </button>
+                    @if (_editing is not null)
+                    {
+                        <button class="btn btn-outline-secondary btn-sm ms-2" @onclick="CancelEdit">Cancelar</button>
+                    }
+                </div>
+            </div>
+            <p class="text-muted small mb-0 mt-2">
+                Catálogo de lotes de trama usados en captura. El código se guarda en mayúsculas.
+            </p>
+        </div>
+    </div>
+
+    <div class="table-responsive" style="max-width: 720px;">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Estado</th>
+                    <th>Creado</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var lote in _list)
+                {
+                    <tr>
+                        <td class="font-monospace fw-semibold">@lote.Code</td>
+                        <td>@(lote.IsActive ? "Activo" : "Inactivo")</td>
+                        <td>@lote.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                        <td class="text-nowrap">
+                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => StartEdit(lote)">Editar</button>
+                            <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(lote.Id)">Eliminar</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (_list.Count == 0)
+        {
+            <p class="text-muted">No hay lotes registrados.</p>
+        }
+    </div>
+}
+
+@code {
+    private IReadOnlyList<LoteTramaItem> _list = [];
+    private bool _allowed;
+    private string _code = "";
+    private bool _isActive = true;
+    private LoteTramaItem? _editing;
+    private bool _saving;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var session = await CurrentUser.GetAsync();
+        // Mismo permiso que telas: catálogo de captura.
+        _allowed = session?.Has(AppPermission.ManageFabrics) == true;
+        if (_allowed)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync() => _list = await LoteRepo.GetAllAsync();
+
+    private void StartEdit(LoteTramaItem lote)
+    {
+        _editing = lote;
+        _code = lote.Code;
+        _isActive = lote.IsActive;
+        _message = null;
+        _error = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+        _code = "";
+        _isActive = true;
+    }
+
+    private static string NormalizeCode(string? value) =>
+        (value ?? "").Trim().ToUpperInvariant().Replace(" ", "", StringComparison.Ordinal);
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _message = null;
+        var code = NormalizeCode(_code);
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            _error = "El código es obligatorio.";
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editing is null)
+            {
+                await LoteRepo.AddAsync(new LoteTramaItem
+                {
+                    Code = code,
+                    IsActive = _isActive
+                });
+                _message = "Lote creado.";
+            }
+            else
+            {
+                _editing.Code = code;
+                _editing.IsActive = _isActive;
+                await LoteRepo.UpdateAsync(_editing);
+                _message = "Lote actualizado.";
+            }
+
+            CancelEdit();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        try
+        {
+            await LoteRepo.DeleteAsync(id);
+            if (_editing?.Id == id)
+            {
+                CancelEdit();
+            }
+
+            _message = "Lote eliminado.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

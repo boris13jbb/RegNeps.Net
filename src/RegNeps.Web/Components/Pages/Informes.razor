@@ -1,0 +1,207 @@
+@page "/informes"
+@rendermode InteractiveServer
+@inject ReportExportAppService Reports
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Informes guardados — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para gestionar informes.</div>
+}
+else
+{
+    <h1 class="mb-3">Informes guardados</h1>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-success">@_message</div>
+    }
+
+    <div class="card border-0 shadow-sm mb-4" style="max-width: 720px;">
+        <div class="card-body">
+            <h5 class="card-title">Crear informe</h5>
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label">Nombre *</label>
+                    <input class="form-control" @bind="_name" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Desde</label>
+                    <InputDate class="form-control" @bind-Value="_fromLocal" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Hasta</label>
+                    <InputDate class="form-control" @bind-Value="_toLocal" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Telar</label>
+                    <input class="form-control" @bind="_telar" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Tela</label>
+                    <input class="form-control" @bind="_tela" />
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-primary btn-sm" @onclick="CreateAsync" disabled="@_saving">
+                        @(_saving ? "Guardando…" : "Guardar informe")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (_list.Count == 0)
+    {
+        <p class="text-muted">No hay informes guardados.</p>
+    }
+    else
+    {
+        <div class="list-group" style="max-width: 900px;">
+            @foreach (var r in _list)
+            {
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                        <div>
+                            <strong>@r.Name</strong>
+                            <div class="small text-muted">
+                                @r.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                                · @r.RecordCount registros
+                                @if (!string.IsNullOrWhiteSpace(r.CreatedByName))
+                                {
+                                    <span> · @r.CreatedByName</span>
+                                }
+                            </div>
+                            <div class="small">@r.SummaryText</div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-1 align-items-center">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => ApplyFilters(r)">
+                                Cargar filtros
+                            </button>
+                            <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "csv")">CSV</a>
+                            <a class="btn btn-outline-success btn-sm" href="@ExportUrl(r.Id, "xlsx")">Excel</a>
+                            <a class="btn btn-outline-danger btn-sm" href="@ExportUrl(r.Id, "pdf")">PDF</a>
+                            <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => DeleteAsync(r.Id)">
+                                Borrar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    private IReadOnlyList<SavedReport> _list = [];
+    private bool _allowed;
+    private UserSession? _session;
+    private string _name = "";
+    private string _telar = "";
+    private string _tela = "";
+    private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
+    private DateTime? _toLocal = DateTime.Today;
+    private bool _saving;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ManageReports) == true;
+        if (_allowed)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync() => _list = await Reports.ListSavedAsync();
+
+    private static string ExportUrl(Guid id, string format) =>
+        $"/api/export/saved/{id}/{format}";
+
+    private void ApplyFilters(SavedReport report)
+    {
+        var filters = Reports.GetSavedFilters(report);
+        _telar = filters.Telar ?? "";
+        _tela = filters.Tela ?? "";
+        _fromLocal = filters.FromUtc?.ToLocalTime().Date;
+        _toLocal = filters.ToExclusiveUtc is not null
+            ? filters.ToExclusiveUtc.Value.ToLocalTime().AddTicks(-1).Date
+            : filters.ToUtc?.ToLocalTime().Date;
+        _name = $"{report.Name} (copia)";
+        _message = "Filtros cargados en el formulario. Puede guardar un nuevo informe o ajustar y volver a exportar.";
+        _error = null;
+    }
+
+    private async Task CreateAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _error = null;
+        _message = null;
+        _saving = true;
+        try
+        {
+            if (_fromLocal is null || _toLocal is null)
+            {
+                throw new InvalidOperationException("Debe indicar fecha inicial y fecha final.");
+            }
+
+            if (_fromLocal.Value.Date > _toLocal.Value.Date)
+            {
+                throw new InvalidOperationException(
+                    "La fecha inicial no puede ser posterior a la fecha final.");
+            }
+
+            var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
+            var filters = new RecordFilters
+            {
+                Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
+                Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
+            };
+            range.ApplyTo(filters);
+
+            await Reports.SaveReportAsync(
+                _name,
+                filters,
+                _session.UserId,
+                _session.DisplayName,
+                _session.SeesAllRecords);
+
+            _message =
+                $"Informe guardado ({range.LabelLocal}). Use CSV / Excel / PDF para descargar el consolidado.";
+            _name = "";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        try
+        {
+            await Reports.DeleteSavedAsync(id);
+            _message = "Informe eliminado.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

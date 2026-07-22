@@ -1,0 +1,685 @@
+@page "/graficas"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject AnalyticsService Analytics
+@inject CurrentUserService CurrentUser
+@inject IExportFileService ExportFiles
+@inject TempExportStore TempExports
+@inject IJSRuntime Js
+
+<PageTitle>Gráficas — RegNeps</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning">No tiene permiso para ver gráficas.</div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h1 class="mb-0">Gráficas</h1>
+        <div class="d-flex gap-2 flex-wrap align-items-end">
+            <div>
+                <label class="form-label small mb-0">Periodo</label>
+                <select class="form-select form-select-sm" @bind="_periodDays" @bind:after="LoadAsync">
+                    <option value="7">Últimos 7 días</option>
+                    <option value="30">Últimos 30 días</option>
+                    <option value="90">Últimos 90 días</option>
+                    <option value="0">Personalizado</option>
+                </select>
+            </div>
+            @if (_periodDays == 0)
+            {
+                <div>
+                    <label class="form-label small mb-0">Desde</label>
+                    <InputDate class="form-control form-control-sm" @bind-Value="_fromLocal" />
+                </div>
+                <div>
+                    <label class="form-label small mb-0">Hasta</label>
+                    <InputDate class="form-control form-control-sm" @bind-Value="_toLocal" />
+                </div>
+                <button class="btn btn-primary btn-sm" @onclick="LoadAsync">Aplicar</button>
+            }
+            @if (_summary is not null)
+            {
+                <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl("csv")">CSV</a>
+                <a class="btn btn-outline-success btn-sm" href="@ExportUrl("xlsx")">Excel</a>
+                <button class="btn btn-outline-danger btn-sm" @onclick="ExportPdfWithChartsAsync" disabled="@(_exporting || _summary.TotalRecords == 0)">
+                    @(_exporting ? "…" : "PDF")
+                </button>
+                <button class="btn btn-outline-dark btn-sm" @onclick="DownloadChartsPngAsync" disabled="@(_exporting || _summary.TotalRecords == 0)"
+                        title="Descarga un PNG con todas las visualizaciones">
+                    Gráfico PNG
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_exportMessage))
+    {
+        <div class="alert alert-info py-2">@_exportMessage</div>
+    }
+    @if (!string.IsNullOrEmpty(_exportError))
+    {
+        <div class="alert alert-danger py-2">@_exportError</div>
+    }
+
+    @if (_summary is null)
+    {
+        <p>Cargando…</p>
+    }
+    else
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm"><div class="card-body">
+                    <div class="text-muted small">Registros</div>
+                    <div class="fs-4 fw-semibold">@_summary.TotalRecords</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm"><div class="card-body">
+                    <div class="text-muted small">Promedio neps</div>
+                    <div class="fs-4 fw-semibold">@_summary.AverageNeps.ToString("0.##")</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm"><div class="card-body">
+                    <div class="text-muted small">Críticos</div>
+                    <div class="fs-4 fw-semibold text-danger">@_summary.CriticalCount</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm"><div class="card-body">
+                    <div class="text-muted small">Índice calidad</div>
+                    <div class="fs-4 fw-semibold">@_summary.QualityIndex.ToString("0.#")%</div>
+                </div></div>
+            </div>
+        </div>
+
+        @if (_summary.TotalRecords == 0)
+        {
+            <div class="alert alert-light border">Sin datos en el periodo seleccionado.</div>
+        }
+        else
+        {
+            <div class="row g-3 mb-4">
+                <div class="col-lg-8">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3">Tendencia diaria (promedio neps)</h5>
+                            <div class="chart-wrap">
+                                <canvas id="chart-day"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3">Estado de alertas</h5>
+                            <div class="chart-wrap chart-wrap--square">
+                                <canvas id="chart-alerts"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3">Top telares (peor promedio)</h5>
+                            <div class="chart-wrap">
+                                <canvas id="chart-telar"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3">Top telas (volumen)</h5>
+                            <div class="chart-wrap">
+                                <canvas id="chart-tela"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+
+        <h5>Por telar</h5>
+        @if (_summary.ByTelar.Count == 0)
+        {
+            <p class="text-muted">Sin datos.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Telar</th>
+                            <th>Promedio</th>
+                            <th>Registros</th>
+                            <th>Críticos</th>
+                            <th>Advertencias</th>
+                            <th>Mts</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in _summary.ByTelar.Take(25))
+                        {
+                            <tr>
+                                <td>@g.Key</td>
+                                <td>@g.AverageNeps.ToString("0.##")</td>
+                                <td>@g.RecordCount</td>
+                                <td>@g.CriticalCount</td>
+                                <td>@g.WarningCount</td>
+                                <td>@g.TotalMts.ToString("0.##")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <h5 class="mt-4">Por tela</h5>
+        @if (_summary.ByTela.Count == 0)
+        {
+            <p class="text-muted">Sin datos.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Tela</th>
+                            <th>Promedio</th>
+                            <th>Registros</th>
+                            <th>Críticos</th>
+                            <th>Advertencias</th>
+                            <th>Mts</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in _summary.ByTela.Take(25))
+                        {
+                            <tr>
+                                <td>@g.Key</td>
+                                <td>@g.AverageNeps.ToString("0.##")</td>
+                                <td>@g.RecordCount</td>
+                                <td>@g.CriticalCount</td>
+                                <td>@g.WarningCount</td>
+                                <td>@g.TotalMts.ToString("0.##")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <h5 class="mt-4">Por día</h5>
+        @if (_summary.ByDay.Count == 0)
+        {
+            <p class="text-muted">Sin datos en el periodo.</p>
+        }
+        else
+        {
+            <div class="table-responsive" style="max-width: 640px;">
+                <table class="table table-sm table-striped">
+                    <thead><tr><th>Fecha</th><th>Promedio</th><th>Cantidad</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in _summary.ByDay)
+                        {
+                            <tr>
+                                <td>@d.Date.ToString("dd/MM/yyyy")</td>
+                                <td>@d.AverageNeps.ToString("0.##")</td>
+                                <td>@d.Count</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+}
+
+@code {
+    private AnalyticsSummary? _summary;
+    private bool _allowed;
+    private UserSession? _session;
+    private int _periodDays = 30;
+    private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
+    private DateTime? _toLocal = DateTime.Today;
+    private bool _chartsDirty;
+    private bool _jsReady;
+    private int _chartRetries;
+    private bool _exporting;
+    private string? _exportMessage;
+    private string? _exportError;
+
+    private static readonly string[] ChartIds = ["chart-day", "chart-alerts", "chart-telar", "chart-tela"];
+    private static readonly string[] ChartTitles =
+    [
+        "Tendencia diaria (promedio neps)",
+        "Estado de alertas",
+        "Top telares (peor promedio)",
+        "Top telas (volumen)"
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ViewDashboard) == true;
+        if (_allowed)
+        {
+            await LoadAsync();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsReady = true;
+        }
+
+        if (_jsReady && _chartsDirty && _summary is not null)
+        {
+            _chartsDirty = false;
+            await RenderChartsAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        DateTime? fromUtc;
+        DateTime? toUtc;
+        if (_periodDays > 0)
+        {
+            toUtc = DateTime.UtcNow;
+            fromUtc = toUtc.Value.AddDays(-_periodDays);
+        }
+        else
+        {
+            fromUtc = _fromLocal?.Date.ToUniversalTime();
+            toUtc = _toLocal?.Date.AddDays(1).AddTicks(-1).ToUniversalTime();
+        }
+
+        _summary = await Analytics.BuildAsync(fromUtc, toUtc, _session.UserId, _session.SeesAllRecords);
+        _chartsDirty = true;
+        _chartRetries = 0;
+        if (_summary.TotalRecords == 0 && _jsReady)
+        {
+            try
+            {
+                await Js.InvokeVoidAsync("regnepsCharts.destroyAll");
+            }
+            catch
+            {
+                // Ignorar si aún no hay charts.
+            }
+        }
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        if (_summary is null || _summary.TotalRecords == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            // Asegura que los canvas estén en el DOM tras el render.
+            await Task.Yield();
+
+            var dayLabels = _summary.ByDay.Select(d => d.Date.ToString("dd/MM")).ToArray();
+            var dayAvg = _summary.ByDay.Select(d => Math.Round(d.AverageNeps, 2)).ToArray();
+            var dayCount = _summary.ByDay.Select(d => (double)d.Count).ToArray();
+
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-day", new
+            {
+                type = "line",
+                data = new
+                {
+                    labels = dayLabels,
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            label = "Promedio neps",
+                            data = dayAvg,
+                            borderColor = "#1F6F5B",
+                            backgroundColor = "rgba(31, 111, 91, 0.15)",
+                            fill = true,
+                            tension = 0.25,
+                            yAxisID = "y"
+                        },
+                        new
+                        {
+                            label = "Cantidad registros",
+                            data = dayCount,
+                            borderColor = "#C4A35A",
+                            backgroundColor = "rgba(196, 163, 90, 0.35)",
+                            type = "bar",
+                            yAxisID = "y1",
+                            order = 1
+                        }
+                    }
+                },
+                options = new
+                {
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    interaction = new { mode = "index", intersect = false },
+                    plugins = new { legend = new { position = "bottom" } },
+                    scales = new
+                    {
+                        y = new { beginAtZero = true, title = new { display = true, text = "Neps" } },
+                        y1 = new
+                        {
+                            beginAtZero = true,
+                            position = "right",
+                            grid = new { drawOnChartArea = false },
+                            title = new { display = true, text = "Registros" }
+                        }
+                    }
+                }
+            });
+
+            var okCount = Math.Max(0, _summary.TotalRecords - _summary.CriticalCount - _summary.WarningCount);
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-alerts", new
+            {
+                type = "doughnut",
+                data = new
+                {
+                    labels = new[] { "Normal", "Advertencia", "Crítico" },
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            data = new[] { okCount, _summary.WarningCount, _summary.CriticalCount },
+                            backgroundColor = new[] { "#1F6F5B", "#C4A35A", "#B33A3A" },
+                            borderWidth = 0
+                        }
+                    }
+                },
+                options = new
+                {
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    plugins = new { legend = new { position = "bottom" } }
+                }
+            });
+
+            var telars = _summary.ByTelar.Take(10).ToList();
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-telar", new
+            {
+                type = "bar",
+                data = new
+                {
+                    labels = telars.Select(t => Truncate(t.Key, 18)).ToArray(),
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            label = "Promedio neps",
+                            data = telars.Select(t => Math.Round(t.AverageNeps, 2)).ToArray(),
+                            backgroundColor = "rgba(179, 58, 58, 0.75)",
+                            borderColor = "#B33A3A",
+                            borderWidth = 1
+                        }
+                    }
+                },
+                options = new
+                {
+                    indexAxis = "y",
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    plugins = new { legend = new { display = false } },
+                    scales = new { x = new { beginAtZero = true } }
+                }
+            });
+
+            var telas = _summary.ByTela.Take(10).ToList();
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-tela", new
+            {
+                type = "bar",
+                data = new
+                {
+                    labels = telas.Select(t => Truncate(t.Key, 18)).ToArray(),
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            label = "Registros",
+                            data = telas.Select(t => (double)t.RecordCount).ToArray(),
+                            backgroundColor = "rgba(31, 111, 91, 0.75)",
+                            borderColor = "#1F6F5B",
+                            borderWidth = 1
+                        }
+                    }
+                },
+                options = new
+                {
+                    indexAxis = "y",
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    plugins = new { legend = new { display = false } },
+                    scales = new { x = new { beginAtZero = true } }
+                }
+            });
+        }
+        catch (JSException)
+        {
+            if (_chartRetries < 3)
+            {
+                _chartRetries++;
+                _chartsDirty = true;
+                await Task.Delay(50);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuito desconectado al navegar.
+        }
+    }
+
+    private static string Truncate(string value, int max) =>
+        string.IsNullOrEmpty(value) || value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    private string PeriodDescription()
+    {
+        if (_periodDays > 0)
+        {
+            return $"Últimos {_periodDays} días";
+        }
+
+        return $"{_fromLocal?.ToString("yyyy-MM-dd") ?? "inicio"} → {_toLocal?.ToString("yyyy-MM-dd") ?? "hoy"}";
+    }
+
+    private string ExportUrl(string format)
+    {
+        if (_periodDays > 0)
+        {
+            return $"/api/export/analytics/{format}?days={_periodDays}";
+        }
+
+        var from = _fromLocal?.ToString("yyyy-MM-dd") ?? "";
+        var to = _toLocal?.ToString("yyyy-MM-dd") ?? "";
+        return $"/api/export/analytics/{format}?from={Uri.EscapeDataString(from)}&to={Uri.EscapeDataString(to)}";
+    }
+
+    private async Task ExportPdfWithChartsAsync()
+    {
+        if (_summary is null || _summary.TotalRecords == 0)
+        {
+            return;
+        }
+
+        _exporting = true;
+        _exportError = null;
+        _exportMessage = null;
+        try
+        {
+            IReadOnlyList<AnalyticsChartImage> images = [];
+            try
+            {
+                images = await CaptureChartImagesAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuito caído: PDF sin charts.
+            }
+            catch (TaskCanceledException)
+            {
+                // Timeout / cancelación de interop: PDF sin charts.
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (JSException)
+            {
+            }
+
+            var pdf = ExportFiles.BuildAnalyticsPdf(_summary, PeriodDescription(), images);
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
+            var fileName = $"graficas_analytics_{stamp}.pdf";
+            var id = TempExports.Put(pdf, "application/pdf", fileName);
+            // Descarga por HTTP sin recargar la página (no satura SignalR ni cancela el circuito).
+            await Js.InvokeVoidAsync("regnepsDownload.downloadUrl", $"/api/export/temp/{id}");
+
+            _exportMessage = images.Count > 0
+                ? $"PDF generado con {images.Count} gráfica(s)."
+                : "PDF generado (sin imágenes de gráficas). Si las charts ya están visibles, reintente.";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not TaskCanceledException)
+        {
+            _exportError = "No se pudo generar el PDF: " + ex.Message;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException)
+        {
+            _exportError = "La exportación se canceló (tiempo de espera o conexión). Reintente; si persiste, use CSV/Excel.";
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task DownloadChartsPngAsync()
+    {
+        if (_summary is null || _summary.TotalRecords == 0)
+        {
+            return;
+        }
+
+        _exporting = true;
+        _exportError = null;
+        _exportMessage = null;
+        try
+        {
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
+            // Descarga 100% en el navegador: no envía el mosaic a Blazor.
+            var ok = await Js.InvokeAsync<bool>(
+                "regnepsCharts.downloadMosaicAsync",
+                ChartIds,
+                ChartTitles,
+                $"graficas_neps_{stamp}.jpg");
+
+            if (!ok)
+            {
+                _exportError = "No se pudieron capturar las gráficas. Espere a que carguen e intente de nuevo.";
+                return;
+            }
+
+            _exportMessage = "Imagen de gráficas descargada.";
+        }
+        catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
+        {
+            _exportError = "La descarga se canceló. Reintente en unos segundos.";
+        }
+        catch (Exception ex)
+        {
+            _exportError = "No se pudo descargar el gráfico: " + ex.Message;
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task<IReadOnlyList<AnalyticsChartImage>> CaptureChartImagesAsync()
+    {
+        var captures = await Js.InvokeAsync<ChartCaptureDto[]?>("regnepsCharts.captureAll", ChartIds, ChartTitles);
+        if (captures is null || captures.Length == 0)
+        {
+            return [];
+        }
+
+        var list = new List<AnalyticsChartImage>();
+        foreach (var c in captures)
+        {
+            var bytes = DecodeDataUrlImage(c.DataUrl);
+            if (bytes.Length == 0)
+            {
+                continue;
+            }
+
+            list.Add(new AnalyticsChartImage(
+                string.IsNullOrWhiteSpace(c.Title) ? "Gráfica" : c.Title.Trim(),
+                bytes));
+        }
+
+        return list;
+    }
+
+    private static byte[] DecodeDataUrlImage(string? dataUrl)
+    {
+        if (string.IsNullOrWhiteSpace(dataUrl))
+        {
+            return [];
+        }
+
+        const string marker = "base64,";
+        var idx = dataUrl.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            return [];
+        }
+
+        try
+        {
+            return Convert.FromBase64String(dataUrl[(idx + marker.Length)..]);
+        }
+        catch (FormatException)
+        {
+            return [];
+        }
+    }
+
+    private sealed class ChartCaptureDto
+    {
+        public string Title { get; set; } = "";
+        public string DataUrl { get; set; } = "";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsCharts.destroyAll");
+        }
+        catch
+        {
+            // Ignorar si el circuito ya no está activo.
+        }
+    }
+}

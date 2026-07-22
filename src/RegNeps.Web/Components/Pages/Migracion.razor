@@ -1,0 +1,136 @@
+@page "/migracion"
+@rendermode InteractiveServer
+@inject HistoricalDataMigrationService Migration
+@inject CurrentUserService CurrentUser
+@using RegNeps.Infrastructure.Migration
+
+<PageTitle>Migración histórica — RegNeps</PageTitle>
+
+<h1 class="mb-3">Migración de datos históricos (Firestore → SQL)</h1>
+
+@if (_session?.Has(AppPermission.ManageUsers) != true)
+{
+    <div class="alert alert-warning">Solo super administradores pueden ejecutar la migración.</div>
+}
+else
+{
+    <div class="alert alert-info">
+        <ol class="mb-0">
+            <li>En la raíz del repo Flutter: <code>firebase login</code></li>
+            <li>Exportar: <code>node scripts/export_firestore_history.js --out FTS/firestore_export.json</code></li>
+            <li>Subir aquí el JSON generado (idempotente: se puede repetir).</li>
+        </ol>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3" style="max-width: 720px;">
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label">Archivo JSON de exportación</label>
+                <InputFile class="form-control" OnChange="OnFile" accept=".json,application/json" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Contraseña temporal para usuarios migrados</label>
+                <InputText class="form-control" @bind-Value="_tempPassword" />
+                <div class="form-text">
+                    Firebase no exporta contraseñas. Los usuarios importados usarán esta clave hasta que la cambie en Usuarios.
+                </div>
+            </div>
+            <button class="btn btn-primary" disabled="@(_busy || _fileBytes is null)" @onclick="RunAsync">
+                @(_busy ? "Importando…" : "Importar a SQL")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+
+    @if (_result is not null)
+    {
+        <div class="alert alert-success">
+            <strong>Migración completada</strong>
+            <ul class="mb-2">
+                <li>Registros: +@_result.RecordsInserted / act. @_result.RecordsUpdated / omit. @_result.RecordsSkipped</li>
+                <li>Usuarios: +@_result.UsersInserted / act. @_result.UsersUpdated / omit. @_result.UsersSkipped</li>
+                <li>Telas: +@_result.FabricsInserted / omit. @_result.FabricsSkipped</li>
+                <li>Informes: +@_result.ReportsInserted / act. @_result.ReportsUpdated / omit. @_result.ReportsSkipped</li>
+                <li>Config alertas: @(_result.AlertConfigUpdated ? "actualizada" : "sin cambios")</li>
+                <li>Ownership reparado: @_result.RecordsOwnershipRepaired registros</li>
+            </ul>
+            @if (!string.IsNullOrEmpty(_result.TempPasswordNote))
+            {
+                <p class="mb-0 small">@_result.TempPasswordNote</p>
+            }
+        </div>
+        @if (_result.Warnings.Count > 0)
+        {
+            <div class="alert alert-warning">
+                <strong>Avisos (@_result.Warnings.Count)</strong>
+                <ul class="mb-0">
+                    @foreach (var w in _result.Warnings.Take(30))
+                    {
+                        <li>@w</li>
+                    }
+                </ul>
+            </div>
+        }
+    }
+}
+
+@code {
+    private UserSession? _session;
+    private byte[]? _fileBytes;
+    private string _tempPassword = "Migracion123!";
+    private bool _busy;
+    private string? _error;
+    private MigrationResult? _result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+    }
+
+    private async Task OnFile(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _result = null;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(maxAllowedSize: 200 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            _fileBytes = ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            _fileBytes = null;
+            _error = $"No se pudo leer el archivo: {ex.Message}";
+        }
+    }
+
+    private async Task RunAsync()
+    {
+        if (_fileBytes is null || _session?.Has(AppPermission.ManageUsers) != true)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _result = null;
+        try
+        {
+            await using var ms = new MemoryStream(_fileBytes);
+            _result = await Migration.ImportFromJsonAsync(ms, _tempPassword);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
