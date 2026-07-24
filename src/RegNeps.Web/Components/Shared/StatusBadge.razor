@@ -1,0 +1,18 @@
+<span class="rn-badge @ToneClass">@ChildContent</span>
+
+@code {
+    /// <summary>normal | warning | critical | muted</summary>
+    [Parameter]
+    public string Tone { get; set; } = "muted";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    private string ToneClass => Tone switch
+    {
+        "normal" => "rn-badge--normal",
+        "warning" => "rn-badge--warning",
+        "critical" => "rn-badge--critical",
+        _ => "rn-badge--muted"
+    };
+}

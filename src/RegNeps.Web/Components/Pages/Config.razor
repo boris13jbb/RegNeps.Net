@@ -7,70 +7,78 @@
 
 @if (!_canView)
 {
-    <div class="alert alert-warning">No tiene permiso para ver la configuración.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para ver la configuración.</div>
 }
 else
 {
-    <h1 class="mb-3">Configuración de alertas</h1>
+    <PageHeader Title="Configuración de alertas"
+                Subtitle="Umbrales de neps y reglas de seguimiento operativo." />
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
     @if (!string.IsNullOrEmpty(_message))
     {
-        <div class="alert alert-success">@_message</div>
+        <div class="alert alert-success" role="status">@_message</div>
     }
 
     @if (_config is null)
     {
-        <p>Cargando…</p>
+        <LoadingBlock Message="Cargando configuración…" />
     }
     else
     {
-        <fieldset disabled="@(!_canEdit)" class="row g-3" style="max-width: 560px;">
-            <div class="col-md-6">
-                <label class="form-label">Límite normal máx.</label>
-                <InputNumber class="form-control" @bind-Value="_config.LimiteNormalMax" />
+        <div class="rn-panel" style="max-width: 560px;">
+            <div class="rn-panel-body">
+                <fieldset disabled="@(!_canEdit)" class="row g-3">
+                    <legend class="visually-hidden">Umbrales y reincidencias</legend>
+                    <div class="col-md-6">
+                        <label class="form-label" for="cfg-normal">Límite normal máx.</label>
+                        <InputNumber id="cfg-normal" class="form-control" @bind-Value="_config.LimiteNormalMax" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="cfg-advertencia">Límite advertencia máx.</label>
+                        <InputNumber id="cfg-advertencia" class="form-control" @bind-Value="_config.LimiteAdvertenciaMax" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="cfg-reincidencias">Reincidencias críticas</label>
+                        <InputNumber id="cfg-reincidencias" class="form-control" @bind-Value="_config.CantidadReincidenciasCriticas" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="cfg-dias">Días para reincidencia</label>
+                        <InputNumber id="cfg-dias" class="form-control" @bind-Value="_config.DiasParaReincidencia" />
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <InputCheckbox class="form-check-input" @bind-Value="_config.AlertasActivas" id="alertas" />
+                            <label class="form-check-label" for="alertas">Alertas activas</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <p class="small text-muted mb-0">
+                            Crítico desde: @_config.LimiteCriticoMin · Ventana reincidencias: @_config.VentanaReincidenciasHoras h
+                        </p>
+                    </div>
+                    @if (_canEdit)
+                    {
+                        <div class="col-12">
+                            <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving" aria-busy="@_saving">
+                                @(_saving ? "Guardando…" : "Guardar")
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="col-12">
+                            <div class="alert alert-info mb-0" role="status">
+                                Solo lectura. Se requiere permiso EditAlertConfig para guardar.
+                            </div>
+                        </div>
+                    }
+                </fieldset>
             </div>
-            <div class="col-md-6">
-                <label class="form-label">Límite advertencia máx.</label>
-                <InputNumber class="form-control" @bind-Value="_config.LimiteAdvertenciaMax" />
-            </div>
-            <div class="col-md-6">
-                <label class="form-label">Reincidencias críticas</label>
-                <InputNumber class="form-control" @bind-Value="_config.CantidadReincidenciasCriticas" />
-            </div>
-            <div class="col-md-6">
-                <label class="form-label">Días para reincidencia</label>
-                <InputNumber class="form-control" @bind-Value="_config.DiasParaReincidencia" />
-            </div>
-            <div class="col-12">
-                <div class="form-check">
-                    <InputCheckbox class="form-check-input" @bind-Value="_config.AlertasActivas" id="alertas" />
-                    <label class="form-check-label" for="alertas">Alertas activas</label>
-                </div>
-            </div>
-            <div class="col-12">
-                <p class="small text-muted mb-0">
-                    Crítico desde: @_config.LimiteCriticoMin · Ventana reincidencias: @_config.VentanaReincidenciasHoras h
-                </p>
-            </div>
-            @if (_canEdit)
-            {
-                <div class="col-12">
-                    <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">
-                        @(_saving ? "Guardando…" : "Guardar")
-                    </button>
-                </div>
-            }
-            else
-            {
-                <div class="col-12">
-                    <div class="alert alert-info mb-0">Solo lectura. Se requiere permiso EditAlertConfig para guardar.</div>
-                </div>
-            }
-        </fieldset>
+        </div>
     }
 }
 

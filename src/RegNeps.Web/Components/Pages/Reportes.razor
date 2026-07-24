@@ -9,32 +9,30 @@
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para exportar reportes.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para exportar reportes.</div>
 }
 else
 {
-    <h1 class="mb-3">Reportes profesionales</h1>
-    <p class="text-muted mb-3">
-        Vista previa y descarga de un informe <strong>consolidado</strong> con todos los registros
-        entre la fecha inicial y la final (ambas incluidas).
-    </p>
+    <PageHeader Title="Reportes profesionales"
+                Subtitle="Vista previa y descarga de un informe consolidado con todos los registros del periodo (fechas incluidas)." />
 
-    <div class="row g-2 mb-3 align-items-end" style="max-width: 720px;">
+    <div class="rn-filters" style="max-width: 720px;">
+    <div class="row g-2 align-items-end">
         <div class="col-md-3">
-            <label class="form-label">Desde</label>
-            <InputDate class="form-control" @bind-Value="_fromLocal" />
+            <label class="rn-field-label" for="reportes-desde">Desde</label>
+            <InputDate id="reportes-desde" class="form-control" @bind-Value="_fromLocal" />
         </div>
         <div class="col-md-3">
-            <label class="form-label">Hasta</label>
-            <InputDate class="form-control" @bind-Value="_toLocal" />
+            <label class="rn-field-label" for="reportes-hasta">Hasta</label>
+            <InputDate id="reportes-hasta" class="form-control" @bind-Value="_toLocal" />
         </div>
         <div class="col-md-2">
-            <label class="form-label">Telar</label>
-            <input class="form-control" @bind="_telar" placeholder="Opcional" />
+            <label class="rn-field-label" for="reportes-telar">Telar</label>
+            <input id="reportes-telar" class="form-control" @bind="_telar" placeholder="Opcional" />
         </div>
         <div class="col-md-2">
-            <label class="form-label">Tela</label>
-            <input class="form-control" @bind="_tela" placeholder="Opcional" />
+            <label class="rn-field-label" for="reportes-tela">Tela</label>
+            <input id="reportes-tela" class="form-control" @bind="_tela" placeholder="Opcional" />
         </div>
         <div class="col-md-2">
             <button class="btn btn-primary w-100" @onclick="PreviewAsync" disabled="@_loading">
@@ -42,32 +40,30 @@ else
             </button>
         </div>
     </div>
+    </div>
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-warning">@_error</div>
+        <div class="alert alert-warning" role="alert">@_error</div>
     }
 
     @if (_preview is not null)
     {
         @if (_preview.Records.Count == 0)
         {
-            <div class="alert alert-info">
-                No hay registros en el rango seleccionado
-                (@(_fromLocal?.ToString("dd/MM/yyyy")) – @_toLocal?.ToString("dd/MM/yyyy")).
-                Ajuste las fechas e intente de nuevo.
-            </div>
+            <EmptyState Title="Sin registros en el rango"
+                        Message="@($"No hay registros entre {_fromLocal?.ToString("dd/MM/yyyy")} y {_toLocal?.ToString("dd/MM/yyyy")}. Ajuste las fechas e intente de nuevo.")" />
         }
         else
         {
-            <div class="alert alert-success py-2">
+            <div class="alert alert-success py-2" role="status">
                 Consolidado: <strong>@_preview.Records.Count</strong> registros
                 del @_fromLocal?.ToString("dd/MM/yyyy") al @_toLocal?.ToString("dd/MM/yyyy")
                 (orden cronológico).
             </div>
 
             <div class="mb-3">
-                <h5>Conclusiones</h5>
+                <h2 class="rn-section-title">Conclusiones</h2>
                 <ul>
                     @foreach (var c in _preview.Conclusions)
                     {
@@ -78,44 +74,37 @@ else
 
             <div class="row g-3 mb-4">
                 <div class="col-6 col-md-3">
-                    <div class="card border-0 shadow-sm"><div class="card-body">
-                        <div class="text-muted small">Registros</div>
-                        <div class="fs-5 fw-semibold">@_preview.Summary.TotalRecords</div>
-                    </div></div>
+                    <KpiCard Label="Registros">@_preview.Summary.TotalRecords</KpiCard>
                 </div>
                 <div class="col-6 col-md-3">
-                    <div class="card border-0 shadow-sm"><div class="card-body">
-                        <div class="text-muted small">Promedio</div>
-                        <div class="fs-5 fw-semibold">@_preview.Summary.AverageNeps.ToString("0.##")</div>
-                    </div></div>
+                    <KpiCard Label="Promedio">@_preview.Summary.AverageNeps.ToString("0.##")</KpiCard>
                 </div>
                 <div class="col-6 col-md-3">
-                    <div class="card border-0 shadow-sm"><div class="card-body">
-                        <div class="text-muted small">Críticos</div>
-                        <div class="fs-5 fw-semibold text-danger">@_preview.Summary.CriticalCount</div>
-                    </div></div>
+                    <KpiCard Label="Críticos" Tone="danger">@_preview.Summary.CriticalCount</KpiCard>
                 </div>
                 <div class="col-6 col-md-3">
-                    <div class="card border-0 shadow-sm"><div class="card-body">
-                        <div class="text-muted small">Calidad</div>
-                        <div class="fs-5 fw-semibold">@_preview.Summary.QualityIndex.ToString("0.#")%</div>
-                    </div></div>
+                    <KpiCard Label="Calidad" Tone="success">@_preview.Summary.QualityIndex.ToString("0.#")%</KpiCard>
                 </div>
             </div>
 
             <div class="row g-4 mb-4">
                 <div class="col-lg-6">
-                    <h5>Peores telares</h5>
+                    <h2 class="rn-section-title">Peores telares</h2>
                     @if (_preview.Summary.WorstTelars.Count == 0)
                     {
                         <p class="text-muted">Sin datos.</p>
                     }
                     else
                     {
-                        <div class="table-responsive">
-                            <table class="table table-sm table-striped">
+                        <div class="rn-table-wrap table-responsive">
+                            <table class="table table-sm table-hover mb-0">
                                 <thead>
-                                    <tr><th>Telar</th><th>Promedio</th><th>Regs</th><th>Crít.</th></tr>
+                                    <tr>
+                                        <th scope="col">Telar</th>
+                                        <th scope="col">Promedio</th>
+                                        <th scope="col">Regs</th>
+                                        <th scope="col">Crít.</th>
+                                    </tr>
                                 </thead>
                                 <tbody>
                                     @foreach (var t in _preview.Summary.WorstTelars)
@@ -133,17 +122,22 @@ else
                     }
                 </div>
                 <div class="col-lg-6">
-                    <h5>Mejores telares</h5>
+                    <h2 class="rn-section-title">Mejores telares</h2>
                     @if (_preview.Summary.BestTelars.Count == 0)
                     {
                         <p class="text-muted">Sin datos.</p>
                     }
                     else
                     {
-                        <div class="table-responsive">
-                            <table class="table table-sm table-striped">
+                        <div class="rn-table-wrap table-responsive">
+                            <table class="table table-sm table-hover mb-0">
                                 <thead>
-                                    <tr><th>Telar</th><th>Promedio</th><th>Regs</th><th>Crít.</th></tr>
+                                    <tr>
+                                        <th scope="col">Telar</th>
+                                        <th scope="col">Promedio</th>
+                                        <th scope="col">Regs</th>
+                                        <th scope="col">Crít.</th>
+                                    </tr>
                                 </thead>
                                 <tbody>
                                     @foreach (var t in _preview.Summary.BestTelars)
@@ -162,16 +156,22 @@ else
                 </div>
             </div>
 
-            <h5>Tendencia diaria</h5>
+            <h2 class="rn-section-title">Tendencia diaria</h2>
             @if (_preview.Summary.ByDay.Count == 0)
             {
                 <p class="text-muted">Sin puntos en el periodo.</p>
             }
             else
             {
-                <div class="table-responsive mb-4" style="max-width: 480px;">
-                    <table class="table table-sm table-striped">
-                        <thead><tr><th>Fecha</th><th>Promedio</th><th>Cantidad</th></tr></thead>
+                <div class="rn-table-wrap table-responsive mb-4" style="max-width: 480px;">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th scope="col">Fecha</th>
+                                <th scope="col">Promedio</th>
+                                <th scope="col">Cantidad</th>
+                            </tr>
+                        </thead>
                         <tbody>
                             @foreach (var d in _preview.Summary.ByDay)
                             {
@@ -216,6 +216,50 @@ else
     {
         _session = await CurrentUser.GetAsync();
         _allowed = _session?.Has(AppPermission.ExportReports) == true;
+        if (!_allowed || _session is null)
+        {
+            return;
+        }
+
+        ApplyQueryFilters();
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("auto", out var auto) &&
+            auto.ToString() is "1" or "true" &&
+            _fromLocal is not null &&
+            _toLocal is not null)
+        {
+            await PreviewAsync();
+        }
+    }
+
+    /// <summary>Abre Reportes desde Informes con ?from=&amp;to=&amp;telar=&amp;tela=&amp;auto=1.</summary>
+    private void ApplyQueryFilters()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.Count == 0)
+        {
+            return;
+        }
+
+        if (query.TryGetValue("from", out var fromRaw) &&
+            query.TryGetValue("to", out var toRaw) &&
+            ReportDateRange.TryParseQuery(fromRaw.ToString(), toRaw.ToString(), out var range, out _))
+        {
+            _fromLocal = range.FromUtc.ToLocalTime().Date;
+            _toLocal = range.ToInclusiveUtc.ToLocalTime().Date;
+        }
+
+        if (query.TryGetValue("telar", out var telarRaw) && !string.IsNullOrWhiteSpace(telarRaw))
+        {
+            _telar = telarRaw.ToString();
+        }
+
+        if (query.TryGetValue("tela", out var telaRaw) && !string.IsNullOrWhiteSpace(telaRaw))
+        {
+            _tela = telaRaw.ToString();
+        }
     }
 
     private bool TryBuildRange(out ReportDateRange range)
@@ -287,7 +331,7 @@ else
 
             var file = await Reports.ExportAsync(
                 format, filters, _session.UserId, _session.SeesAllRecords, _style);
-            var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName);
+            var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
             Nav.NavigateTo($"/api/export/temp/{id}", forceLoad: true);
         }
         catch (InvalidOperationException ex)

@@ -4,18 +4,19 @@
 @inject IAlertConfigRepository AlertConfigRepository
 @inject IRecordImportService ImportService
 @inject CurrentUserService CurrentUser
+@inject NavigationManager Nav
+@implements IDisposable
 
 <PageTitle>Registros — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para ver registros.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para ver registros.</div>
 }
 else
 {
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h1 class="mb-0">Registros</h1>
-        <div class="d-flex gap-2 flex-wrap">
+    <PageHeader Title="Registros" Subtitle="Consulte, filtre e importe históricos de mediciones.">
+        <Actions>
             @if (_canEdit)
             {
                 <a class="btn btn-outline-secondary btn-sm" href="/api/import/template">Plantilla Excel</a>
@@ -30,88 +31,127 @@ else
                     Vaciar todos
                 </button>
             }
-            <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
+            <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading" aria-busy="@_loading">
                 @(_loading ? "Cargando…" : "Actualizar")
             </button>
-        </div>
-    </div>
+        </Actions>
+    </PageHeader>
 
     @if (!string.IsNullOrEmpty(_message))
     {
-        <div class="alert alert-info">@_message</div>
+        <div class="alert alert-info" role="status">@_message</div>
     }
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
-
-    <div class="row g-2 mb-3" style="max-width: 1100px;">
-        <div class="col-md-2">
-            <input class="form-control form-control-sm" placeholder="Telar" @bind="_filterTelar" />
-        </div>
-        <div class="col-md-2">
-            <input class="form-control form-control-sm" placeholder="Tela" @bind="_filterTela" />
-        </div>
-        <div class="col-md-2">
-            <input class="form-control form-control-sm" placeholder="Lote" @bind="_filterLote" />
-        </div>
-        <div class="col-md-1">
-            <select class="form-select form-select-sm" @bind="_filterTurno">
-                <option value="">Turno</option>
-                <option value="A">A</option>
-                <option value="B">B</option>
-                <option value="C">C</option>
-            </select>
-        </div>
-        <div class="col-md-2">
-            <select class="form-select form-select-sm" @bind="_filterAlert">
-                <option value="">Alerta</option>
-                <option value="Normal">Normal</option>
-                <option value="Advertencia">Advertencia</option>
-                <option value="Critico">Crítico</option>
-            </select>
-        </div>
-        <div class="col-md-1">
-            <InputDate class="form-control form-control-sm" @bind-Value="_filterFrom" />
-        </div>
-        <div class="col-md-1">
-            <InputDate class="form-control form-control-sm" @bind-Value="_filterTo" />
-        </div>
-        <div class="col-md-1">
-            <div class="form-check mt-1">
-                <input class="form-check-input" type="checkbox" id="pendientes" @bind="_soloPendientes" />
-                <label class="form-check-label" for="pendientes">Pend.</label>
+    @if (_openedFromInforme && _totalInDb == 0)
+    {
+        <div class="alert alert-warning" role="alert" style="max-width: 1100px;">
+            <strong>La base de datos no tiene mediciones (0 registros).</strong>
+            El informe solo guarda el periodo (filtros), no una copia de las filas.
+            Si usó «Vaciar todos», las mediciones se borraron y por eso la tabla está vacía.
+            <div class="mt-2 d-flex flex-wrap gap-2">
+                <a class="btn btn-primary btn-sm" href="/captura">Capturar mediciones</a>
+                <a class="btn btn-outline-primary btn-sm" href="/migracion">Migración histórica (Firestore)</a>
+                <a class="btn btn-outline-secondary btn-sm" href="/informes">Volver a Informes</a>
             </div>
         </div>
-        <div class="col-12">
-            <button class="btn btn-primary btn-sm" @onclick="LoadAsync">Filtrar</button>
+    }
+
+    <div class="rn-filters" style="max-width: 1100px;">
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="filter-telar">Telar</label>
+                <input id="filter-telar" class="form-control form-control-sm" @bind="_filterTelar" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="filter-tela">Tela</label>
+                <input id="filter-tela" class="form-control form-control-sm" @bind="_filterTela" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="filter-lote">Lote</label>
+                <input id="filter-lote" class="form-control form-control-sm" @bind="_filterLote" />
+            </div>
+            <div class="col-6 col-md-1">
+                <label class="rn-field-label" for="filter-turno">Turno</label>
+                <select id="filter-turno" class="form-select form-select-sm" @bind="_filterTurno">
+                    <option value="">Todos</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="filter-alerta">Alerta</label>
+                <select id="filter-alerta" class="form-select form-select-sm" @bind="_filterAlert">
+                    <option value="">Todas</option>
+                    <option value="Normal">Normal</option>
+                    <option value="Advertencia">Advertencia</option>
+                    <option value="Critico">Crítico</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-1">
+                <label class="rn-field-label" for="filter-desde">Desde</label>
+                <InputDate id="filter-desde" class="form-control form-control-sm" @bind-Value="_filterFrom" />
+            </div>
+            <div class="col-6 col-md-1">
+                <label class="rn-field-label" for="filter-hasta">Hasta</label>
+                <InputDate id="filter-hasta" class="form-control form-control-sm" @bind-Value="_filterTo" />
+            </div>
+            <div class="col-6 col-md-1">
+                <div class="form-check mb-1">
+                    <input class="form-check-input" type="checkbox" id="pendientes" @bind="_soloPendientes" />
+                    <label class="form-check-label" for="pendientes">Pendientes</label>
+                </div>
+            </div>
+            <div class="col-12 col-md-auto">
+                <button class="btn btn-primary btn-sm" @onclick="LoadAsync">Filtrar</button>
+            </div>
         </div>
     </div>
 
     @if (_loading && _records.Count == 0)
     {
-        <p>Cargando registros…</p>
+        <LoadingBlock Message="Cargando registros…" />
     }
     else if (_records.Count == 0)
     {
-        <div class="alert alert-secondary">No hay registros con los filtros actuales.</div>
+        @if (_totalInDb == 0)
+        {
+            <EmptyState Title="No hay mediciones en la base"
+                        Message="No es un fallo al abrir el informe: la tabla NepRecords está vacía (0 filas). Capture datos o importe el histórico de Firestore. Los informes guardados siguen listados, pero no tienen filas que mostrar.">
+                <a class="btn btn-primary btn-sm" href="/captura">Ir a captura</a>
+                <a class="btn btn-outline-primary btn-sm" href="/migracion">Migración histórica</a>
+            </EmptyState>
+        }
+        else
+        {
+            <EmptyState Title="Sin resultados en este periodo"
+                        Message="@($"Hay {_totalInDb} mediciones en total, pero ninguna entre {_filterFrom:dd/MM/yyyy} y {_filterTo:dd/MM/yyyy}. Amplíe las fechas y pulse Filtrar.")">
+                <button type="button" class="btn btn-primary btn-sm" @onclick="ClearDatesAndReloadAsync">
+                    Quitar filtro de fechas y ver todo
+                </button>
+                <a class="btn btn-outline-primary btn-sm" href="/captura">Ir a captura</a>
+            </EmptyState>
+        }
     }
     else
     {
-        <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle">
+        <div class="rn-table-wrap table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Fecha</th>
-                        <th>Telar</th>
-                        <th>Neps</th>
-                        <th>Mts</th>
-                        <th>Tela</th>
-                        <th>Lote</th>
-                        <th>Turno</th>
-                        <th>Operario</th>
-                        <th>Alerta</th>
-                        <th></th>
+                        <th scope="col">Fecha</th>
+                        <th scope="col">Telar</th>
+                        <th scope="col">Neps</th>
+                        <th scope="col">Mts</th>
+                        <th scope="col">Tela</th>
+                        <th scope="col">Lote</th>
+                        <th scope="col">Turno</th>
+                        <th scope="col">Operario</th>
+                        <th scope="col">Alerta</th>
+                        <th scope="col"><span class="visually-hidden">Acciones</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -128,7 +168,7 @@ else
                             <td>@r.Turno</td>
                             <td>@r.Operario</td>
                             <td>
-                                <span class="badge @BadgeClass(level)">@level.ToDisplayLabel()</span>
+                                <StatusBadge Tone="@BadgeTone(level)">@level.ToDisplayLabel()</StatusBadge>
                             </td>
                             <td class="text-nowrap">
                                 @if (_canEdit)
@@ -153,97 +193,81 @@ else
 
     @if (_editTarget is not null)
     {
-        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Editar registro — @_editTarget.Telar</h5>
-                        <button type="button" class="btn-close" @onclick="CloseEdit"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="row g-2">
-                            <div class="col-md-4">
-                                <label class="form-label">Telar *</label>
-                                <input class="form-control" @bind="_editTelar" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Neps *</label>
-                                <input class="form-control" type="number" step="0.01" @bind="_editNeps" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Mts (calc.)</label>
-                                <input class="form-control" value="@((_editNeps / 0.09).ToString("0.##"))" disabled />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Tela</label>
-                                <input class="form-control" @bind="_editTela" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Lote/trama</label>
-                                <input class="form-control" @bind="_editLote" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Turno</label>
-                                <select class="form-select" @bind="_editTurno">
-                                    <option value="">—</option>
-                                    <option value="A">A</option>
-                                    <option value="B">B</option>
-                                    <option value="C">C</option>
-                                </select>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Operario</label>
-                                <input class="form-control" @bind="_editOperario" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Línea</label>
-                                <input class="form-control" @bind="_editLinea" />
-                            </div>
-                            <div class="col-12">
-                                <label class="form-label">Observación</label>
-                                <textarea class="form-control" rows="2" @bind="_editObservacion"></textarea>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @onclick="CloseEdit">Cancelar</button>
-                        <button class="btn btn-primary" @onclick="SaveEditAsync" disabled="@_savingEdit">Guardar</button>
-                    </div>
+        <AppModal Title="@($"Editar registro — {_editTarget.Telar}")" Size="lg" OnClose="CloseEdit">
+            <ChildContent>
+            <div class="row g-2">
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-telar">Telar *</label>
+                    <input id="edit-telar" class="form-control" @bind="_editTelar" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-neps">Neps *</label>
+                    <input id="edit-neps" class="form-control" type="number" step="0.01" @bind="_editNeps" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-mts">Mts (calc.)</label>
+                    <input id="edit-mts" class="form-control" value="@((_editNeps / NepsConstants.TestLengthM).ToString("0.##"))" disabled />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-tela">Tela</label>
+                    <input id="edit-tela" class="form-control" @bind="_editTela" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-lote">Lote/trama</label>
+                    <input id="edit-lote" class="form-control" @bind="_editLote" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-turno">Turno</label>
+                    <select id="edit-turno" class="form-select" @bind="_editTurno">
+                        <option value="">—</option>
+                        <option value="A">A</option>
+                        <option value="B">B</option>
+                        <option value="C">C</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-operario">Operario</label>
+                    <input id="edit-operario" class="form-control" @bind="_editOperario" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="edit-linea">Línea</label>
+                    <input id="edit-linea" class="form-control" @bind="_editLinea" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label" for="edit-obs">Observación</label>
+                    <textarea id="edit-obs" class="form-control" rows="2" @bind="_editObservacion"></textarea>
                 </div>
             </div>
-        </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="CloseEdit">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveEditAsync" disabled="@_savingEdit">Guardar</button>
+            </Footer>
+        </AppModal>
     }
 
     @if (_correctiveTarget is not null)
     {
-        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Acción correctiva — Telar @_correctiveTarget.Telar</h5>
-                        <button type="button" class="btn-close" @onclick="CloseCorrective"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label">Acción *</label>
-                            <textarea class="form-control" rows="3" @bind="_accion"></textarea>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Responsable</label>
-                            <input class="form-control" @bind="_responsable" />
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="revisado" @bind="_marcarRevisado" />
-                            <label class="form-check-label" for="revisado">Marcar como revisado</label>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @onclick="CloseCorrective">Cancelar</button>
-                        <button class="btn btn-primary" @onclick="SaveCorrectiveAsync" disabled="@_savingCorrective">Guardar</button>
-                    </div>
-                </div>
+        <AppModal Title="@($"Acción correctiva — Telar {_correctiveTarget.Telar}")" OnClose="CloseCorrective">
+            <ChildContent>
+            <div class="mb-3">
+                <label class="form-label" for="reg-corrective-accion">Acción *</label>
+                <textarea id="reg-corrective-accion" class="form-control" rows="3" @bind="_accion"></textarea>
             </div>
-        </div>
+            <div class="mb-3">
+                <label class="form-label" for="reg-corrective-resp">Responsable</label>
+                <input id="reg-corrective-resp" class="form-control" @bind="_responsable" />
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="revisado" @bind="_marcarRevisado" />
+                <label class="form-check-label" for="revisado">Marcar como revisado</label>
+            </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="CloseCorrective">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveCorrectiveAsync" disabled="@_savingCorrective">Guardar</button>
+            </Footer>
+        </AppModal>
     }
 }
 
@@ -268,6 +292,9 @@ else
     private DateTime? _filterFrom;
     private DateTime? _filterTo;
     private bool _soloPendientes;
+    private bool _openedFromInforme;
+    private int _totalInDb;
+    private int _informeSavedCount;
 
     private NepRecord? _editTarget;
     private string _editTelar = "";
@@ -299,6 +326,99 @@ else
             return;
         }
 
+        Nav.LocationChanged += OnLocationChanged;
+        ApplyQueryFilters();
+        _totalInDb = await RecordService.CountAllAsync();
+        await LoadAsync();
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (!_allowed)
+        {
+            return;
+        }
+
+        var path = Nav.ToBaseRelativePath(e.Location).Split('?', '#')[0];
+        if (!path.Equals("registros", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            ApplyQueryFilters();
+            await LoadAsync();
+        });
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+
+    /// <summary>Permite abrir Registros desde Informes con ?from=&amp;to=&amp;telar=&amp;tela=.</summary>
+    private void ApplyQueryFilters()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        var applied = false;
+
+        // Sin query: no tocar filtros (usuario puede haberlos editado a mano).
+        if (query.Count == 0)
+        {
+            return;
+        }
+
+        if (query.TryGetValue("from", out var fromRaw) &&
+            query.TryGetValue("to", out var toRaw) &&
+            ReportDateRange.TryParseQuery(fromRaw.ToString(), toRaw.ToString(), out var range, out _))
+        {
+            _filterFrom = range.FromUtc.ToLocalTime().Date;
+            _filterTo = range.ToInclusiveUtc.ToLocalTime().Date;
+            _openedFromInforme = true;
+            applied = true;
+        }
+
+        if (query.TryGetValue("saved", out var savedRaw) &&
+            int.TryParse(savedRaw.ToString(), out var savedCount))
+        {
+            _informeSavedCount = savedCount;
+            _openedFromInforme = true;
+        }
+
+        if (query.TryGetValue("telar", out var telarRaw) && !string.IsNullOrWhiteSpace(telarRaw))
+        {
+            _filterTelar = telarRaw.ToString();
+            applied = true;
+        }
+        else if (query.ContainsKey("telar"))
+        {
+            _filterTelar = "";
+        }
+
+        if (query.TryGetValue("tela", out var telaRaw) && !string.IsNullOrWhiteSpace(telaRaw))
+        {
+            _filterTela = telaRaw.ToString();
+            applied = true;
+        }
+        else if (query.ContainsKey("tela"))
+        {
+            _filterTela = "";
+        }
+
+        if (applied && _filterFrom is not null && _filterTo is not null)
+        {
+            _message = _informeSavedCount > 0
+                ? $"Abierto desde informe · periodo {_filterFrom:dd/MM/yyyy} – {_filterTo:dd/MM/yyyy} " +
+                  $"(el informe recordaba {_informeSavedCount} filas)."
+                : $"Abierto desde informe · periodo {_filterFrom:dd/MM/yyyy} – {_filterTo:dd/MM/yyyy}.";
+        }
+    }
+
+    private async Task ClearDatesAndReloadAsync()
+    {
+        _filterFrom = null;
+        _filterTo = null;
+        _openedFromInforme = false;
+        _message = "Filtro de fechas quitado. Mostrando mediciones disponibles.";
         await LoadAsync();
     }
 
@@ -315,7 +435,8 @@ else
         {
             _config = await AlertConfigRepository.GetAsync();
             AlertLevel? alert = null;
-            if (!string.IsNullOrEmpty(_filterAlert) && Enum.TryParse<AlertLevel>(_filterAlert, out var parsed))
+            if (!string.IsNullOrEmpty(_filterAlert) &&
+                Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
             {
                 alert = parsed;
             }
@@ -325,7 +446,7 @@ else
                 Telar = string.IsNullOrWhiteSpace(_filterTelar) ? null : _filterTelar.Trim(),
                 Tela = string.IsNullOrWhiteSpace(_filterTela) ? null : _filterTela.Trim(),
                 LoteTrama = string.IsNullOrWhiteSpace(_filterLote) ? null : _filterLote.Trim(),
-                Turno = string.IsNullOrWhiteSpace(_filterTurno) ? null : _filterTurno,
+                Turno = string.IsNullOrWhiteSpace(_filterTurno) ? null : _filterTurno.Trim(),
                 AlertLevel = alert,
                 SoloPendientes = _soloPendientes
             };
@@ -344,7 +465,11 @@ else
                 ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
             }
 
-            _records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 500);
+            // Con rango de fechas: traer todo el periodo (hasta 50k). Sin rango: últimos 1000.
+            var take = filters.FromUtc is not null || filters.ToExclusiveUtc is not null || filters.ToUtc is not null
+                ? 50_000
+                : 1_000;
+            _records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, take);
         }
         catch (Exception ex)
         {
@@ -491,7 +616,10 @@ else
         try
         {
             await RecordService.ClearAllAsync();
-            _message = "Todos los registros fueron eliminados.";
+            _totalInDb = 0;
+            _message =
+                "Todas las mediciones fueron eliminadas. Los informes guardados siguen existiendo, " +
+                "pero al abrirlos la tabla saldrá vacía hasta que capture o migre datos de nuevo.";
             await LoadAsync();
         }
         catch (Exception ex)
@@ -518,11 +646,11 @@ else
         }
     }
 
-    private static string BadgeClass(AlertLevel level) => level switch
+    private static string BadgeTone(AlertLevel level) => level switch
     {
-        AlertLevel.Normal => "text-bg-success",
-        AlertLevel.Advertencia => "text-bg-warning",
-        AlertLevel.Critico => "text-bg-danger",
-        _ => "text-bg-secondary"
+        AlertLevel.Normal => "normal",
+        AlertLevel.Advertencia => "warning",
+        AlertLevel.Critico => "critical",
+        _ => "muted"
     };
 }

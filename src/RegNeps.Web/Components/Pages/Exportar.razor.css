@@ -1,0 +1,210 @@
+.export-page {
+    max-width: 1200px;
+}
+
+.export-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--rn-success-bg, #e7f8ee);
+    color: var(--rn-success, #2eb85c);
+    font-size: 0.8rem;
+    font-weight: 650;
+}
+
+.export-sync-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--rn-success, #2eb85c);
+    box-shadow: 0 0 0 3px rgba(46, 184, 92, 0.25);
+}
+
+.export-card {
+    background: var(--rn-surface, #fff);
+    border-radius: var(--rn-radius-lg, 1rem);
+    box-shadow: var(--rn-shadow, 0 8px 24px rgba(17, 28, 45, 0.06));
+    border: 1px solid transparent;
+    overflow: hidden;
+}
+
+.export-card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem 1.15rem 0.35rem;
+}
+
+.export-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.65rem;
+    height: 1.65rem;
+    border-radius: 999px;
+    background: var(--vicunha-sky, #E8F1F8);
+    color: var(--vicunha-blue, #1F4E79);
+    font-size: 0.8rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.export-card-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--rn-text, #3c4b64);
+}
+
+.export-card-sub {
+    margin: 0.15rem 0 0;
+    font-size: 0.8rem;
+    color: var(--rn-text-muted, #768192);
+}
+
+.export-card-body {
+    padding: 0.65rem 1.15rem 1.15rem;
+}
+
+.export-visible {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: var(--rn-radius, 0.75rem);
+    background: var(--rn-surface-muted, #f4f6f9);
+    font-size: 0.925rem;
+}
+
+.export-visible-icon {
+    display: inline-flex;
+    color: var(--vicunha-blue, #1F4E79);
+}
+
+.export-mode {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    padding: 0.35rem;
+    border-radius: 999px;
+    background: var(--rn-surface-muted, #f4f6f9);
+    margin-bottom: 0.75rem;
+}
+
+.export-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-height: 2.65rem;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--rn-text-muted, #768192);
+    font-weight: 650;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.export-mode-btn:hover {
+    color: var(--vicunha-navy, #17222B);
+}
+
+.export-mode-btn.is-active {
+    background: #fff;
+    color: var(--vicunha-blue, #1F4E79);
+    box-shadow: 0 2px 8px rgba(17, 28, 45, 0.08);
+}
+
+.export-hint {
+    font-size: 0.8rem;
+    color: var(--rn-text-muted, #768192);
+}
+
+.export-all-link {
+    font-weight: 650;
+    color: var(--vicunha-blue, #1F4E79);
+    text-decoration: none;
+}
+
+.export-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.export-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--rn-border, #d8dbe0);
+    background: #fff;
+    color: var(--rn-text-muted, #768192);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.export-chip.is-on {
+    background: var(--rn-success-bg, #e7f8ee);
+    border-color: rgba(46, 184, 92, 0.35);
+    color: #1a6b3a;
+}
+
+.export-formats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+}
+
+.export-fmt .rn-morph-btn {
+    --rn-morph-h: 2.65rem;
+    padding: 0.4rem 1.15rem;
+    font-size: 0.875rem;
+}
+
+.export-fmt--csv {
+    --highlight-hue: 160deg;
+}
+
+.export-fmt--xlsx {
+    --highlight-hue: 140deg;
+}
+
+.export-fmt--pdf {
+    --highlight-hue: 42deg;
+}
+
+.export-fmt--print,
+.export-fmt--copy {
+    --highlight-hue: 42deg;
+}
+
+.export-formula {
+    margin-top: 1rem;
+    padding: 0.85rem 1rem;
+    border-radius: var(--rn-radius, 0.75rem);
+    background: #fff8e8;
+    border: 1px solid #f0e0b8;
+    font-size: 0.85rem;
+    color: #6b5a2e;
+}
+
+.export-formula strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #5a4a22;
+}
+
+@media (max-width: 575.98px) {
+    .export-mode {
+        grid-template-columns: 1fr;
+        border-radius: var(--rn-radius-lg, 1rem);
+    }
+}

@@ -7,30 +7,29 @@
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para gestionar lotes de trama.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para gestionar lotes de trama.</div>
 }
 else
 {
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h1 class="mb-0">Lotes de trama</h1>
-        <div class="d-flex gap-2 flex-wrap align-items-center">
+    <PageHeader Title="Lotes de trama" Subtitle="Catálogo de lotes usados en captura de registros.">
+        <Actions>
             <a class="btn btn-outline-secondary btn-sm" href="/api/export/lotes/csv">CSV</a>
             <a class="btn btn-outline-secondary btn-sm" href="/api/export/lotes/xlsx">Excel</a>
-        </div>
-    </div>
+        </Actions>
+    </PageHeader>
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
     @if (!string.IsNullOrEmpty(_message))
     {
-        <div class="alert alert-success">@_message</div>
+        <div class="alert alert-success" role="status">@_message</div>
     }
 
     <div class="card border-0 shadow-sm mb-4" style="max-width: 560px;">
         <div class="card-body">
-            <h5 class="card-title">@( _editing is null ? "Nuevo lote" : "Editar lote" )</h5>
+            <h2 class="h5 card-title">@( _editing is null ? "Nuevo lote" : "Editar lote" )</h2>
             <div class="row g-2">
                 <div class="col-md-8">
                     <label class="form-label">Código *</label>
@@ -59,14 +58,14 @@ else
         </div>
     </div>
 
-    <div class="table-responsive" style="max-width: 720px;">
-        <table class="table table-sm table-striped align-middle">
+    <div class="rn-table-wrap table-responsive" style="max-width: 720px;">
+        <table class="table table-sm table-hover align-middle mb-0">
             <thead>
                 <tr>
-                    <th>Código</th>
-                    <th>Estado</th>
-                    <th>Creado</th>
-                    <th></th>
+                    <th scope="col">Código</th>
+                    <th scope="col">Estado</th>
+                    <th scope="col">Creado</th>
+                    <th scope="col"><span class="visually-hidden">Acciones</span></th>
                 </tr>
             </thead>
             <tbody>
@@ -74,7 +73,11 @@ else
                 {
                     <tr>
                         <td class="font-monospace fw-semibold">@lote.Code</td>
-                        <td>@(lote.IsActive ? "Activo" : "Inactivo")</td>
+                        <td>
+                            <StatusBadge Tone="@(lote.IsActive ? "normal" : "muted")">
+                                @(lote.IsActive ? "Activo" : "Inactivo")
+                            </StatusBadge>
+                        </td>
                         <td>@lote.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy")</td>
                         <td class="text-nowrap">
                             <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => StartEdit(lote)">Editar</button>
@@ -86,7 +89,10 @@ else
         </table>
         @if (_list.Count == 0)
         {
-            <p class="text-muted">No hay lotes registrados.</p>
+            <div class="p-3">
+                <EmptyState Title="Sin lotes"
+                            Message="No hay lotes registrados. Cree el primero con el formulario superior." />
+            </div>
         }
     </div>
 }

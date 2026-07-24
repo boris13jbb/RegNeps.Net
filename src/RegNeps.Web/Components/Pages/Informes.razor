@@ -1,55 +1,96 @@
 @page "/informes"
 @rendermode InteractiveServer
 @inject ReportExportAppService Reports
+@inject NepRecordService RecordService
 @inject CurrentUserService CurrentUser
+@inject NavigationManager Nav
 
 <PageTitle>Informes guardados — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para gestionar informes.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para gestionar informes.</div>
 }
 else
 {
-    <h1 class="mb-3">Informes guardados</h1>
+    <PageHeader Title="Informes guardados"
+                Subtitle="Ver datos abre Registros o Reportes. Editar solo cambia nombre y fechas del informe.">
+        <Actions>
+            @if (_loadedId is not null)
+            {
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ClearEdit">
+                    + Nuevo informe
+                </button>
+            }
+        </Actions>
+    </PageHeader>
+
+    @if (_totalRecordsInDb == 0 && _list.Count > 0)
+    {
+        <div class="alert alert-warning" role="alert" style="max-width: 960px;">
+            <strong>No hay mediciones en la base (0 registros).</strong>
+            Tiene @_list.Count informe(s) guardados, pero la tabla de mediciones está vacía
+            (por ejemplo tras «Vaciar todos»). Al pulsar Ver en Registros no habrá filas que editar
+            hasta que capture o migre datos.
+            <div class="mt-2 d-flex flex-wrap gap-2">
+                <a class="btn btn-primary btn-sm" href="/captura">Ir a captura</a>
+                <a class="btn btn-outline-primary btn-sm" href="/migracion">Migración histórica</a>
+            </div>
+        </div>
+    }
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
     @if (!string.IsNullOrEmpty(_message))
     {
-        <div class="alert alert-success">@_message</div>
+        <div class="alert alert-success" role="status">@_message</div>
     }
 
-    <div class="card border-0 shadow-sm mb-4" style="max-width: 720px;">
+    <div class="card border-0 shadow-sm mb-4 @(_loadedId is not null ? "border border-primary" : null)"
+         style="max-width: 720px;">
         <div class="card-body">
-            <h5 class="card-title">Crear informe</h5>
+            <h2 class="h5 card-title">@(_loadedId is not null ? "Editar nombre y periodo" : "Crear informe")</h2>
             <div class="row g-2">
                 <div class="col-md-6">
-                    <label class="form-label">Nombre *</label>
-                    <input class="form-control" @bind="_name" />
+                    <label class="form-label" for="inf-nombre">Nombre *</label>
+                    <input id="inf-nombre" class="form-control" @bind="_name" />
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">Desde</label>
-                    <InputDate class="form-control" @bind-Value="_fromLocal" />
+                    <label class="form-label" for="inf-desde">Desde</label>
+                    <InputDate id="inf-desde" class="form-control" @bind-Value="_fromLocal" />
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">Hasta</label>
-                    <InputDate class="form-control" @bind-Value="_toLocal" />
+                    <label class="form-label" for="inf-hasta">Hasta</label>
+                    <InputDate id="inf-hasta" class="form-control" @bind-Value="_toLocal" />
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Telar</label>
-                    <input class="form-control" @bind="_telar" />
+                    <label class="form-label" for="inf-telar">Telar</label>
+                    <input id="inf-telar" class="form-control" @bind="_telar" />
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Tela</label>
-                    <input class="form-control" @bind="_tela" />
+                    <label class="form-label" for="inf-tela">Tela</label>
+                    <input id="inf-tela" class="form-control" @bind="_tela" />
                 </div>
-                <div class="col-12">
-                    <button class="btn btn-primary btn-sm" @onclick="CreateAsync" disabled="@_saving">
-                        @(_saving ? "Guardando…" : "Guardar informe")
+                <div class="col-12 d-flex flex-wrap gap-2">
+                    <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@_saving" aria-busy="@_saving">
+                        @(_saving ? "Guardando…" : _loadedId is not null ? "Guardar cambios" : "Guardar informe")
                     </button>
+                    @if (_loadedId is not null)
+                    {
+                        <button type="button" class="btn btn-outline-primary btn-sm"
+                                disabled="@(_fromLocal is null || _toLocal is null)"
+                                @onclick="OpenRegistrosFromForm">
+                            Abrir en Registros
+                        </button>
+                        <button type="button" class="btn btn-outline-primary btn-sm"
+                                disabled="@(_fromLocal is null || _toLocal is null)"
+                                @onclick="OpenReportesFromForm">
+                            Abrir en Reportes
+                        </button>
+                        <button type="button" class="btn btn-link btn-sm" @onclick="ClearEdit">Cancelar</button>
+                    }
                 </div>
             </div>
         </div>
@@ -57,14 +98,15 @@ else
 
     @if (_list.Count == 0)
     {
-        <p class="text-muted">No hay informes guardados.</p>
+        <EmptyState Title="Sin informes"
+                    Message="No hay informes guardados. Cree uno con el formulario superior." />
     }
     else
     {
-        <div class="list-group" style="max-width: 900px;">
+        <div class="rn-alert-list" style="max-width: 960px;">
             @foreach (var r in _list)
             {
-                <div class="list-group-item">
+                <div class="rn-alert-item @(_loadedId == r.Id ? "border border-primary" : null)">
                     <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                         <div>
                             <strong>@r.Name</strong>
@@ -79,8 +121,17 @@ else
                             <div class="small">@r.SummaryText</div>
                         </div>
                         <div class="d-flex flex-wrap gap-1 align-items-center">
-                            <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => ApplyFilters(r)">
-                                Cargar filtros
+                            <button type="button" class="btn btn-primary btn-sm"
+                                    @onclick="() => OpenRegistrosAsync(r)">
+                                Ver en Registros
+                            </button>
+                            <button type="button" class="btn btn-outline-primary btn-sm"
+                                    @onclick="() => OpenReportesAsync(r)">
+                                Ver en Reportes
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm"
+                                    @onclick="() => EditAsync(r)">
+                                Editar
                             </button>
                             <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "csv")">CSV</a>
                             <a class="btn btn-outline-success btn-sm" href="@ExportUrl(r.Id, "xlsx")">Excel</a>
@@ -108,6 +159,8 @@ else
     private bool _saving;
     private string? _error;
     private string? _message;
+    private Guid? _loadedId;
+    private int _totalRecordsInDb;
 
     protected override async Task OnInitializedAsync()
     {
@@ -116,6 +169,7 @@ else
         if (_allowed)
         {
             await LoadAsync();
+            _totalRecordsInDb = await RecordService.CountAllAsync();
         }
     }
 
@@ -124,21 +178,150 @@ else
     private static string ExportUrl(Guid id, string format) =>
         $"/api/export/saved/{id}/{format}";
 
-    private void ApplyFilters(SavedReport report)
+    private RecordFilters BuildFiltersFromForm()
     {
-        var filters = Reports.GetSavedFilters(report);
-        _telar = filters.Telar ?? "";
-        _tela = filters.Tela ?? "";
-        _fromLocal = filters.FromUtc?.ToLocalTime().Date;
-        _toLocal = filters.ToExclusiveUtc is not null
-            ? filters.ToExclusiveUtc.Value.ToLocalTime().AddTicks(-1).Date
-            : filters.ToUtc?.ToLocalTime().Date;
-        _name = $"{report.Name} (copia)";
-        _message = "Filtros cargados en el formulario. Puede guardar un nuevo informe o ajustar y volver a exportar.";
-        _error = null;
+        var filters = new RecordFilters
+        {
+            Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
+            Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
+        };
+        if (_fromLocal is not null && _toLocal is not null)
+        {
+            ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value).ApplyTo(filters);
+        }
+
+        return filters;
     }
 
-    private async Task CreateAsync()
+    private static string BuildQueryUrl(string path, RecordFilters filters)
+    {
+        var q = new List<string>();
+        if (filters.FromUtc is not null)
+        {
+            q.Add($"from={filters.FromUtc.Value.ToLocalTime():yyyy-MM-dd}");
+        }
+
+        if (filters.ToExclusiveUtc is not null)
+        {
+            q.Add($"to={filters.ToExclusiveUtc.Value.ToLocalTime().AddTicks(-1):yyyy-MM-dd}");
+        }
+        else if (filters.ToUtc is not null)
+        {
+            q.Add($"to={filters.ToUtc.Value.ToLocalTime():yyyy-MM-dd}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(filters.Telar))
+        {
+            q.Add($"telar={Uri.EscapeDataString(filters.Telar)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(filters.Tela))
+        {
+            q.Add($"tela={Uri.EscapeDataString(filters.Tela)}");
+        }
+
+        // auto=1 → Registros/Reportes cargan al abrir
+        q.Add("auto=1");
+        return path + "?" + string.Join('&', q);
+    }
+
+    private static string BuildQueryUrl(string path, RecordFilters filters, int savedCount)
+    {
+        var url = BuildQueryUrl(path, filters);
+        if (savedCount > 0)
+        {
+            url += $"&saved={savedCount}";
+        }
+
+        return url;
+    }
+
+    private void ApplyReportToForm(SavedReport report)
+    {
+        var filters = Reports.ResolveSavedFilters(report).Filters;
+        _telar = filters.Telar ?? "";
+        _tela = filters.Tela ?? "";
+        _fromLocal = filters.FromUtc?.ToLocalTime().Date ?? DateTime.Today;
+        _toLocal = filters.ToExclusiveUtc is not null
+            ? filters.ToExclusiveUtc.Value.ToLocalTime().AddTicks(-1).Date
+            : filters.ToUtc?.ToLocalTime().Date ?? _fromLocal;
+        _name = report.Name;
+        _loadedId = report.Id;
+    }
+
+    private void EditAsync(SavedReport report)
+    {
+        _error = null;
+        _message = null;
+        ApplyReportToForm(report);
+        _message = "Nombre y fechas cargados arriba. Guarde cambios aquí, o use «Ver en Registros / Reportes» para ver las mediciones.";
+    }
+
+    private void OpenRegistrosAsync(SavedReport report)
+    {
+        _error = null;
+        var filters = Reports.ResolveSavedFilters(report).Filters;
+        if (filters.FromUtc is null)
+        {
+            ApplyReportToForm(report);
+            _error = "Este informe no tiene fechas. Edítelas arriba y luego pulse Abrir en Registros.";
+            return;
+        }
+
+        Nav.NavigateTo(BuildQueryUrl("/registros", filters, report.RecordCount), forceLoad: true);
+    }
+
+    private void OpenReportesAsync(SavedReport report)
+    {
+        _error = null;
+        var filters = Reports.ResolveSavedFilters(report).Filters;
+        if (filters.FromUtc is null)
+        {
+            ApplyReportToForm(report);
+            _error = "Este informe no tiene fechas. Edítelas arriba y luego pulse Abrir en Reportes.";
+            return;
+        }
+
+        Nav.NavigateTo(BuildQueryUrl("/reportes", filters, report.RecordCount), forceLoad: true);
+    }
+
+    private void OpenRegistrosFromForm()
+    {
+        var filters = BuildFiltersFromForm();
+        if (filters.FromUtc is null)
+        {
+            _error = "Indique fechas Desde y Hasta.";
+            return;
+        }
+
+        Nav.NavigateTo(BuildQueryUrl("/registros", filters), forceLoad: true);
+    }
+
+    private void OpenReportesFromForm()
+    {
+        var filters = BuildFiltersFromForm();
+        if (filters.FromUtc is null)
+        {
+            _error = "Indique fechas Desde y Hasta.";
+            return;
+        }
+
+        Nav.NavigateTo(BuildQueryUrl("/reportes", filters), forceLoad: true);
+    }
+
+    private void ClearEdit()
+    {
+        _loadedId = null;
+        _error = null;
+        _message = null;
+        _name = "";
+        _telar = "";
+        _tela = "";
+        _fromLocal = DateTime.Today.AddDays(-30);
+        _toLocal = DateTime.Today;
+    }
+
+    private async Task SaveAsync()
     {
         if (_session is null)
         {
@@ -161,25 +344,24 @@ else
                     "La fecha inicial no puede ser posterior a la fecha final.");
             }
 
+            var filters = BuildFiltersFromForm();
             var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
-            var filters = new RecordFilters
+
+            if (_loadedId is Guid id)
             {
-                Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
-                Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
-            };
-            range.ApplyTo(filters);
-
-            await Reports.SaveReportAsync(
-                _name,
-                filters,
-                _session.UserId,
-                _session.DisplayName,
-                _session.SeesAllRecords);
-
-            _message =
-                $"Informe guardado ({range.LabelLocal}). Use CSV / Excel / PDF para descargar el consolidado.";
-            _name = "";
-            await LoadAsync();
+                var updated = await Reports.UpdateReportAsync(
+                    id, _name, filters, _session.UserId, _session.SeesAllRecords);
+                _message = $"Cambios guardados en «{updated.Name}» ({range.LabelLocal}).";
+                await LoadAsync();
+            }
+            else
+            {
+                await Reports.SaveReportAsync(
+                    _name, filters, _session.UserId, _session.DisplayName, _session.SeesAllRecords);
+                _message = $"Informe guardado ({range.LabelLocal}).";
+                ClearEdit();
+                await LoadAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -196,6 +378,11 @@ else
         try
         {
             await Reports.DeleteSavedAsync(id);
+            if (_loadedId == id)
+            {
+                ClearEdit();
+            }
+
             _message = "Informe eliminado.";
             await LoadAsync();
         }

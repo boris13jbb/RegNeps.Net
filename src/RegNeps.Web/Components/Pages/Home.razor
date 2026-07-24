@@ -5,15 +5,15 @@
 
 <PageTitle>RegNeps VICUNHA</PageTitle>
 
-<p class="text-muted">Redirigiendo…</p>
+<p class="rn-loading" role="status">
+    <span class="rn-spinner" aria-hidden="true"></span>
+    <span>Redirigiendo…</span>
+</p>
 
 @code {
     protected override async Task OnInitializedAsync()
     {
         var session = await CurrentUser.GetAsync();
-        if (session is not null)
-        {
-            Navigation.NavigateTo("/dashboard", replace: true);
-        }
+        Navigation.NavigateTo(session is not null ? "/dashboard" : "/login", replace: true);
     }
 }

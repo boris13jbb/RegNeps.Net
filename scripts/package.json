@@ -1,0 +1,13 @@
+{
+  "name": "regneps-firestore-export",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Exporta históricos de Firestore para importar en RegNeps.Net",
+  "main": "export_firestore_history.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.4.0"
+  }
+}

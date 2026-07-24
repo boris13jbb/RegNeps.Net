@@ -1,0 +1,549 @@
+@rendermode InteractiveServer
+@inject NepRecordService RecordService
+@inject IAlertConfigRepository AlertConfigRepository
+@inject CurrentUserService CurrentUser
+@inject IJSRuntime Js
+@implements IAsyncDisposable
+
+@if (_allowed)
+{
+    <div class="rn-notif">
+        <button type="button"
+                class="rn-notif-trigger"
+                aria-haspopup="dialog"
+                aria-expanded="@_dialogOpen"
+                aria-label="@($"Alertas{(_unreadCount > 0 ? $", {_unreadCount} sin leer" : "")}")"
+                @onclick="OpenDialogAsync">
+            <svg class="rn-notif-trigger__icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+            </svg>
+            <span class="rn-notif-trigger__label">Alertas</span>
+            @if (_unreadCount > 0)
+            {
+                <span class="rn-notif-badge" aria-hidden="true">@BadgeText</span>
+            }
+        </button>
+
+        @if (_dialogOpen)
+        {
+            <div class="rn-notif-dialog-root"
+                 @ref="_dialogRoot"
+                 tabindex="-1"
+                 role="presentation"
+                 @onkeydown="OnDialogKeyDown">
+                <div class="rn-notif-dialog-backdrop" @onclick="CloseDialogAsync" aria-hidden="true"></div>
+                <div class="rn-notif-dialog"
+                     role="dialog"
+                     aria-modal="true"
+                     aria-labelledby="@_dialogTitleId">
+                    <header class="rn-notif-dialog__head">
+                        <div class="rn-notif-dialog__title-row">
+                            <div class="rn-notif-dialog__title-group">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2" aria-hidden="true">
+                                    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                                    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                                </svg>
+                                <h2 class="rn-notif-dialog__title" id="@_dialogTitleId">Alertas</h2>
+                            </div>
+                            @if (_unreadCount > 0)
+                            {
+                                <button type="button" class="rn-notif-link-btn" @onclick="MarkAllSeenAsync">
+                                    Marcar todas como leídas
+                                </button>
+                            }
+                        </div>
+                        <p class="rn-notif-dialog__desc">
+                            @if (_loading)
+                            {
+                                <span>Cargando alertas…</span>
+                            }
+                            else if (_unreadCount == 0)
+                            {
+                                <span>No tiene alertas sin revisar.</span>
+                            }
+                            else
+                            {
+                                <span>
+                                    Tiene @_unreadCount alerta@(_unreadCount == 1 ? "" : "s") sin revisar
+                                    (umbrales y seguimiento).
+                                </span>
+                            }
+                        </p>
+                    </header>
+
+                    <div class="rn-notif-list rn-notif-list--preview">
+                        @if (!_loading && _items.Count == 0)
+                        {
+                            <div class="rn-notif-empty">
+                                <p class="mb-0">Sin alertas activas.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var item in PreviewItems)
+                            {
+                                <button type="button"
+                                        class="rn-notif-item @(item.Seen ? "is-seen" : "is-unseen")"
+                                        @onclick="() => MarkSeenAsync(item.Id)">
+                                    <span class="rn-notif-avatar @(item.Seen ? "is-seen" : null)" aria-hidden="true">
+                                        @item.Initials
+                                    </span>
+                                    <span class="rn-notif-item__body">
+                                        <span class="rn-notif-item__name">@item.Title</span>
+                                        <span class="rn-notif-item__msg">@item.Message</span>
+                                        <span class="rn-notif-item__time">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                 stroke-width="2" aria-hidden="true">
+                                                <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+                                            </svg>
+                                            @item.RelativeTime
+                                        </span>
+                                    </span>
+                                    @if (!item.Seen)
+                                    {
+                                        <span class="rn-notif-dot" aria-label="Sin leer"></span>
+                                    }
+                                </button>
+                            }
+                        }
+                    </div>
+
+                    <footer class="rn-notif-dialog__foot">
+                        <button type="button" class="rn-notif-btn rn-notif-btn--outline" @onclick="CloseDialogAsync">
+                            Cerrar
+                        </button>
+                        <button type="button" class="rn-notif-btn rn-notif-btn--primary" @onclick="OpenDrawerFromDialogAsync">
+                            Ver todas
+                        </button>
+                    </footer>
+                </div>
+            </div>
+        }
+
+        <div class="rn-notif-drawer-root @(_drawerOpen ? "is-open" : null)"
+             aria-hidden="@(!_drawerOpen)">
+            <div class="rn-notif-drawer-backdrop" @onclick="CloseDrawerAsync"></div>
+            <aside class="rn-notif-drawer"
+                   role="dialog"
+                   aria-modal="true"
+                   aria-labelledby="@_drawerTitleId"
+                   tabindex="-1"
+                   @ref="_drawerRoot"
+                   @onkeydown="OnDrawerKeyDown">
+                <header class="rn-notif-drawer__head">
+                    <div class="rn-notif-dialog__title-group">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" aria-hidden="true">
+                            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                        </svg>
+                        <h2 class="rn-notif-drawer__title" id="@_drawerTitleId">Todas las alertas</h2>
+                    </div>
+                    <button type="button" class="rn-notif-icon-btn" aria-label="Cerrar panel" @onclick="CloseDrawerAsync">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" aria-hidden="true">
+                            <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+                        </svg>
+                    </button>
+                </header>
+
+                <div class="rn-notif-drawer__body">
+                    @if (_items.Count == 0)
+                    {
+                        <div class="rn-notif-empty rn-notif-empty--tall">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-width="1.5" aria-hidden="true">
+                                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                            </svg>
+                            <p>Sin alertas</p>
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var item in _items)
+                        {
+                            <button type="button"
+                                    class="rn-notif-item rn-notif-item--drawer @(item.Seen ? "is-seen" : "is-unseen")"
+                                    @onclick="() => MarkSeenAsync(item.Id)">
+                                <span class="rn-notif-avatar @(item.Seen ? "is-seen" : null)" aria-hidden="true">
+                                    @item.Initials
+                                </span>
+                                <span class="rn-notif-item__body">
+                                    <span class="rn-notif-item__row">
+                                        <span class="rn-notif-item__name">@item.Title</span>
+                                        <span class="rn-notif-item__time">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                 stroke-width="2" aria-hidden="true">
+                                                <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+                                            </svg>
+                                            @item.RelativeTime
+                                        </span>
+                                    </span>
+                                    <span class="rn-notif-item__msg rn-notif-item__msg--full">@item.Message</span>
+                                    @if (item.Seen)
+                                    {
+                                        <span class="rn-notif-read-flag">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                 stroke-width="2" aria-hidden="true">
+                                                <path d="M20 6 9 17l-5-5" />
+                                            </svg>
+                                            Leída
+                                        </span>
+                                    }
+                                </span>
+                                @if (!item.Seen)
+                                {
+                                    <span class="rn-notif-dot" aria-label="Sin leer"></span>
+                                }
+                            </button>
+                        }
+                    }
+                </div>
+
+                <footer class="rn-notif-drawer__foot">
+                    <a class="rn-notif-btn rn-notif-btn--ghost" href="/alertas" @onclick="CloseDrawerAsync">
+                        Ir a Alertas
+                    </a>
+                    <button type="button" class="rn-notif-btn rn-notif-btn--primary rn-notif-btn--block"
+                            @onclick="MarkAllSeenAndCloseAsync">
+                        Marcar todas como leídas
+                    </button>
+                </footer>
+            </aside>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly string _dialogTitleId = $"rn-notif-d-{Guid.NewGuid():N}";
+    private readonly string _drawerTitleId = $"rn-notif-w-{Guid.NewGuid():N}";
+    private ElementReference _dialogRoot;
+    private ElementReference _drawerRoot;
+
+    private bool _allowed;
+    private bool _loading;
+    private bool _dialogOpen;
+    private bool _drawerOpen;
+    private bool _dialogActivated;
+    private bool _drawerActivated;
+    private bool _disposed;
+
+    private AlertConfig _config = new();
+    private List<NotifItem> _items = [];
+    private HashSet<Guid> _seenIds = [];
+    private UserSession? _session;
+
+    private bool _seenLoaded;
+
+    private int _unreadCount => _items.Count(i => !i.Seen);
+    private string BadgeText => _unreadCount > 99 ? "99+" : _unreadCount.ToString();
+
+    private IEnumerable<NotifItem> PreviewItems => _items.Take(2);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ViewAlerts) == true;
+        if (!_allowed)
+        {
+            return;
+        }
+
+        await RefreshAlertsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (firstRender && _allowed && !_seenLoaded)
+        {
+            _seenLoaded = true;
+            await LoadSeenAsync();
+            ApplySeenFlags();
+            await InvokeAsync(StateHasChanged);
+        }
+
+        if (_dialogOpen && !_dialogActivated)
+        {
+            _dialogActivated = true;
+            try
+            {
+                await Js.InvokeVoidAsync("regnepsUi.activateModal", _dialogRoot);
+            }
+            catch
+            {
+                // Script aún no listo.
+            }
+        }
+
+        if (_drawerOpen && !_drawerActivated)
+        {
+            _drawerActivated = true;
+            try
+            {
+                await Js.InvokeVoidAsync("regnepsUi.activateModal", _drawerRoot);
+            }
+            catch
+            {
+                // Script aún no listo.
+            }
+        }
+    }
+
+    private async Task OpenDialogAsync()
+    {
+        await RefreshAlertsAsync();
+        _dialogOpen = true;
+        _dialogActivated = false;
+    }
+
+    private async Task CloseDialogAsync()
+    {
+        if (!_dialogOpen)
+        {
+            return;
+        }
+
+        _dialogOpen = false;
+        await DeactivateAsync(_dialogRoot);
+        _dialogActivated = false;
+    }
+
+    private async Task OpenDrawerFromDialogAsync()
+    {
+        await CloseDialogAsync();
+        _drawerOpen = true;
+        _drawerActivated = false;
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsUi.setBodyScrollLocked", true);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async Task CloseDrawerAsync()
+    {
+        if (!_drawerOpen)
+        {
+            return;
+        }
+
+        _drawerOpen = false;
+        await DeactivateAsync(_drawerRoot);
+        _drawerActivated = false;
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsUi.setBodyScrollLocked", false);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async Task OnDialogKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Escape" or "Esc")
+        {
+            await CloseDialogAsync();
+        }
+    }
+
+    private async Task OnDrawerKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Escape" or "Esc")
+        {
+            await CloseDrawerAsync();
+        }
+    }
+
+    private async Task MarkSeenAsync(Guid id)
+    {
+        if (!_seenIds.Add(id))
+        {
+            return;
+        }
+
+        ApplySeenFlags();
+        await PersistSeenAsync();
+    }
+
+    private async Task MarkAllSeenAsync()
+    {
+        foreach (var item in _items)
+        {
+            _seenIds.Add(item.Id);
+        }
+
+        ApplySeenFlags();
+        await PersistSeenAsync();
+    }
+
+    private async Task MarkAllSeenAndCloseAsync()
+    {
+        await MarkAllSeenAsync();
+        await CloseDrawerAsync();
+    }
+
+    private async Task RefreshAlertsAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            _config = await AlertConfigRepository.GetAsync();
+            var alerts = await RecordService.GetAlertsAsync(_session.UserId, _session.SeesAllRecords);
+            _items = alerts.Select(MapItem).ToList();
+            ApplySeenFlags();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private NotifItem MapItem(NepRecord r)
+    {
+        var level = r.GetAlertLevel(_config);
+        var sender = string.IsNullOrWhiteSpace(r.Operario) ? $"Telar {r.Telar}" : r.Operario;
+        var tela = string.IsNullOrWhiteSpace(r.Tela) ? "" : $" · {r.Tela}";
+        var pending = r.RequiereSeguimiento(_config) ? " · Pendiente revisión" : "";
+
+        return new NotifItem(
+            r.Id,
+            sender,
+            Initials(sender),
+            $"{level.ToDisplayLabel()}: {r.Neps:0.##} neps{tela}{pending}",
+            FormatRelative(r.CreatedAt),
+            Seen: false);
+    }
+
+    private void ApplySeenFlags()
+    {
+        _items = _items
+            .Select(i => i with { Seen = _seenIds.Contains(i.Id) })
+            .ToList();
+    }
+
+    private async Task LoadSeenAsync()
+    {
+        try
+        {
+            var ids = await Js.InvokeAsync<string[]?>("regnepsUi.getNotificationSeenIds");
+            if (ids is { Length: > 0 })
+            {
+                _seenIds = ids
+                    .Select(s => Guid.TryParse(s, out var g) ? g : Guid.Empty)
+                    .Where(g => g != Guid.Empty)
+                    .ToHashSet();
+            }
+        }
+        catch
+        {
+            _seenIds = [];
+        }
+    }
+
+    private async Task PersistSeenAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync(
+                "regnepsUi.setNotificationSeenIds",
+                _seenIds.Select(g => g.ToString()).ToArray());
+        }
+        catch
+        {
+            // Persistencia opcional; la UI ya refleja el estado en memoria.
+        }
+    }
+
+    private async Task DeactivateAsync(ElementReference root)
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsUi.deactivateModal", root);
+        }
+        catch
+        {
+            // Circuito desconectado.
+        }
+    }
+
+    private static string Initials(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "?";
+        }
+
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1)
+        {
+            return parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant();
+        }
+
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant();
+    }
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var local = utc.Kind == DateTimeKind.Utc ? utc.ToLocalTime() : utc;
+        var delta = DateTime.Now - local;
+        if (delta.TotalMinutes < 1) return "Ahora";
+        if (delta.TotalMinutes < 60) return $"Hace {(int)delta.TotalMinutes} min";
+        if (delta.TotalHours < 24) return $"Hace {(int)delta.TotalHours} h";
+        if (delta.TotalDays < 7) return $"Hace {(int)delta.TotalDays} d";
+        return local.ToString("dd/MM/yyyy HH:mm");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_dialogOpen)
+        {
+            await DeactivateAsync(_dialogRoot);
+        }
+
+        if (_drawerOpen)
+        {
+            await DeactivateAsync(_drawerRoot);
+            try
+            {
+                await Js.InvokeVoidAsync("regnepsUi.setBodyScrollLocked", false);
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+    }
+
+    private sealed record NotifItem(
+        Guid Id,
+        string Title,
+        string Initials,
+        string Message,
+        string RelativeTime,
+        bool Seen);
+}

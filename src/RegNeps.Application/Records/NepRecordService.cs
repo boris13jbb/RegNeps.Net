@@ -53,8 +53,8 @@ public sealed class NepRecordService
     {
         if (string.IsNullOrWhiteSpace(request.Telar))
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));
-        if (request.Neps < 0)
-            throw new ArgumentException("Los neps no pueden ser negativos.", nameof(request.Neps));
+        if (request.Neps <= 0)
+            throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
 
         var record = await _records.GetByIdAsync(request.Id, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
@@ -134,6 +134,7 @@ public sealed class NepRecordService
 
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _records.DeleteAsync(id, ct);
     public Task ClearAllAsync(CancellationToken ct = default) => _records.ClearAllAsync(ct);
+    public Task<int> CountAllAsync(CancellationToken ct = default) => _records.CountAsync(ct);
 
     public async Task<DashboardSummary> GetDashboardSummaryAsync(
         string? viewerUserId,
@@ -183,9 +184,9 @@ public sealed class NepRecordService
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));
         }
 
-        if (request.Neps < 0)
+        if (request.Neps <= 0)
         {
-            throw new ArgumentException("Los neps no pueden ser negativos.", nameof(request.Neps));
+            throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
         }
     }
 }

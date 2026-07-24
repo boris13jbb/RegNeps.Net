@@ -1,19 +1,23 @@
 ﻿@inherits LayoutComponentBase
 
+<a class="rn-skip-link" href="#main-content">Saltar al contenido</a>
+
 <div class="page">
     <NavMenu />
 
-    <main>
-        <article class="content px-4">
-            @Body
-        </article>
-    </main>
+    <div class="page-main">
+        <main id="main-content" class="page-content" tabindex="-1">
+            <article class="content">
+                @Body
+            </article>
+        </main>
+    </div>
 
     <CircleMenu />
 </div>
 
-<div id="blazor-error-ui">
-    An unhandled error has occurred.
-    <a href="" class="reload">Reload</a>
-    <a class="dismiss">🗙</a>
+<div id="blazor-error-ui" role="alert">
+    Se produjo un error inesperado.
+    <a href="" class="reload">Recargar</a>
+    <a class="dismiss" aria-label="Cerrar aviso de error">✕</a>
 </div>

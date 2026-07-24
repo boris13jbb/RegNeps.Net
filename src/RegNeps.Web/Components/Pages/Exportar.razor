@@ -2,86 +2,376 @@
 @rendermode InteractiveServer
 @inject CurrentUserService CurrentUser
 @inject ReportExportAppService ExportService
+@inject NepRecordService RecordService
 @inject RegNeps.Web.Export.TempExportStore TempStore
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
 <PageTitle>Exportar — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para exportar.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para exportar.</div>
 }
 else
 {
-    <h1 class="mb-3">Exportar</h1>
-    <p class="text-muted">
-        Informe consolidado con <strong>todos</strong> los registros entre la fecha inicial y la final (ambas incluidas).
-    </p>
+    <div class="export-page">
+        <PageHeader Title="Exportar y compartir"
+                    Subtitle="Generar archivos e informes de los registros visibles.">
+            <Actions>
+                <span class="export-sync" title="Listo para generar">
+                    <span class="export-sync-dot" aria-hidden="true"></span>
+                    Listo
+                </span>
+            </Actions>
+        </PageHeader>
 
-    <div class="row g-2 mb-3" style="max-width: 840px;">
-        <div class="col-md-2">
-            <label class="form-label">Desde</label>
-            <InputDate class="form-control" @bind-Value="_fromLocal" />
-        </div>
-        <div class="col-md-2">
-            <label class="form-label">Hasta</label>
-            <InputDate class="form-control" @bind-Value="_toLocal" />
-        </div>
-        <div class="col-md-2">
-            <label class="form-label">Telar</label>
-            <input class="form-control" @bind="_telar" placeholder="Opcional" />
-        </div>
-        <div class="col-md-2">
-            <label class="form-label">Tela</label>
-            <input class="form-control" @bind="_tela" placeholder="Opcional" />
-        </div>
-        <div class="col-md-4">
-            <label class="form-label">Estilo</label>
-            <select class="form-select" @bind="_style">
-                <option value="completo">Completo (recomendado)</option>
-                <option value="clasico">Clásico</option>
-            </select>
-        </div>
-    </div>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-warning" role="alert">@_error</div>
+        }
+        @if (!string.IsNullOrEmpty(_info))
+        {
+            <div class="alert alert-success" role="status">@_info</div>
+        }
 
-    @if (!string.IsNullOrEmpty(_error))
-    {
-        <div class="alert alert-warning">@_error</div>
-    }
-    @if (!string.IsNullOrEmpty(_info))
-    {
-        <div class="alert alert-success">@_info</div>
-    }
+        <div class="row g-3">
+            <div class="col-lg-7">
+                @* 1. Datos *@
+                <section class="export-card mb-3">
+                    <header class="export-card-head">
+                        <span class="export-step" aria-hidden="true">1</span>
+                        <div>
+                            <h2 class="export-card-title">Datos a exportar</h2>
+                            <p class="export-card-sub mb-0">Filtros del periodo consolidado</p>
+                        </div>
+                    </header>
+                    <div class="export-card-body">
+                        <div class="row g-2 align-items-end mb-3">
+                            <div class="col-6 col-md-3">
+                                <label class="rn-field-label" for="export-desde">Desde</label>
+                                <InputDate id="export-desde" class="form-control" @bind-Value="_fromLocal" @bind-Value:after="RefreshCountAsync" />
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="rn-field-label" for="export-hasta">Hasta</label>
+                                <InputDate id="export-hasta" class="form-control" @bind-Value="_toLocal" @bind-Value:after="RefreshCountAsync" />
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="rn-field-label" for="export-telar">Telar</label>
+                                <input id="export-telar" class="form-control" @bind="_telar" @bind:event="oninput" placeholder="Opcional" />
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="rn-field-label" for="export-tela">Tela</label>
+                                <input id="export-tela" class="form-control" @bind="_tela" @bind:event="oninput" placeholder="Opcional" />
+                            </div>
+                        </div>
+                        <div class="export-visible">
+                            <span class="export-visible-icon" aria-hidden="true">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                                </svg>
+                            </span>
+                            <span>
+                                Visibles:
+                                @if (_counting)
+                                {
+                                    <strong>…</strong>
+                                }
+                                else
+                                {
+                                    <strong>@_visibleCount / @_visibleCount</strong>
+                                }
+                            </span>
+                            <button type="button" class="btn btn-link btn-sm ms-auto p-0" @onclick="RefreshCountAsync" disabled="@_counting">
+                                Actualizar
+                            </button>
+                        </div>
+                    </div>
+                </section>
 
-    <div class="d-flex gap-2 flex-wrap">
-        <button class="btn btn-outline-secondary" disabled="@_busy" @onclick='() => DownloadAsync("csv")'>
-            @(_busy ? "Generando…" : "Descargar CSV")
-        </button>
-        <button class="btn btn-outline-success" disabled="@_busy" @onclick='() => DownloadAsync("xlsx")'>
-            Descargar Excel
-        </button>
-        <button class="btn btn-outline-danger" disabled="@_busy" @onclick='() => DownloadAsync("pdf")'>
-            Descargar PDF
-        </button>
+                @* 2. Modo *@
+                <section class="export-card mb-3">
+                    <header class="export-card-head">
+                        <span class="export-step" aria-hidden="true">2</span>
+                        <div>
+                            <h2 class="export-card-title">Modo de reporte</h2>
+                        </div>
+                    </header>
+                    <div class="export-card-body">
+                        <div class="export-mode" role="group" aria-label="Modo de reporte">
+                            <button type="button"
+                                    class="export-mode-btn @(_style == "completo" ? "is-active" : null)"
+                                    @onclick='() => SetStyle("completo")'>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
+                                </svg>
+                                Completo
+                            </button>
+                            <button type="button"
+                                    class="export-mode-btn @(_style == "clasico" ? "is-active" : null)"
+                                    @onclick='() => SetStyle("clasico")'>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
+                                </svg>
+                                Clásico
+                            </button>
+                        </div>
+                        <p class="export-hint mb-0">
+                            @(_style == "completo"
+                                ? "Análisis ejecutivo, diseño y rankings (modo actual)."
+                                : "Formato clásico tabular, compacto para revisión rápida.")
+                        </p>
+                    </div>
+                </section>
+
+                @* 3. Columnas *@
+                <section class="export-card mb-3">
+                    <header class="export-card-head">
+                        <span class="export-step" aria-hidden="true">3</span>
+                        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 w-100">
+                            <h2 class="export-card-title mb-0">Columnas del informe</h2>
+                            <button type="button" class="btn btn-link btn-sm p-0 export-all-link" @onclick="SelectAllColumns">Todas</button>
+                        </div>
+                    </header>
+                    <div class="export-card-body">
+                        <div class="export-chips" role="group" aria-label="Columnas incluidas">
+                            @foreach (var col in _columns)
+                            {
+                                <button type="button"
+                                        class="export-chip @(col.Selected ? "is-on" : null)"
+                                        aria-pressed="@col.Selected"
+                                        @onclick="() => ToggleColumn(col)">
+                                    @if (col.Selected)
+                                    {
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true">
+                                            <path d="M20 6 9 17l-5-5" />
+                                        </svg>
+                                    }
+                                    @col.Label
+                                </button>
+                            }
+                        </div>
+                        <p class="export-hint mb-0 mt-2">Columnas del reporte consolidado (CSV / Excel / PDF).</p>
+                    </div>
+                </section>
+            </div>
+
+            <div class="col-lg-5">
+                @* 4. Formatos *@
+                <section class="export-card mb-3">
+                    <header class="export-card-head">
+                        <span class="export-step" aria-hidden="true">4</span>
+                        <div>
+                            <h2 class="export-card-title">Formatos disponibles</h2>
+                        </div>
+                    </header>
+                    <div class="export-card-body">
+                        <div class="export-formats">
+                            <MorphButton Text="CSV" Variant="primary" CssClass="export-fmt export-fmt--csv"
+                                         IsLoading="@(_busy && _busyFormat == "csv")"
+                                         Disabled="@_busy"
+                                         OnClick='() => DownloadAsync("csv")'>
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                                </Icon>
+                            </MorphButton>
+                            <MorphButton Text="Excel" Variant="primary" CssClass="export-fmt export-fmt--xlsx"
+                                         IsLoading="@(_busy && _busyFormat == "xlsx")"
+                                         Disabled="@_busy"
+                                         OnClick='() => DownloadAsync("xlsx")'>
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m10 12 2 2 4-4"/></svg>
+                                </Icon>
+                            </MorphButton>
+                            <MorphButton Text="PDF" Variant="secondary" CssClass="export-fmt export-fmt--pdf"
+                                         IsLoading="@(_busy && _busyFormat == "pdf")"
+                                         Disabled="@_busy"
+                                         OnClick='() => DownloadAsync("pdf")'>
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                                </Icon>
+                            </MorphButton>
+                            <MorphButton Text="Imprimir" Variant="secondary" CssClass="export-fmt export-fmt--print"
+                                         IsLoading="@(_busy && _busyFormat == "print")"
+                                         Disabled="@_busy"
+                                         OnClick="PrintAsync">
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+                                </Icon>
+                            </MorphButton>
+                            <MorphButton Text="Copiar tabla" Variant="ghost" CssClass="export-fmt export-fmt--copy"
+                                         IsLoading="@(_busy && _busyFormat == "copy")"
+                                         Disabled="@_busy"
+                                         OnClick="CopyTableAsync">
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                </Icon>
+                            </MorphButton>
+                        </div>
+                    </div>
+                </section>
+
+                @* 5. Guardar *@
+                <section class="export-card mb-3">
+                    <header class="export-card-head">
+                        <span class="export-step" aria-hidden="true">5</span>
+                        <div>
+                            <h2 class="export-card-title">Guardar informe</h2>
+                        </div>
+                    </header>
+                    <div class="export-card-body">
+                        @if (_canSave)
+                        {
+                            <div class="mb-3">
+                                <label class="rn-field-label" for="export-nombre">Nombre del informe</label>
+                                <input id="export-nombre" class="form-control" @bind="_reportName" placeholder="Ej. Semana 12 — planta" />
+                            </div>
+                            <MorphButton Text="Guardar informe actual"
+                                         Block="true"
+                                         IsLoading="@_saving"
+                                         Disabled="@_busy"
+                                         OnClick="SaveReportAsync">
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+                                </Icon>
+                            </MorphButton>
+                            <p class="export-hint mt-2 mb-3">También puede gestionarlos en <a href="/informes">Informes guardados</a>.</p>
+                        }
+                        else
+                        {
+                            <p class="export-hint mb-3">Su rol puede exportar archivos. Para guardar informes use un usuario con permiso de informes.</p>
+                            <a class="btn btn-outline-secondary btn-sm rounded-pill" href="/informes">Ver informes</a>
+                        }
+
+                        <div class="export-formula" role="note">
+                            <strong>Fórmula de cálculo</strong>
+                            <p class="mb-0">
+                                Mts = Neps / @NepsConstants.TestLengthM.ToString("0.##")
+                                · Ej.: 45 neps → @((45 / NepsConstants.TestLengthM).ToString("0")) mts
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
     </div>
 }
 
 @code {
     private bool _allowed;
+    private bool _canSave;
     private UserSession? _session;
     private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
     private DateTime? _toLocal = DateTime.Today;
     private string _telar = "";
     private string _tela = "";
     private string _style = "completo";
+    private string _reportName = "";
     private bool _busy;
+    private string? _busyFormat;
+    private bool _saving;
+    private bool _counting;
+    private int _visibleCount;
     private string? _error;
     private string? _info;
+    private List<ColumnOpt> _columns = DefaultColumns();
 
     protected override async Task OnInitializedAsync()
     {
         _session = await CurrentUser.GetAsync();
         _allowed = _session?.Has(AppPermission.ExportReports) == true;
+        _canSave = _session?.Has(AppPermission.ManageReports) == true;
+        ApplyQueryFilters();
+        if (_allowed)
+        {
+            await RefreshCountAsync();
+        }
+    }
+
+    /// <summary>Permite abrir Exportar desde Informes con ?from=&amp;to=&amp;telar=&amp;tela=.</summary>
+    private void ApplyQueryFilters()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+
+        if (query.TryGetValue("from", out var fromRaw) &&
+            query.TryGetValue("to", out var toRaw) &&
+            ReportDateRange.TryParseQuery(fromRaw.ToString(), toRaw.ToString(), out var range, out _))
+        {
+            _fromLocal = range.FromUtc.ToLocalTime().Date;
+            _toLocal = range.ToInclusiveUtc.ToLocalTime().Date;
+            _info = $"Filtros recibidos desde Informes: {_fromLocal:dd/MM/yyyy} – {_toLocal:dd/MM/yyyy}.";
+        }
+
+        if (query.TryGetValue("telar", out var telarRaw) && !string.IsNullOrWhiteSpace(telarRaw))
+            _telar = telarRaw.ToString();
+        if (query.TryGetValue("tela", out var telaRaw) && !string.IsNullOrWhiteSpace(telaRaw))
+            _tela = telaRaw.ToString();
+    }
+
+    private void SetStyle(string style) => _style = style;
+
+    private void ToggleColumn(ColumnOpt col) => col.Selected = !col.Selected;
+
+    private void SelectAllColumns()
+    {
+        foreach (var c in _columns)
+        {
+            c.Selected = true;
+        }
+    }
+
+    private async Task RefreshCountAsync()
+    {
+        if (_session is null || _fromLocal is null || _toLocal is null)
+        {
+            _visibleCount = 0;
+            return;
+        }
+
+        _counting = true;
+        try
+        {
+            var filters = BuildFilters();
+            if (filters is null)
+            {
+                _visibleCount = 0;
+                return;
+            }
+
+            var records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 50_000);
+            _visibleCount = records.Count;
+        }
+        catch
+        {
+            _visibleCount = 0;
+        }
+        finally
+        {
+            _counting = false;
+        }
+    }
+
+    private RecordFilters? BuildFilters()
+    {
+        if (_fromLocal is null || _toLocal is null)
+        {
+            return null;
+        }
+
+        if (_fromLocal.Value.Date > _toLocal.Value.Date)
+        {
+            return null;
+        }
+
+        var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
+        var filters = new RecordFilters
+        {
+            Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
+            Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
+        };
+        range.ApplyTo(filters);
+        return filters;
     }
 
     private async Task DownloadAsync(string format)
@@ -106,25 +396,29 @@ else
             return;
         }
 
+        if (_columns.Count(c => c.Selected) == 0)
+        {
+            _error = "Seleccione al menos una columna para continuar.";
+            return;
+        }
+
+        var selectedColumns = _columns.Where(c => c.Selected).Select(c => c.Id).ToList();
+
         _busy = true;
+        _busyFormat = format;
         try
         {
             var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
-            var filters = new RecordFilters
-            {
-                Telar = string.IsNullOrWhiteSpace(_telar) ? null : _telar.Trim(),
-                Tela = string.IsNullOrWhiteSpace(_tela) ? null : _tela.Trim()
-            };
-            range.ApplyTo(filters);
+            var filters = BuildFilters()!;
 
             var file = await ExportService.ExportAsync(
-                format, filters, _session.UserId, _session.SeesAllRecords, _style);
+                format, filters, _session.UserId, _session.SeesAllRecords, _style, selectedColumns);
 
-            var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName);
+            var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
             _info =
-                $"Informe consolidado del {range.LabelLocal}: archivo listo. " +
-                "Si la descarga no inicia, use el enlace del navegador.";
+                $"Informe consolidado del {range.LabelLocal}: descarga iniciada.";
             Nav.NavigateTo($"/api/export/temp/{id}", forceLoad: true);
+            await RefreshCountAsync();
         }
         catch (InvalidOperationException ex)
         {
@@ -137,6 +431,114 @@ else
         finally
         {
             _busy = false;
+            _busyFormat = null;
         }
+    }
+
+    private Task PrintAsync() => DownloadAsync("pdf");
+
+    private async Task CopyTableAsync()
+    {
+        _error = null;
+        _info = null;
+
+        if (_session is null)
+        {
+            return;
+        }
+
+        var filters = BuildFilters();
+        if (filters is null)
+        {
+            _error = "Debe indicar un rango de fechas válido.";
+            return;
+        }
+
+        _busy = true;
+        _busyFormat = "copy";
+        try
+        {
+            var selectedColumns = _columns.Where(c => c.Selected).Select(c => c.Id).ToList();
+            if (selectedColumns.Count == 0)
+            {
+                _error = "Seleccione al menos una columna para continuar.";
+                return;
+            }
+
+            var file = await ExportService.ExportAsync(
+                "csv", filters, _session.UserId, _session.SeesAllRecords, _style, selectedColumns);
+            var text = System.Text.Encoding.UTF8.GetString(file.Bytes);
+            await Js.InvokeVoidAsync("regnepsUi.copyText", text);
+            _info = "Tabla CSV copiada al portapapeles.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            _busyFormat = null;
+        }
+    }
+
+    private async Task SaveReportAsync()
+    {
+        if (_session is null || !_canSave)
+        {
+            return;
+        }
+
+        _error = null;
+        _info = null;
+        _saving = true;
+        try
+        {
+            var filters = BuildFilters();
+            if (filters is null)
+            {
+                throw new InvalidOperationException("Debe indicar un rango de fechas válido.");
+            }
+
+            var name = string.IsNullOrWhiteSpace(_reportName)
+                ? $"Informe {_fromLocal:dd/MM/yyyy} – {_toLocal:dd/MM/yyyy}"
+                : _reportName.Trim();
+
+            await ExportService.SaveReportAsync(
+                name, filters, _session.UserId, _session.DisplayName, _session.SeesAllRecords);
+
+            _info = $"Informe «{name}» guardado. Puede abrirlo en Informes.";
+            _reportName = "";
+            await RefreshCountAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static List<ColumnOpt> DefaultColumns() =>
+    [
+        new(ReportColumnIds.Nro, "Nro"),
+        new(ReportColumnIds.Fecha, "Fecha"),
+        new(ReportColumnIds.Lote, "Lote de trama"),
+        new(ReportColumnIds.Tela, "Tela"),
+        new(ReportColumnIds.Telar, "Telar"),
+        new(ReportColumnIds.Neps, "Neps"),
+        new(ReportColumnIds.Mts, "Mts calculados"),
+        new(ReportColumnIds.Estado, "Estado alerta"),
+        new(ReportColumnIds.Observacion, "Observación"),
+        new(ReportColumnIds.Recomendacion, "Recomendación")
+    ];
+
+    private sealed class ColumnOpt(string id, string label)
+    {
+        public string Id { get; } = id;
+        public string Label { get; } = label;
+        public bool Selected { get; set; } = true;
     }
 }

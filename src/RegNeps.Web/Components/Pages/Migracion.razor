@@ -6,15 +6,16 @@
 
 <PageTitle>Migración histórica — RegNeps</PageTitle>
 
-<h1 class="mb-3">Migración de datos históricos (Firestore → SQL)</h1>
+<PageHeader Title="Migración de datos históricos"
+            Subtitle="Importación Firestore → SQL para continuidad de históricos." />
 
-@if (_session?.Has(AppPermission.ManageUsers) != true)
+@if (_session?.IsSuperAdmin != true)
 {
-    <div class="alert alert-warning">Solo super administradores pueden ejecutar la migración.</div>
+    <div class="alert alert-warning" role="alert">Solo super administradores pueden ejecutar la migración.</div>
 }
 else
 {
-    <div class="alert alert-info">
+    <div class="alert alert-info" role="note">
         <ol class="mb-0">
             <li>En la raíz del repo Flutter: <code>firebase login</code></li>
             <li>Exportar: <code>node scripts/export_firestore_history.js --out FTS/firestore_export.json</code></li>
@@ -25,17 +26,28 @@ else
     <div class="card border-0 shadow-sm mb-3" style="max-width: 720px;">
         <div class="card-body">
             <div class="mb-3">
-                <label class="form-label">Archivo JSON de exportación</label>
-                <InputFile class="form-control" OnChange="OnFile" accept=".json,application/json" />
+                <label class="form-label" for="migracion-archivo">Archivo JSON de exportación</label>
+                <InputFile id="migracion-archivo" class="form-control" OnChange="OnFile" accept=".json,application/json"
+                           aria-describedby="migracion-archivo-help" />
+                <div id="migracion-archivo-help" class="form-text">
+                    @if (_fileBytes is null)
+                    {
+                        <span>Seleccione el archivo exportado desde Firestore.</span>
+                    }
+                    else
+                    {
+                        <span>Archivo cargado (@(_fileBytes.Length / 1024) KB). Listo para importar.</span>
+                    }
+                </div>
             </div>
             <div class="mb-3">
-                <label class="form-label">Contraseña temporal para usuarios migrados</label>
-                <InputText class="form-control" @bind-Value="_tempPassword" />
+                <label class="form-label" for="migracion-password">Contraseña temporal para usuarios migrados</label>
+                <InputText id="migracion-password" class="form-control" @bind-Value="_tempPassword" autocomplete="new-password" />
                 <div class="form-text">
                     Firebase no exporta contraseñas. Los usuarios importados usarán esta clave hasta que la cambie en Usuarios.
                 </div>
             </div>
-            <button class="btn btn-primary" disabled="@(_busy || _fileBytes is null)" @onclick="RunAsync">
+            <button class="btn btn-primary" disabled="@(_busy || _fileBytes is null)" @onclick="RunAsync" aria-busy="@_busy">
                 @(_busy ? "Importando…" : "Importar a SQL")
             </button>
         </div>
@@ -43,15 +55,16 @@ else
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
 
     @if (_result is not null)
     {
-        <div class="alert alert-success">
+        <div class="alert alert-success" role="status">
             <strong>Migración completada</strong>
-            <ul class="mb-2">
+            <ul class="rn-result-list">
                 <li>Registros: +@_result.RecordsInserted / act. @_result.RecordsUpdated / omit. @_result.RecordsSkipped</li>
+                <li>Desde snapshots de informes: @_result.SnapshotRecordsMerged registros adicionales</li>
                 <li>Usuarios: +@_result.UsersInserted / act. @_result.UsersUpdated / omit. @_result.UsersSkipped</li>
                 <li>Telas: +@_result.FabricsInserted / omit. @_result.FabricsSkipped</li>
                 <li>Informes: +@_result.ReportsInserted / act. @_result.ReportsUpdated / omit. @_result.ReportsSkipped</li>
@@ -60,14 +73,14 @@ else
             </ul>
             @if (!string.IsNullOrEmpty(_result.TempPasswordNote))
             {
-                <p class="mb-0 small">@_result.TempPasswordNote</p>
+                <p class="mb-0 small mt-2">@_result.TempPasswordNote</p>
             }
         </div>
         @if (_result.Warnings.Count > 0)
         {
-            <div class="alert alert-warning">
+            <div class="alert alert-warning" role="status">
                 <strong>Avisos (@_result.Warnings.Count)</strong>
-                <ul class="mb-0">
+                <ul class="rn-result-list">
                     @foreach (var w in _result.Warnings.Take(30))
                     {
                         <li>@w</li>
@@ -111,7 +124,7 @@ else
 
     private async Task RunAsync()
     {
-        if (_fileBytes is null || _session?.Has(AppPermission.ManageUsers) != true)
+        if (_fileBytes is null || _session?.IsSuperAdmin != true)
         {
             return;
         }

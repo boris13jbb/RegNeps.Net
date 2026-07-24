@@ -43,6 +43,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.AccessDeniedPath = "/login";
         options.SlidingExpiration = true;
         options.ExpireTimeSpan = TimeSpan.FromHours(12);
+        options.Cookie.Name = "RegNeps.Auth";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        // Intranet suele usar HTTP; SameAsRequest exige Secure solo cuando la petición es HTTPS.
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
     });
 builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
@@ -93,21 +98,47 @@ app.MapPost("/api/login", async (
     [FromForm] string username,
     [FromForm] string password) =>
 {
+    // #region agent log
+    DebugSessionLog.Write("H1", "Program.cs:login", "login_attempt", new { hasUser = !string.IsNullOrWhiteSpace(username) });
+    // #endregion
     try
     {
         var user = await auth.LoginAsync(username, password);
         await AuthClaims.SignInAsync(http, user);
+        // #region agent log
+        DebugSessionLog.Write("H1", "Program.cs:login", "login_ok", new { role = user.EffectiveRole.ToString(), isSuper = user.IsSuperAdmin });
+        // #endregion
         return Results.Redirect("/");
     }
     catch (Exception)
     {
+        // #region agent log
+        DebugSessionLog.Write("H1", "Program.cs:login", "login_fail", new { });
+        // #endregion
         return Results.Redirect("/login?error=1");
     }
 }).DisableAntiforgery().AllowAnonymous();
 
+app.MapPost("/api/logout", async (HttpContext http) =>
+{
+    // #region agent log
+    DebugSessionLog.Write("H2", "Program.cs:logout", "logout_post", new { auth = http.User.Identity?.IsAuthenticated == true });
+    // #endregion
+    await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Redirect("/login");
+}).DisableAntiforgery().RequireAuthorization();
+
+// Compatibilidad con enlaces antiguos; no cierra sesión sin autenticación activa.
 app.MapGet("/api/logout", async (HttpContext http) =>
 {
-    await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    // #region agent log
+    DebugSessionLog.Write("H2", "Program.cs:logout", "logout_get", new { auth = http.User.Identity?.IsAuthenticated == true });
+    // #endregion
+    if (http.User.Identity?.IsAuthenticated == true)
+    {
+        await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    }
+
     return Results.Redirect("/login");
 }).AllowAnonymous();
 
@@ -200,7 +231,14 @@ app.MapGet("/api/export/analytics/{format}", async (
     IExportFileService files,
     [FromQuery] int? days,
     [FromQuery] string? from,
-    [FromQuery] string? to) =>
+    [FromQuery] string? to,
+    [FromQuery] string? telar,
+    [FromQuery] string? tela,
+    [FromQuery] string? lote,
+    [FromQuery] string? turno,
+    [FromQuery] string? alerta,
+    [FromQuery] string? operario,
+    [FromQuery] string? grouping) =>
 {
     if (http.User.Identity?.IsAuthenticated != true)
     {
@@ -213,14 +251,27 @@ app.MapGet("/api/export/analytics/{format}", async (
     }
 
     var session = SessionFrom(http.User);
-    DateTime? fromUtc;
-    DateTime? toUtc;
-    string periodDescription;
+    var filters = new RecordFilters
+    {
+        Telar = string.IsNullOrWhiteSpace(telar) ? null : telar.Trim(),
+        Tela = string.IsNullOrWhiteSpace(tela) ? null : tela.Trim(),
+        LoteTrama = string.IsNullOrWhiteSpace(lote) ? null : lote.Trim(),
+        Turno = string.IsNullOrWhiteSpace(turno) ? null : turno.Trim(),
+        Operario = string.IsNullOrWhiteSpace(operario) ? null : operario.Trim()
+    };
 
+    if (!string.IsNullOrWhiteSpace(alerta) &&
+        Enum.TryParse<AlertLevel>(alerta, ignoreCase: true, out var alertLevel))
+    {
+        filters.AlertLevel = alertLevel;
+    }
+
+    string periodDescription;
     if (days is > 0)
     {
-        toUtc = DateTime.UtcNow;
-        fromUtc = toUtc.Value.AddDays(-days.Value);
+        var toDay = DateTime.Today;
+        var fromDay = toDay.AddDays(-(days.Value - 1));
+        ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
         periodDescription = $"Últimos {days} días";
     }
     else if (!string.IsNullOrWhiteSpace(from) && !string.IsNullOrWhiteSpace(to))
@@ -230,18 +281,24 @@ app.MapGet("/api/export/analytics/{format}", async (
             return Results.BadRequest(rangeError);
         }
 
-        fromUtc = range.FromUtc;
-        toUtc = range.ToInclusiveUtc;
+        range.ApplyTo(filters);
         periodDescription = range.LabelLocal;
     }
     else
     {
-        fromUtc = null;
-        toUtc = null;
-        periodDescription = "Todos los registros visibles";
+        periodDescription = "Todo el histórico visible";
     }
 
-    var summary = await analytics.BuildAsync(fromUtc, toUtc, session.UserId, session.SeesAllRecords);
+    var chartGrouping = grouping?.Trim().ToLowerInvariant() switch
+    {
+        "week" or "semana" => ChartTimeGrouping.Week,
+        "month" or "mes" => ChartTimeGrouping.Month,
+        "year" or "año" or "anio" => ChartTimeGrouping.Year,
+        _ => ChartTimeGrouping.Day
+    };
+
+    var summary = await analytics.BuildAsync(
+        filters, session.UserId, session.SeesAllRecords, chartGrouping);
     format = format.ToLowerInvariant();
     var stamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
     return format switch
@@ -266,9 +323,20 @@ app.MapGet("/api/export/temp/{id:guid}", (
         return Results.Unauthorized();
     }
 
-    if (!store.TryTake(id, out var entry) || entry is null)
+    if (!HasPermission(http.User, AppPermission.ExportReports) &&
+        !HasPermission(http.User, AppPermission.ManageReports) &&
+        !HasPermission(http.User, AppPermission.ViewDashboard))
     {
-        return Results.NotFound("El archivo temporal expiró o no existe. Genere el export de nuevo.");
+        return Results.Forbid();
+    }
+
+    var ownerId = http.User.FindFirstValue(AuthClaims.UserId);
+    // #region agent log
+    DebugSessionLog.Write("H3", "Program.cs:temp-export", "temp_take", new { hasOwner = !string.IsNullOrEmpty(ownerId) });
+    // #endregion
+    if (!store.TryTake(id, ownerId, out var entry) || entry is null)
+    {
+        return Results.NotFound("El archivo temporal expiró, no existe o no le pertenece. Genere el export de nuevo.");
     }
 
     return Results.File(entry.Bytes, entry.ContentType, entry.FileName);
@@ -343,8 +411,12 @@ app.MapPost("/api/migration/import", async (
     IFormFile file,
     [FromForm] string? tempPassword) =>
 {
-    if (!HasPermission(http.User, AppPermission.ManageUsers))
+    // Migración restringida a superadministrador (no solo ManageUsers).
+    if (!IsSuperAdminUser(http.User))
     {
+        // #region agent log
+        DebugSessionLog.Write("H4", "Program.cs:migration", "migration_forbidden", new { });
+        // #endregion
         return Results.Forbid();
     }
 
@@ -353,6 +425,20 @@ app.MapPost("/api/migration/import", async (
         return Results.BadRequest("Archivo vacío.");
     }
 
+    if (file.Length > 200 * 1024 * 1024)
+    {
+        return Results.BadRequest("El archivo supera el límite de 200 MB.");
+    }
+
+    var ext = Path.GetExtension(file.FileName);
+    if (!string.Equals(ext, ".json", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest("Solo se aceptan archivos .json.");
+    }
+
+    // #region agent log
+    DebugSessionLog.Write("H4", "Program.cs:migration", "migration_start", new { size = file.Length });
+    // #endregion
     await using var stream = file.OpenReadStream();
     var result = await migration.ImportFromJsonAsync(stream, tempPassword);
     return Results.Json(result);
@@ -370,7 +456,7 @@ static bool HasPermission(ClaimsPrincipal user, AppPermission permission)
         return false;
     }
 
-    if (string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase))
+    if (IsSuperAdminUser(user))
     {
         return true;
     }
@@ -378,12 +464,15 @@ static bool HasPermission(ClaimsPrincipal user, AppPermission permission)
     return user.HasClaim("permission", permission.ToString());
 }
 
+static bool IsSuperAdminUser(ClaimsPrincipal user) =>
+    string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase);
+
 static UserSession SessionFrom(ClaimsPrincipal user)
 {
     var id = user.FindFirstValue(AuthClaims.UserId);
     var username = user.FindFirstValue(AuthClaims.Username) ?? "";
     var display = user.FindFirstValue(AuthClaims.DisplayName) ?? username;
     Enum.TryParse<AppUserRole>(user.FindFirstValue(AuthClaims.Role), out var role);
-    var isSuper = string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase);
+    var isSuper = IsSuperAdminUser(user);
     return new UserSession(id, username, display, role, isSuper);
 }

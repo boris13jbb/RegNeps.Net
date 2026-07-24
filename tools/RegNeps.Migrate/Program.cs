@@ -43,6 +43,7 @@ var result = await migration.ImportFromFileAsync(file, tempPassword);
 
 Console.WriteLine(result.Success ? "OK" : "FALLÓ");
 Console.WriteLine($"Registros +{result.RecordsInserted} / act {result.RecordsUpdated} / omit {result.RecordsSkipped}");
+Console.WriteLine($"Snapshots → registros extra: {result.SnapshotRecordsMerged}");
 Console.WriteLine($"Usuarios  +{result.UsersInserted} / act {result.UsersUpdated} / omit {result.UsersSkipped}");
 Console.WriteLine($"Telas     +{result.FabricsInserted} / omit {result.FabricsSkipped}");
 Console.WriteLine($"Informes  +{result.ReportsInserted} / act {result.ReportsUpdated} / omit {result.ReportsSkipped}");

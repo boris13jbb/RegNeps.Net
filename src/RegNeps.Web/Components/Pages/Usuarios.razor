@@ -7,36 +7,36 @@
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para gestionar usuarios.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para gestionar usuarios.</div>
 }
 else
 {
-    <h1 class="mb-3">Usuarios</h1>
+    <PageHeader Title="Usuarios" Subtitle="Alta, roles y estado de cuentas de la intranet." />
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
     @if (!string.IsNullOrEmpty(_message))
     {
-        <div class="alert alert-success">@_message</div>
+        <div class="alert alert-success" role="status">@_message</div>
     }
 
     <div class="card border-0 shadow-sm mb-4" style="max-width: 640px;">
         <div class="card-body">
-            <h5 class="card-title">Crear usuario</h5>
+            <h2 class="h5 card-title">Crear usuario</h2>
             <div class="row g-2">
                 <div class="col-md-4">
-                    <label class="form-label">Usuario *</label>
-                    <input class="form-control" @bind="_newUsername" autocomplete="off" />
+                    <label class="form-label" for="usr-username">Usuario *</label>
+                    <input id="usr-username" class="form-control" @bind="_newUsername" autocomplete="off" />
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Contraseña *</label>
-                    <input class="form-control" type="password" @bind="_newPassword" autocomplete="new-password" />
+                    <label class="form-label" for="usr-password">Contraseña *</label>
+                    <input id="usr-password" class="form-control" type="password" @bind="_newPassword" autocomplete="new-password" />
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Rol</label>
-                    <select class="form-select" @bind="_newRole">
+                    <label class="form-label" for="usr-role">Rol</label>
+                    <select id="usr-role" class="form-select" @bind="_newRole">
                         @foreach (var role in _creatableRoles)
                         {
                             <option value="@role">@role.ToDisplayLabel()</option>
@@ -44,21 +44,21 @@ else
                     </select>
                 </div>
                 <div class="col-12">
-                    <button class="btn btn-primary btn-sm" @onclick="CreateAsync" disabled="@_saving">Crear</button>
+                    <button class="btn btn-primary btn-sm" @onclick="CreateAsync" disabled="@_saving" aria-busy="@_saving">Crear</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="table-responsive">
-        <table class="table table-sm table-striped align-middle">
+    <div class="table-responsive rn-table-wrap" style="max-width: 920px;">
+        <table class="table table-sm table-hover align-middle mb-0">
             <thead>
                 <tr>
-                    <th>Usuario</th>
-                    <th>Nombre</th>
-                    <th>Rol</th>
-                    <th>Estado</th>
-                    <th></th>
+                    <th scope="col">Usuario</th>
+                    <th scope="col">Nombre</th>
+                    <th scope="col">Rol</th>
+                    <th scope="col">Estado</th>
+                    <th scope="col"><span class="visually-hidden">Acciones</span></th>
                 </tr>
             </thead>
             <tbody>
@@ -109,29 +109,22 @@ else
 
     @if (_resetTarget is not null)
     {
-        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Reset contraseña — @_resetTarget.Username</h5>
-                        <button type="button" class="btn-close" @onclick="() => _resetTarget = null"></button>
-                    </div>
-                    <div class="modal-body">
-                        <label class="form-label">Nueva contraseña (mín. 6)</label>
-                        <input class="form-control" type="password" @bind="_resetPassword" />
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @onclick="() => _resetTarget = null">Cancelar</button>
-                        <button class="btn btn-primary" @onclick="ResetPasswordAsync">Guardar</button>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <AppModal Title="@($"Reset contraseña — {_resetTarget.Username}")" OnClose="CloseReset">
+            <ChildContent>
+            <label class="form-label" for="reset-password">Nueva contraseña (mín. 6)</label>
+            <input id="reset-password" class="form-control" type="password" @bind="_resetPassword" autocomplete="new-password" />
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="CloseReset">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ResetPasswordAsync">Guardar</button>
+            </Footer>
+        </AppModal>
     }
 }
 
 @code {
     private IReadOnlyList<AppUser> _list = [];
+    private UserSession? _session;
     private bool _allowed;
     private bool _canDelete;
     private bool _canChangeRoles;
@@ -153,12 +146,17 @@ else
     private AppUser? _resetTarget;
     private string _resetPassword = "";
 
+    private void CloseReset()
+    {
+        _resetTarget = null;
+        _resetPassword = "";
+    }
     protected override async Task OnInitializedAsync()
     {
-        var session = await CurrentUser.GetAsync();
-        _allowed = session?.Has(AppPermission.ManageUsers) == true;
-        _canDelete = session?.Has(AppPermission.DeleteUsers) == true;
-        _canChangeRoles = session?.Has(AppPermission.ChangeRoles) == true;
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session?.Has(AppPermission.ManageUsers) == true;
+        _canDelete = _session?.Has(AppPermission.DeleteUsers) == true;
+        _canChangeRoles = _session?.Has(AppPermission.ChangeRoles) == true;
         if (_allowed)
         {
             await LoadAsync();
@@ -221,7 +219,8 @@ else
     {
         try
         {
-            await Users.SetActiveAsync(user.Id, !user.IsActive);
+            Guid? actorId = Guid.TryParse(_session?.UserId, out var id) ? id : null;
+            await Users.SetActiveAsync(user.Id, !user.IsActive, actorId);
             await LoadAsync();
         }
         catch (Exception ex)
@@ -247,7 +246,7 @@ else
         {
             await Users.ResetPasswordAsync(_resetTarget.Id, _resetPassword);
             _message = "Contraseña actualizada.";
-            _resetTarget = null;
+            CloseReset();
         }
         catch (Exception ex)
         {
@@ -259,7 +258,8 @@ else
     {
         try
         {
-            await Users.SoftDeleteAsync(id);
+            Guid? actorId = Guid.TryParse(_session?.UserId, out var actor) ? actor : null;
+            await Users.SoftDeleteAsync(id, actorId);
             await LoadAsync();
         }
         catch (Exception ex)

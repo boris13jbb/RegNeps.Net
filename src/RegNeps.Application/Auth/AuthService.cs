@@ -22,9 +22,7 @@ public sealed class AuthService
 
         if (key.Contains('@', StringComparison.Ordinal))
         {
-            var all = await _users.ListAsync(ct: ct);
-            user = all.FirstOrDefault(u =>
-                string.Equals(u.Email, key, StringComparison.OrdinalIgnoreCase));
+            user = await _users.FindByEmailAsync(key, ct);
         }
 
         user ??= await _users.FindByUsernameAsync(key, ct);
@@ -70,10 +68,12 @@ public sealed class UserAdminService
         }
 
         username = username.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        if (string.IsNullOrWhiteSpace(username))
         {
             throw new ArgumentException("Usuario y contraseña son obligatorios.");
         }
+
+        ValidatePasswordStrength(password);
 
         if (await _users.FindByUsernameAsync(username, ct) is not null)
         {
@@ -112,8 +112,13 @@ public sealed class UserAdminService
         await _users.UpdateAsync(user, ct);
     }
 
-    public async Task SetActiveAsync(Guid userId, bool active, CancellationToken ct = default)
+    public async Task SetActiveAsync(Guid userId, bool active, Guid? actorUserId = null, CancellationToken ct = default)
     {
+        if (actorUserId is not null && actorUserId == userId && !active)
+        {
+            throw new InvalidOperationException("No puede desactivar su propia cuenta.");
+        }
+
         var user = await _users.GetByIdAsync(userId, ct)
             ?? throw new InvalidOperationException("Usuario no encontrado.");
 
@@ -133,10 +138,7 @@ public sealed class UserAdminService
 
     public async Task ResetPasswordAsync(Guid userId, string newPassword, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < 6)
-        {
-            throw new ArgumentException("La contraseña debe tener al menos 6 caracteres.");
-        }
+        ValidatePasswordStrength(newPassword);
 
         var user = await _users.GetByIdAsync(userId, ct)
             ?? throw new InvalidOperationException("Usuario no encontrado.");
@@ -145,8 +147,13 @@ public sealed class UserAdminService
         await _users.UpdateAsync(user, ct);
     }
 
-    public async Task SoftDeleteAsync(Guid userId, CancellationToken ct = default)
+    public async Task SoftDeleteAsync(Guid userId, Guid? actorUserId = null, CancellationToken ct = default)
     {
+        if (actorUserId is not null && actorUserId == userId)
+        {
+            throw new InvalidOperationException("No puede eliminar su propia cuenta.");
+        }
+
         var user = await _users.GetByIdAsync(userId, ct)
             ?? throw new InvalidOperationException("Usuario no encontrado.");
 
@@ -163,5 +170,18 @@ public sealed class UserAdminService
         user.DeletedAt = DateTime.UtcNow;
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user, ct);
+    }
+
+    private static void ValidatePasswordStrength(string password)
+    {
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+        {
+            throw new ArgumentException("La contraseña debe tener al menos 8 caracteres.");
+        }
+
+        if (!password.Any(char.IsLetter) || !password.Any(char.IsDigit))
+        {
+            throw new ArgumentException("La contraseña debe incluir letras y números.");
+        }
     }
 }

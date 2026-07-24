@@ -18,6 +18,16 @@ public sealed class UserRepository : IUserRepository
         return _db.Users.FirstOrDefaultAsync(u => u.Username == key, ct);
     }
 
+    public async Task<AppUser?> FindByEmailAsync(string email, CancellationToken ct = default)
+    {
+        var key = email.Trim().ToLowerInvariant();
+        var withEmail = await _db.Users
+            .Where(u => u.Email != null && u.Email != "")
+            .ToListAsync(ct);
+        return withEmail.FirstOrDefault(u =>
+            string.Equals(u.Email, key, StringComparison.OrdinalIgnoreCase));
+    }
+
     public Task<AppUser?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
         _db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
 

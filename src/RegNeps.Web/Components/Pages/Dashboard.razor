@@ -1,106 +1,248 @@
 @page "/dashboard"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
 @inject NepRecordService RecordService
+@inject AnalyticsService Analytics
+@inject IAlertConfigRepository AlertConfigs
 @inject CurrentUserService CurrentUser
-@inject NavigationManager Navigation
+@inject IJSRuntime Js
 
 <PageTitle>Dashboard — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para ver el dashboard.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para ver el dashboard.</div>
 }
 else
 {
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1 class="mb-0">Dashboard</h1>
-        <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
-            @(_loading ? "Cargando…" : "Actualizar")
-        </button>
-    </div>
+    <div class="dash-page">
+        <header class="dash-head">
+            <div>
+                <h1 class="dash-title">Dashboard de calidad</h1>
+                <p class="dash-sub">Monitoreo operativo de neps en planta.</p>
+            </div>
+            <div class="dash-actions">
+                <span class="dash-fresh" title="Datos del periodo seleccionado">
+                    <span class="dash-fresh-dot" aria-hidden="true"></span>
+                    Datos actualizados
+                </span>
+                <select class="form-select form-select-sm dash-period" @bind="_periodDays" @bind:after="LoadAsync"
+                        aria-label="Periodo">
+                    <option value="7">Últimos 7 días</option>
+                    <option value="30">Últimos 30 días</option>
+                    <option value="90">Últimos 90 días</option>
+                </select>
+                <button class="btn btn-primary btn-sm" @onclick="LoadAsync" disabled="@_loading"
+                        aria-busy="@_loading">
+                    @(_loading ? "Cargando…" : "Actualizar")
+                </button>
+            </div>
+        </header>
 
-    @if (_summary is null)
-    {
-        <p>Cargando panel…</p>
-    }
-    else
-    {
-        <div class="row g-3 mb-4">
-            <div class="col-6 col-md-4 col-xl-2">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body">
-                        <div class="text-muted small">Registros</div>
-                        <div class="fs-4 fw-semibold">@_summary.TotalRegistros</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-md-4 col-xl-2">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body">
-                        <div class="text-muted small">Promedio neps</div>
-                        <div class="fs-4 fw-semibold">@_summary.PromedioNeps.ToString("0.##")</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-md-4 col-xl-2">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body">
-                        <div class="text-muted small">Total mts</div>
-                        <div class="fs-4 fw-semibold">@_summary.TotalMts.ToString("0.##")</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-md-4 col-xl-2">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body">
-                        <div class="text-muted small">Críticos</div>
-                        <div class="fs-4 fw-semibold text-danger">@_summary.Criticos</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-md-4 col-xl-2">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body">
-                        <div class="text-muted small">Advertencias</div>
-                        <div class="fs-4 fw-semibold text-warning">@_summary.Advertencias</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-md-4 col-xl-2">
-                <div class="card border-0 shadow-sm h-100">
-                    <div class="card-body">
-                        <div class="text-muted small">Pendientes</div>
-                        <div class="fs-4 fw-semibold">@_summary.PendientesRevision</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <h5>Últimos registros</h5>
-        @if (_summary.Ultimos.Count == 0)
+        @if (_summary is null)
         {
-            <p class="text-muted">Sin datos. Capture la primera medición.</p>
+            <LoadingBlock Message="Cargando panel…" />
         }
         else
         {
-            <ul class="list-group" style="max-width: 720px;">
-                @foreach (var r in _summary.Ultimos)
-                {
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>@r.CreatedAt.ToLocalTime().ToString("dd/MM HH:mm") — Telar @r.Telar — @r.Neps neps</span>
-                        <span class="text-muted">@r.MtsCalculados.ToString("0.##") mts</span>
-                    </li>
-                }
-            </ul>
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-4 col-xl-2">
+                    <KpiCard Soft Icon="list" Tone="indigo" Label="Registros"
+                             Delta="@DeltaText(_summary.TotalRecords, _prev?.TotalRecords)"
+                             DeltaTone="@DeltaToneInt(_summary.TotalRecords, _prev?.TotalRecords)">
+                        @_summary.TotalRecords
+                    </KpiCard>
+                </div>
+                <div class="col-6 col-md-4 col-xl-2">
+                    <KpiCard Soft Icon="chart" Tone="info" Label="Promedio neps"
+                             Delta="@DeltaText(_summary.AverageNeps, _prev?.AverageNeps)"
+                             DeltaTone="@DeltaToneDouble(_summary.AverageNeps, _prev?.AverageNeps, invert: true)">
+                        @_summary.AverageNeps.ToString("0.##")
+                    </KpiCard>
+                </div>
+                <div class="col-6 col-md-4 col-xl-2">
+                    <KpiCard Soft Icon="ruler" Tone="success" Label="Total mts"
+                             Delta="@DeltaText(_summary.TotalMts, _prev?.TotalMts)"
+                             DeltaTone="@DeltaToneDouble(_summary.TotalMts, _prev?.TotalMts)">
+                        @_summary.TotalMts.ToString("0.##")
+                    </KpiCard>
+                </div>
+                <div class="col-6 col-md-4 col-xl-2">
+                    <KpiCard Soft Icon="alert" Tone="danger" Label="Críticos"
+                             Delta="@DeltaText(_summary.CriticalCount, _prev?.CriticalCount)"
+                             DeltaTone="@DeltaToneInt(_summary.CriticalCount, _prev?.CriticalCount, invert: true)">
+                        @_summary.CriticalCount
+                    </KpiCard>
+                </div>
+                <div class="col-6 col-md-4 col-xl-2">
+                    <KpiCard Soft Icon="warn" Tone="warning" Label="Advertencias"
+                             Delta="@DeltaText(_summary.WarningCount, _prev?.WarningCount)"
+                             DeltaTone="@DeltaToneInt(_summary.WarningCount, _prev?.WarningCount, invert: true)">
+                        @_summary.WarningCount
+                    </KpiCard>
+                </div>
+                <div class="col-6 col-md-4 col-xl-2">
+                    <KpiCard Soft Icon="clock" Label="Pendientes"
+                             Delta="@DeltaText(_pendientes, _prevPendientes)"
+                             DeltaTone="@DeltaToneInt(_pendientes, _prevPendientes, invert: true)">
+                        @_pendientes
+                    </KpiCard>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-lg-8">
+                    <div class="rn-panel h-100">
+                        <div class="rn-panel-body">
+                            <h2 class="rn-section-title mb-1">Tendencia de neps</h2>
+                            <p class="dash-card-hint mb-3">Promedio diario con umbrales de alerta.</p>
+                            @if (_summary.TotalRecords == 0)
+                            {
+                                <EmptyState Title="Sin datos en el periodo"
+                                            Message="Capture mediciones o amplíe el rango de fechas." />
+                            }
+                            else
+                            {
+                                <div class="dash-chart">
+                                    <canvas id="dash-trend"></canvas>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="rn-panel h-100">
+                        <div class="rn-panel-body d-flex flex-column">
+                            <h2 class="rn-section-title mb-1">Distribución por estado</h2>
+                            <p class="dash-card-hint mb-3">Clasificación según umbrales de planta.</p>
+                            @if (_summary.TotalRecords == 0)
+                            {
+                                <EmptyState Title="Sin distribución"
+                                            Message="No hay registros para graficar." />
+                            }
+                            else
+                            {
+                                <div class="dash-chart dash-chart--donut flex-grow-1">
+                                    <canvas id="dash-status"></canvas>
+                                </div>
+                                <div class="dash-status-center" aria-hidden="true">
+                                    <strong>@_summary.TotalRecords</strong>
+                                    <span>registros</span>
+                                </div>
+                                <div class="dash-ops @(_summary.CriticalCount == 0 ? "is-ok" : "is-warn")">
+                                    @if (_summary.CriticalCount == 0)
+                                    {
+                                        <span>Estado operativo dentro de parámetros.</span>
+                                    }
+                                    else
+                                    {
+                                        <span>Hay @_summary.CriticalCount crítico(s) en el periodo.</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rn-panel">
+                <div class="rn-panel-body">
+                    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+                        <div>
+                            <h2 class="rn-section-title mb-0">Últimos registros</h2>
+                            <p class="dash-card-hint mb-0">Actividad reciente de telares</p>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <a class="btn btn-sm btn-outline-primary" href="/registros">Ver todos</a>
+                            <a class="btn btn-sm btn-primary" href="/captura">+ Nueva captura</a>
+                        </div>
+                    </div>
+
+                    @if (_ultimos.Count == 0)
+                    {
+                        <EmptyState Title="Sin mediciones aún"
+                                    Message="Capture la primera medición para ver actividad en el panel.">
+                            <a class="btn btn-primary btn-sm" href="/captura">Ir a captura</a>
+                        </EmptyState>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table dash-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Estado</th>
+                                        <th>Fecha y hora</th>
+                                        <th>Telar</th>
+                                        <th>Neps</th>
+                                        <th>Metros</th>
+                                        <th class="text-end">Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var r in PagedUltimos)
+                                    {
+                                        var level = r.GetAlertLevel(_config);
+                                        <tr>
+                                            <td>
+                                                <StatusBadge Tone="@BadgeTone(level)">@level.ToDisplayLabel()</StatusBadge>
+                                            </td>
+                                            <td>@r.CreatedAt.ToLocalTime().ToString("dd/MM HH:mm")</td>
+                                            <td>Telar @r.Telar</td>
+                                            <td>@r.Neps.ToString("0.##")</td>
+                                            <td>@r.MtsCalculados.ToString("0.##") mts</td>
+                                            <td class="text-end">
+                                                <a class="btn btn-link btn-sm p-0 dash-row-link"
+                                                   href="/registros"
+                                                   title="Ver en registros">⋯</a>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="dash-table-foot">
+                            <span>Mostrando @PagedUltimos.Count de @_ultimos.Count registros</span>
+                            @if (_pageCount > 1)
+                            {
+                                <div class="dash-pager">
+                                    @for (var p = 1; p <= _pageCount; p++)
+                                    {
+                                        var pageNum = p;
+                                        <button type="button"
+                                                class="dash-page-btn @(_currentPage == pageNum ? "is-active" : null)"
+                                                @onclick="() => GoToPage(pageNum)">@(pageNum)</button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
         }
-    }
+    </div>
 }
 
 @code {
-    private DashboardSummary? _summary;
+    private AnalyticsSummary? _summary;
+    private AnalyticsSummary? _prev;
+    private AlertConfig? _config;
+    private IReadOnlyList<NepRecord> _ultimos = [];
+    private int _pendientes;
+    private int? _prevPendientes;
     private bool _loading;
     private bool _allowed;
     private UserSession? _session;
+    private int _periodDays = 30;
+    private bool _chartsDirty;
+    private bool _jsReady;
+    private int _currentPage = 1;
+    private const int PageSize = 5;
+
+    private int _pageCount => Math.Max(1, (int)Math.Ceiling(_ultimos.Count / (double)PageSize));
+
+    private IReadOnlyList<NepRecord> PagedUltimos =>
+        _ultimos.Skip((_currentPage - 1) * PageSize).Take(PageSize).ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -114,6 +256,20 @@ else
         await LoadAsync();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsReady = true;
+        }
+
+        if (_jsReady && _chartsDirty && _summary is not null)
+        {
+            _chartsDirty = false;
+            await RenderChartsAsync();
+        }
+    }
+
     private async Task LoadAsync()
     {
         if (_session is null)
@@ -124,11 +280,200 @@ else
         _loading = true;
         try
         {
-            _summary = await RecordService.GetDashboardSummaryAsync(_session.UserId, _session.SeesAllRecords);
+            var toUtc = DateTime.UtcNow;
+            var fromUtc = toUtc.AddDays(-_periodDays);
+            var prevTo = fromUtc;
+            var prevFrom = prevTo.AddDays(-_periodDays);
+
+            _config = await AlertConfigs.GetAsync();
+            _summary = await Analytics.BuildAsync(fromUtc, toUtc, _session.UserId, _session.SeesAllRecords);
+            _prev = await Analytics.BuildAsync(prevFrom, prevTo, _session.UserId, _session.SeesAllRecords);
+
+            var range = ReportDateRange.FromLocalCalendarDates(fromUtc.ToLocalTime().Date, toUtc.ToLocalTime().Date);
+            var filters = new RecordFilters();
+            range.ApplyTo(filters);
+            var records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 50_000);
+            _pendientes = records.Count(r => r.RequiereSeguimiento(_config));
+            _ultimos = records
+                .OrderByDescending(r => r.CreatedAt)
+                .Take(15)
+                .ToList();
+
+            var prevRange = ReportDateRange.FromLocalCalendarDates(prevFrom.ToLocalTime().Date, prevTo.ToLocalTime().Date.AddDays(-1));
+            var prevFilters = new RecordFilters();
+            prevRange.ApplyTo(prevFilters);
+            var prevRecords = await RecordService.QueryAsync(prevFilters, _session.UserId, _session.SeesAllRecords, 50_000);
+            _prevPendientes = prevRecords.Count(r => r.RequiereSeguimiento(_config));
+
+            _currentPage = 1;
+            _chartsDirty = true;
+
+            if (_summary.TotalRecords == 0 && _jsReady)
+            {
+                try { await Js.InvokeVoidAsync("regnepsCharts.destroyAll"); }
+                catch { /* sin charts */ }
+            }
         }
         finally
         {
             _loading = false;
         }
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        if (_summary is null || _summary.TotalRecords == 0 || _config is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.Yield();
+
+            var dayLabels = _summary.ByDay.Select(d => d.Date.ToString("dd MMM", System.Globalization.CultureInfo.GetCultureInfo("es-ES"))).ToArray();
+            var dayAvg = _summary.ByDay.Select(d => Math.Round(d.AverageNeps, 2)).ToArray();
+            var warnLine = dayLabels.Select(_ => (double)_config.LimiteNormalMax).ToArray();
+            var critLine = dayLabels.Select(_ => (double)_config.LimiteAdvertenciaMax).ToArray();
+
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "dash-trend", new
+            {
+                type = "line",
+                data = new
+                {
+                    labels = dayLabels,
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            label = "Promedio neps",
+                            data = dayAvg,
+                            borderColor = "#2563EB",
+                            backgroundColor = "rgba(37, 99, 235, 0.12)",
+                            fill = true,
+                            tension = 0.35,
+                            pointRadius = 3,
+                            pointHoverRadius = 5
+                        },
+                        new
+                        {
+                            label = "Límite advertencia",
+                            data = warnLine,
+                            borderColor = "#F59E0B",
+                            borderDash = new[] { 6, 4 },
+                            pointRadius = 0,
+                            fill = false,
+                            tension = 0
+                        },
+                        new
+                        {
+                            label = "Límite crítico",
+                            data = critLine,
+                            borderColor = "#DC2626",
+                            borderDash = new[] { 6, 4 },
+                            pointRadius = 0,
+                            fill = false,
+                            tension = 0
+                        }
+                    }
+                },
+                options = new
+                {
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    interaction = new { mode = "index", intersect = false },
+                    plugins = new { legend = new { position = "bottom" } },
+                    scales = new
+                    {
+                        y = new { beginAtZero = true, title = new { display = true, text = "Neps" } },
+                        x = new { grid = new { display = false } }
+                    }
+                }
+            });
+
+            var okCount = Math.Max(0, _summary.TotalRecords - _summary.CriticalCount - _summary.WarningCount);
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "dash-status", new
+            {
+                type = "doughnut",
+                data = new
+                {
+                    labels = new[] { "Normal", "Advertencia", "Crítico" },
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            data = new[] { okCount, _summary.WarningCount, _summary.CriticalCount },
+                            backgroundColor = new[] { "#16A34A", "#F59E0B", "#DC2626" },
+                            borderWidth = 0,
+                            cutout = "68%"
+                        }
+                    }
+                },
+                options = new
+                {
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    plugins = new
+                    {
+                        legend = new { position = "bottom" }
+                    }
+                }
+            });
+        }
+        catch
+        {
+            // Chart.js puede no estar listo en el primer frame; se reintenta en el siguiente render.
+            _chartsDirty = true;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await Js.InvokeVoidAsync("regnepsCharts.destroyAll"); }
+        catch { /* ignore */ }
+    }
+
+    private void GoToPage(int pageNum) => _currentPage = pageNum;
+
+    private static string BadgeTone(AlertLevel level) => level switch
+    {
+        AlertLevel.Normal => "normal",
+        AlertLevel.Advertencia => "warning",
+        AlertLevel.Critico => "critical",
+        _ => "muted"
+    };
+
+    private static string DeltaText(double current, double? previous)
+    {
+        if (previous is null || previous == 0 && current == 0)
+            return "—";
+        if (previous == 0)
+            return current > 0 ? "↑ nuevo" : "—";
+        var pct = (current - previous.Value) / Math.Abs(previous.Value) * 100.0;
+        var arrow = pct > 0.05 ? "↑" : pct < -0.05 ? "↓" : "→";
+        return $"{arrow} {Math.Abs(pct):0.#}%";
+    }
+
+    private static string DeltaText(int current, int? previous) =>
+        DeltaText((double)current, previous);
+
+    private static string DeltaToneInt(int current, int? previous, bool invert = false)
+    {
+        if (previous is null || previous == current)
+            return "flat";
+        var up = current > previous;
+        if (invert)
+            return up ? "down" : "up";
+        return up ? "up" : "down";
+    }
+
+    private static string DeltaToneDouble(double current, double? previous, bool invert = false)
+    {
+        if (previous is null || Math.Abs(current - previous.Value) < 0.0001)
+            return "flat";
+        var up = current > previous;
+        if (invert)
+            return up ? "down" : "up";
+        return up ? "up" : "down";
     }
 }

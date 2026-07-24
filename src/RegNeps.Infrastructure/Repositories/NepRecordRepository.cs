@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
-using RegNeps.Domain.Services;
 using RegNeps.Infrastructure.Persistence;
 
 namespace RegNeps.Infrastructure.Repositories;
@@ -63,38 +63,38 @@ public sealed class NepRecordRepository : INepRecordRepository
 
         if (!string.IsNullOrWhiteSpace(filters.Telar))
         {
-            var telar = filters.Telar.Trim();
-            query = query.Where(r => r.Telar == telar);
+            var telar = filters.Telar.Trim().ToLower();
+            query = query.Where(r => r.Telar.ToLower() == telar);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Tela))
         {
-            var tela = filters.Tela.Trim();
-            query = query.Where(r => r.Tela == tela);
+            var tela = filters.Tela.Trim().ToLower();
+            query = query.Where(r => r.Tela.ToLower() == tela);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.LoteTrama))
         {
-            var lote = filters.LoteTrama.Trim();
-            query = query.Where(r => r.LoteTrama == lote);
+            var lote = filters.LoteTrama.Trim().ToLower();
+            query = query.Where(r => r.LoteTrama.ToLower() == lote);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Turno))
         {
-            var turno = filters.Turno.Trim();
-            query = query.Where(r => r.Turno == turno);
+            var turno = filters.Turno.Trim().ToLower();
+            query = query.Where(r => r.Turno.ToLower() == turno);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Operario))
         {
-            var operario = filters.Operario.Trim();
-            query = query.Where(r => r.Operario == operario);
+            var operario = filters.Operario.Trim().ToLower();
+            query = query.Where(r => r.Operario.ToLower() == operario);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.LineaProduccion))
         {
-            var linea = filters.LineaProduccion.Trim();
-            query = query.Where(r => r.LineaProduccion == linea);
+            var linea = filters.LineaProduccion.Trim().ToLower();
+            query = query.Where(r => r.LineaProduccion.ToLower() == linea);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Search))
@@ -121,12 +121,24 @@ public sealed class NepRecordRepository : INepRecordRepository
             query = query.Where(r => r.Neps <= filters.NepsMax.Value);
         }
 
+        // Mts = Neps / TestLengthM → filtrar por neps equivalentes (traducible a SQL).
+        if (filters.MtsMin is not null)
+        {
+            var nepsMin = filters.MtsMin.Value * NepsConstants.TestLengthM;
+            query = query.Where(r => r.Neps >= nepsMin);
+        }
+
+        if (filters.MtsMax is not null)
+        {
+            var nepsMax = filters.MtsMax.Value * NepsConstants.TestLengthM;
+            query = query.Where(r => r.Neps <= nepsMax);
+        }
+
         if (filters.FromUtc is not null)
         {
             query = query.Where(r => r.CreatedAt >= filters.FromUtc.Value);
         }
 
-        // Preferir fin exclusivo para incluir todo el día "Hasta" sin ambigüedad de ticks.
         if (filters.ToExclusiveUtc is not null)
         {
             query = query.Where(r => r.CreatedAt < filters.ToExclusiveUtc.Value);
@@ -148,61 +160,48 @@ public sealed class NepRecordRepository : INepRecordRepository
                 : query.Where(r => r.AccionCorrectiva == null || r.AccionCorrectiva == string.Empty);
         }
 
-        var needsMemoryFilter =
-            filters.AlertLevel is not null ||
-            filters.SoloPendientes ||
-            filters.MtsMin is not null ||
-            filters.MtsMax is not null;
+        // Umbrales en SQL (antes del Take). Evita filtrar alerta en memoria sobre un subconjunto truncado.
+        if (filters.AlertLevel is not null || filters.SoloPendientes)
+        {
+            var config = await _db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
+            if (config.AlertasActivas)
+            {
+                // Equivalente a Math.Round(neps, AwayFromZero) para neps >= 0:
+                // Round(x) <= L  ⇔  x < L + 0.5
+                var normalExclusive = config.LimiteNormalMax + 0.5;
+                var warningExclusive = config.LimiteAdvertenciaMax + 0.5;
 
-        var dbTake = needsMemoryFilter ? Math.Min(take * 3, maxTake) : take;
+                if (filters.AlertLevel is not null)
+                {
+                    query = filters.AlertLevel.Value switch
+                    {
+                        AlertLevel.Normal => query.Where(r => r.Neps < normalExclusive),
+                        AlertLevel.Advertencia => query.Where(r =>
+                            r.Neps >= normalExclusive && r.Neps < warningExclusive),
+                        AlertLevel.Critico => query.Where(r => r.Neps >= warningExclusive),
+                        _ => query
+                    };
+                }
 
-        var ordered = hasDateRange
-            ? query.OrderBy(r => r.CreatedAt)
-            : query.OrderByDescending(r => r.CreatedAt);
+                if (filters.SoloPendientes)
+                {
+                    query = query.Where(r =>
+                        !r.RevisadoPorSupervisor && r.Neps >= normalExclusive);
+                }
+            }
+            else if (filters.AlertLevel is AlertLevel.Advertencia or AlertLevel.Critico
+                     || filters.SoloPendientes)
+            {
+                return Array.Empty<NepRecord>();
+            }
+        }
 
-        var candidates = await ordered
-            .Take(dbTake)
+        // Listados: más recientes primero. Exports/Analytics reordenan si lo necesitan.
+        return await query
+            .OrderByDescending(r => r.CreatedAt)
+            .ThenBy(r => r.Telar)
+            .Take(take)
             .ToListAsync(ct);
-
-        if (!needsMemoryFilter)
-        {
-            return candidates;
-        }
-
-        var config = await _db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
-
-        IEnumerable<NepRecord> filtered = candidates;
-
-        if (filters.AlertLevel is not null)
-        {
-            filtered = filtered.Where(r => AlertEvaluator.GetLevel(r.Neps, config) == filters.AlertLevel.Value);
-        }
-
-        if (filters.SoloPendientes)
-        {
-            filtered = filtered.Where(r => r.RequiereSeguimiento(config));
-        }
-
-        if (filters.MtsMin is not null)
-        {
-            filtered = filtered.Where(r => r.MtsCalculados >= filters.MtsMin.Value);
-        }
-
-        if (filters.MtsMax is not null)
-        {
-            filtered = filtered.Where(r => r.MtsCalculados <= filters.MtsMax.Value);
-        }
-
-        var result = filtered.Take(take).ToList();
-        if (hasDateRange)
-        {
-            result = result
-                .OrderBy(r => r.CreatedAt)
-                .ThenBy(r => r.Telar, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        return result;
     }
 
     public Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default) =>

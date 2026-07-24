@@ -9,57 +9,41 @@
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para capturar registros.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para capturar registros.</div>
 }
 else
 {
     <div class="capture-page">
-        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
-            <div>
-                <h1 class="capture-title mb-1">Captura de registros</h1>
-                <p class="capture-subtitle mb-0">Su tabla personal. Guarde informes para compartir con el equipo.</p>
-            </div>
-            <div class="d-flex flex-wrap gap-2 align-items-center">
+        <PageHeader Title="Captura de registros" Subtitle="Su tabla personal. Guarde informes para compartir con el equipo.">
+            <Actions>
                 <a class="btn btn-sm btn-outline-secondary" href="/telas">Telas</a>
                 <a class="btn btn-sm btn-outline-secondary" href="/lotes">Lotes</a>
                 <a class="btn btn-sm btn-outline-secondary" href="/registros">Filtros</a>
                 <button type="button" class="btn btn-sm btn-outline-danger" @onclick="NewSessionAsync">Nueva sesión</button>
-            </div>
-        </div>
+            </Actions>
+        </PageHeader>
 
         @if (!string.IsNullOrEmpty(_success))
         {
-            <div class="alert alert-success py-2">@_success</div>
+            <div class="alert alert-success py-2" role="status">@_success</div>
         }
         @if (!string.IsNullOrEmpty(_error))
         {
-            <div class="alert alert-danger py-2">@_error</div>
+            <div class="alert alert-danger py-2" role="alert">@_error</div>
         }
 
         <div class="row g-2 mb-3">
             <div class="col-6 col-lg-3">
-                <div class="capture-kpi">
-                    <div class="capture-kpi-label">Registros</div>
-                    <div class="capture-kpi-value">@_sessionRecords.Count</div>
-                </div>
+                <KpiCard Label="Registros">@_sessionRecords.Count</KpiCard>
             </div>
             <div class="col-6 col-lg-3">
-                <div class="capture-kpi">
-                    <div class="capture-kpi-label">Neps totales</div>
-                    <div class="capture-kpi-value">@_totalNeps.ToString("0.##")</div>
-                </div>
+                <KpiCard Label="Neps totales">@_totalNeps.ToString("0.##")</KpiCard>
             </div>
             <div class="col-6 col-lg-3">
-                <div class="capture-kpi">
-                    <div class="capture-kpi-label">Mts calculados</div>
-                    <div class="capture-kpi-value">@_totalMts.ToString("0")</div>
-                </div>
+                <KpiCard Label="Mts calculados">@_totalMts.ToString("0")</KpiCard>
             </div>
             <div class="col-6 col-lg-3">
-                <div class="capture-kpi">
-                    <div class="capture-kpi-label">Telares</div>
-                    <div class="capture-kpi-value">@_loomCount</div>
-                </div>
+                <KpiCard Label="Telares" Tone="info">@_loomCount</KpiCard>
             </div>
         </div>
 
@@ -67,8 +51,8 @@ else
             <div class="card-body">
                 <div class="row g-3 align-items-end">
                     <div class="col-lg-4">
-                        <label class="capture-label">Tela / Tejido</label>
-                        <select class="form-select" value="@_telaSelect" @onchange="OnTelaSelectChanged">
+                        <label class="capture-label" for="cap-tela-select">Tela / Tejido</label>
+                        <select id="cap-tela-select" class="form-select" value="@_telaSelect" @onchange="OnTelaSelectChanged">
                             <option value="">— Seleccionar tela —</option>
                             @foreach (var fabric in _fabrics)
                             {
@@ -78,8 +62,8 @@ else
                         </select>
                         @if (_useManualTela)
                         {
-                            <label class="capture-label mt-2">Tela manual</label>
-                            <input class="form-control text-uppercase"
+                            <label class="capture-label mt-2" for="cap-tela-manual">Tela manual</label>
+                            <input id="cap-tela-manual" class="form-control text-uppercase"
                                    @bind="_manualTela" @bind:event="oninput"
                                    placeholder="Escriba el nombre de la tela" maxlength="120" />
                         }
@@ -88,8 +72,8 @@ else
                         </p>
                     </div>
                     <div class="col-lg-8">
-                        <label class="capture-label">Lote de trama</label>
-                        <select class="form-select mb-2" value="@_loteSelect" @onchange="OnLoteSelectChanged">
+                        <label class="capture-label" for="cap-lote-select">Lote de trama</label>
+                        <select id="cap-lote-select" class="form-select mb-2" value="@_loteSelect" @onchange="OnLoteSelectChanged">
                             <option value="">Seleccionar lote...</option>
                             @foreach (var lote in _lotes)
                             {
@@ -97,8 +81,8 @@ else
                             }
                             <option value="@ManualOption">Manual</option>
                         </select>
-                        <label class="capture-label">@(_useManualLote ? "Lote manual (completo)" : "Lote completo")</label>
-                        <input class="form-control font-monospace fw-semibold text-uppercase"
+                        <label class="capture-label" for="cap-lote-completo">@(_useManualLote ? "Lote manual (completo)" : "Lote completo")</label>
+                        <input id="cap-lote-completo" class="form-control font-monospace fw-semibold text-uppercase"
                                @bind="_model.LoteTrama" @bind:event="oninput"
                                placeholder="63E264H10A" maxlength="64" />
                         <p class="text-muted small mb-0 mt-2">
@@ -114,19 +98,19 @@ else
             <div class="col-lg-4">
                 <div class="card border-0 shadow-sm h-100">
                     <div class="card-body">
-                        <h5 class="card-title mb-3">Nuevo registro</h5>
+                        <h2 class="h5 card-title mb-3">Nuevo registro</h2>
                         <EditForm Model="_model" OnValidSubmit="SaveAsync">
                             <div class="mb-2">
-                                <label class="capture-label">Telar *</label>
-                                <InputText class="form-control capture-input" @bind-Value="_model.Telar" placeholder="Ej: 102" />
+                                <label class="capture-label" for="cap-telar">Telar *</label>
+                                <InputText id="cap-telar" class="form-control capture-input" @bind-Value="_model.Telar" placeholder="Ej: 102" />
                             </div>
                             <div class="mb-2">
-                                <label class="capture-label">Neps *</label>
-                                <InputNumber class="form-control capture-input" @bind-Value="_model.Neps" placeholder="Ej: 53" />
+                                <label class="capture-label" for="cap-neps">Neps *</label>
+                                <InputNumber id="cap-neps" class="form-control capture-input" @bind-Value="_model.Neps" placeholder="Ej: 53" />
                             </div>
                             <div class="mb-2">
-                                <label class="capture-label">Turno</label>
-                                <InputSelect class="form-select capture-input" @bind-Value="_model.Turno">
+                                <label class="capture-label" for="cap-turno">Turno</label>
+                                <InputSelect id="cap-turno" class="form-select capture-input" @bind-Value="_model.Turno">
                                     <option value="">—</option>
                                     <option value="A">A</option>
                                     <option value="B">B</option>
@@ -134,18 +118,18 @@ else
                                 </InputSelect>
                             </div>
                             <div class="mb-2">
-                                <label class="capture-label">Operario</label>
-                                <InputText class="form-control capture-input" @bind-Value="_model.Operario" />
+                                <label class="capture-label" for="cap-operario">Operario</label>
+                                <InputText id="cap-operario" class="form-control capture-input" @bind-Value="_model.Operario" />
                             </div>
                             <div class="mb-2">
-                                <label class="capture-label">Línea</label>
-                                <InputText class="form-control capture-input" @bind-Value="_model.LineaProduccion" />
+                                <label class="capture-label" for="cap-linea">Línea</label>
+                                <InputText id="cap-linea" class="form-control capture-input" @bind-Value="_model.LineaProduccion" />
                             </div>
                             <div class="mb-2">
-                                <label class="capture-label">Observación</label>
-                                <InputTextArea class="form-control capture-input" @bind-Value="_model.Observacion" rows="2" />
+                                <label class="capture-label" for="cap-obs">Observación</label>
+                                <InputTextArea id="cap-obs" class="form-control capture-input" @bind-Value="_model.Observacion" rows="2" />
                             </div>
-                            <div class="capture-mts mb-3">
+                            <div class="capture-mts mb-3" aria-live="polite">
                                 <span>Mts = Neps / @NepsConstants.TestLengthM.ToString("0.##")</span>
                                 <strong>@((_model.Neps / NepsConstants.TestLengthM).ToString("0"))</strong>
                                 @if (_previewLevel is not null)
@@ -153,9 +137,17 @@ else
                                     <span class="ms-2">· @_previewLevel.Value.ToDisplayLabel()</span>
                                 }
                             </div>
-                            <button type="submit" class="btn capture-add-btn w-100" disabled="@_saving">
-                                @(_saving ? "Guardando…" : "+ Agregar")
-                            </button>
+                            <MorphButton Text="Agregar"
+                                         Type="submit"
+                                         Block="true"
+                                         IsLoading="@_saving"
+                                         Disabled="@_saving">
+                                <Icon>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                        <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" /><path d="M12 8v8" />
+                                    </svg>
+                                </Icon>
+                            </MorphButton>
                         </EditForm>
                     </div>
                 </div>
@@ -170,7 +162,10 @@ else
                     <div class="card-body p-0">
                         @if (_sessionRecords.Count == 0)
                         {
-                            <p class="text-muted p-3 mb-0">Sin registros en esta sesión. Agregue mediciones con el formulario.</p>
+                            <div class="p-3">
+                                <EmptyState Title="Sesión vacía"
+                                            Message="Sin registros en esta sesión. Agregue mediciones con el formulario." />
+                            </div>
                         }
                         else
                         {
@@ -178,13 +173,13 @@ else
                                 <table class="table table-sm table-hover mb-0 capture-table">
                                     <thead>
                                         <tr>
-                                            <th>#</th>
-                                            <th>Hora</th>
-                                            <th>Telar</th>
-                                            <th>Neps</th>
-                                            <th>Mts</th>
-                                            <th>Lote</th>
-                                            <th></th>
+                                            <th scope="col">#</th>
+                                            <th scope="col">Hora</th>
+                                            <th scope="col">Telar</th>
+                                            <th scope="col">Neps</th>
+                                            <th scope="col">Mts</th>
+                                            <th scope="col">Lote</th>
+                                            <th scope="col"><span class="visually-hidden">Acciones</span></th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -203,8 +198,18 @@ else
                                                 <td class="text-nowrap">
                                                     @if (_canEdit)
                                                     {
-                                                        <button type="button" class="btn btn-link btn-sm p-0 text-primary me-2" @onclick="() => StartEditRecord(r)" title="Editar">✎</button>
-                                                        <button type="button" class="btn btn-link btn-sm p-0 text-danger" @onclick="() => DeleteRecordAsync(r.Id)" title="Eliminar">×</button>
+                                                        <button type="button" class="rn-icon-btn" @onclick="() => StartEditRecord(r)"
+                                                                aria-label="Editar registro telar @r.Telar" title="Editar">
+                                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                                <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                                            </svg>
+                                                        </button>
+                                                        <button type="button" class="rn-icon-btn rn-icon-btn--danger" @onclick="() => DeleteRecordAsync(r.Id)"
+                                                                aria-label="Eliminar registro telar @r.Telar" title="Eliminar">
+                                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                                <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                                            </svg>
+                                                        </button>
                                                     }
                                                 </td>
                                             </tr>
@@ -221,48 +226,40 @@ else
 
         @if (_editingRecord is not null)
         {
-            <div class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,.35);">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Editar registro</h5>
-                            <button type="button" class="btn-close" @onclick="CancelEditRecord"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="mb-2">
-                                <label class="form-label">Telar</label>
-                                <input class="form-control" @bind="_editTelar" />
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label">Neps</label>
-                                <InputNumber class="form-control" @bind-Value="_editNeps" />
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label">Tela</label>
-                                <InputSelect class="form-select" @bind-Value="_editTela">
-                                    <option value="">—</option>
-                                    @foreach (var f in _fabrics)
-                                    {
-                                        <option value="@f.Name">@f.Name</option>
-                                    }
-                                </InputSelect>
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label">Lote</label>
-                                <input class="form-control font-monospace text-uppercase" @bind="_editLote" />
-                            </div>
-                            <div class="mb-2">
-                                <label class="form-label">Observación</label>
-                                <input class="form-control" @bind="_editObs" />
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-outline-secondary" @onclick="CancelEditRecord">Cancelar</button>
-                            <button type="button" class="btn btn-primary" @onclick="SaveEditRecordAsync" disabled="@_saving">Guardar</button>
-                        </div>
-                    </div>
+            <AppModal Title="Editar registro" OnClose="CancelEditRecord">
+                <ChildContent>
+                <div class="mb-2">
+                    <label class="form-label" for="cap-edit-telar">Telar</label>
+                    <input id="cap-edit-telar" class="form-control" @bind="_editTelar" />
                 </div>
-            </div>
+                <div class="mb-2">
+                    <label class="form-label" for="cap-edit-neps">Neps</label>
+                    <InputNumber id="cap-edit-neps" class="form-control" @bind-Value="_editNeps" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" for="cap-edit-tela">Tela</label>
+                    <InputSelect id="cap-edit-tela" class="form-select" @bind-Value="_editTela">
+                        <option value="">—</option>
+                        @foreach (var f in _fabrics)
+                        {
+                            <option value="@f.Name">@f.Name</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" for="cap-edit-lote">Lote</label>
+                    <input id="cap-edit-lote" class="form-control font-monospace text-uppercase" @bind="_editLote" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" for="cap-edit-obs">Observación</label>
+                    <input id="cap-edit-obs" class="form-control" @bind="_editObs" />
+                </div>
+                </ChildContent>
+                <Footer>
+                    <MorphButton Text="Cancelar" Variant="ghost" OnClick="CancelEditRecord" Disabled="@_saving" />
+                    <MorphButton Text="Guardar" IsLoading="@_saving" OnClick="SaveEditRecordAsync" Disabled="@_saving" />
+                </Footer>
+            </AppModal>
         }
     </div>
 }
@@ -433,9 +430,9 @@ else
                 throw new ArgumentException("El telar es obligatorio.");
             }
 
-            if (_model.Neps < 0)
+            if (_model.Neps <= 0)
             {
-                throw new ArgumentException("Los neps no pueden ser negativos.");
+                throw new ArgumentException("Los neps deben ser mayores que cero.");
             }
 
             var tela = ResolveTelaForSave();

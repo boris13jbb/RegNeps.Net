@@ -1,0 +1,127 @@
+@* Modal accesible: Escape, backdrop, focus-trap y restauración de foco. *@
+@inject IJSRuntime Js
+@implements IAsyncDisposable
+
+<div class="rn-modal-root"
+     @ref="_root"
+     tabindex="-1"
+     @onkeydown="OnKeyDown">
+    <div class="rn-modal-backdrop" @onclick="OnBackdropClick" aria-hidden="true"></div>
+    <div class="modal show d-block"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="@_titleId">
+        <div class="modal-dialog @SizeClass modal-dialog-scrollable" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="@_titleId">@Title</h2>
+                    <button type="button" class="btn-close" @onclick="CloseAsync" aria-label="Cerrar"></button>
+                </div>
+                <div class="modal-body">
+                    @ChildContent
+                </div>
+                @if (Footer is not null)
+                {
+                    <div class="modal-footer">
+                        @Footer
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private readonly string _titleId = $"rn-modal-{Guid.NewGuid():N}";
+    private ElementReference _root;
+    private bool _activated;
+    private bool _disposed;
+
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    /// <summary>Vacío, lg o sm.</summary>
+    [Parameter]
+    public string Size { get; set; } = "";
+
+    [Parameter]
+    public bool CloseOnBackdrop { get; set; } = true;
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter]
+    public RenderFragment? Footer { get; set; }
+
+    private string SizeClass => Size switch
+    {
+        "lg" => "modal-lg",
+        "sm" => "modal-sm",
+        _ => ""
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_activated || _disposed)
+        {
+            return;
+        }
+
+        _activated = true;
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsUi.activateModal", _root);
+        }
+        catch
+        {
+            // Si el script aún no cargó, el modal sigue usable (Escape/backdrop).
+            try
+            {
+                await _root.FocusAsync();
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Escape" or "Esc")
+        {
+            await CloseAsync();
+        }
+    }
+
+    private async Task OnBackdropClick()
+    {
+        if (CloseOnBackdrop)
+        {
+            await CloseAsync();
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsUi.deactivateModal", _root);
+        }
+        catch
+        {
+            // Circuito Blazor desconectado o script no disponible.
+        }
+    }
+}

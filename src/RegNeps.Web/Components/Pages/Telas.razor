@@ -8,32 +8,31 @@
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para gestionar telas.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para gestionar telas.</div>
 }
 else
 {
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h1 class="mb-0">Telas</h1>
-        <div class="d-flex gap-2 flex-wrap align-items-center">
+    <PageHeader Title="Telas" Subtitle="Catálogo de telas y referencias usadas en captura.">
+        <Actions>
             <InputFile class="form-control form-control-sm" style="max-width: 260px;" OnChange="OnImportFile"
-                       accept=".xlsx,.xls" disabled="@_importing" />
+                       accept=".xlsx,.xls" disabled="@_importing" aria-label="Importar telas desde Excel" />
             <a class="btn btn-outline-secondary btn-sm" href="/api/export/fabrics/csv">CSV</a>
             <a class="btn btn-outline-secondary btn-sm" href="/api/export/fabrics/xlsx">Excel</a>
-        </div>
-    </div>
+        </Actions>
+    </PageHeader>
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
     @if (!string.IsNullOrEmpty(_message))
     {
-        <div class="alert alert-success">@_message</div>
+        <div class="alert alert-success" role="status">@_message</div>
     }
 
     <div class="card border-0 shadow-sm mb-4" style="max-width: 560px;">
         <div class="card-body">
-            <h5 class="card-title">@( _editing is null ? "Nueva tela" : "Editar tela" )</h5>
+            <h2 class="h5 card-title">@( _editing is null ? "Nueva tela" : "Editar tela" )</h2>
             <div class="row g-2">
                 <div class="col-md-6">
                     <label class="form-label">Nombre *</label>
@@ -65,14 +64,14 @@ else
         </div>
     </div>
 
-    <div class="table-responsive" style="max-width: 720px;">
-        <table class="table table-sm table-striped align-middle">
+    <div class="table-responsive rn-table-wrap" style="max-width: 720px;">
+        <table class="table table-sm table-hover align-middle mb-0">
             <thead>
                 <tr>
-                    <th>Nombre</th>
-                    <th>Código</th>
-                    <th>Estado</th>
-                    <th></th>
+                    <th scope="col">Nombre</th>
+                    <th scope="col">Código</th>
+                    <th scope="col">Estado</th>
+                    <th scope="col"><span class="visually-hidden">Acciones</span></th>
                 </tr>
             </thead>
             <tbody>
@@ -81,7 +80,11 @@ else
                     <tr>
                         <td>@f.Name</td>
                         <td>@(f.Code ?? "—")</td>
-                        <td>@(f.IsActive ? "Activa" : "Inactiva")</td>
+                        <td>
+                            <StatusBadge Tone="@(f.IsActive ? "normal" : "muted")">
+                                @(f.IsActive ? "Activa" : "Inactiva")
+                            </StatusBadge>
+                        </td>
                         <td class="text-nowrap">
                             <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => StartEdit(f)">Editar</button>
                             <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(f.Id)">Eliminar</button>

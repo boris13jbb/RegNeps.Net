@@ -35,6 +35,7 @@ public interface IFabricRepository
 public interface IUserRepository
 {
     Task<AppUser?> FindByUsernameAsync(string username, CancellationToken ct = default);
+    Task<AppUser?> FindByEmailAsync(string email, CancellationToken ct = default);
     Task<AppUser?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<IReadOnlyList<AppUser>> ListAsync(bool includeDeleted = false, CancellationToken ct = default);
     Task<AppUser> AddAsync(AppUser user, CancellationToken ct = default);
@@ -47,6 +48,7 @@ public interface ISavedReportRepository
     Task<IReadOnlyList<SavedReport>> ListAsync(CancellationToken ct = default);
     Task<SavedReport?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<SavedReport> AddAsync(SavedReport report, CancellationToken ct = default);
+    Task UpdateAsync(SavedReport report, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
@@ -62,14 +64,24 @@ public interface ILoteTramaRepository
 
 public interface IExportFileService
 {
-    byte[] BuildCsv(IReadOnlyList<NepRecord> records, AlertConfig config, string style = "completo");
-    byte[] BuildExcel(IReadOnlyList<NepRecord> records, AlertConfig config, string title = "Informe Neps VICUNHA", string style = "completo");
+    byte[] BuildCsv(
+        IReadOnlyList<NepRecord> records,
+        AlertConfig config,
+        string style = "completo",
+        IReadOnlyList<string>? columns = null);
+    byte[] BuildExcel(
+        IReadOnlyList<NepRecord> records,
+        AlertConfig config,
+        string title = "Informe Neps VICUNHA",
+        string style = "completo",
+        IReadOnlyList<string>? columns = null);
     byte[] BuildPdf(
         IReadOnlyList<NepRecord> records,
         AlertConfig config,
         string title = "Reporte de Control de Calidad — Neps VICUNHA",
         string? filtersDescription = null,
-        string style = "completo");
+        string style = "completo",
+        IReadOnlyList<string>? columns = null);
     byte[] BuildFabricsCsv(IReadOnlyList<Fabric> fabrics);
     byte[] BuildFabricsExcel(IReadOnlyList<Fabric> fabrics);
     byte[] BuildLotesCsv(IReadOnlyList<LoteTramaItem> lotes);
