@@ -55,6 +55,8 @@ public static class DependencyInjection
         services.AddScoped<AnalyticsService>();
         services.AddScoped<ReportExportAppService>();
         services.AddScoped<HistoricalDataMigrationService>();
+        services.AddScoped<IReportSnapshotService>(sp =>
+            sp.GetRequiredService<HistoricalDataMigrationService>());
 
         return services;
     }

@@ -33,7 +33,18 @@ public sealed class FabricRepository : IFabricRepository
 
     public async Task UpdateAsync(Fabric fabric, CancellationToken ct = default)
     {
-        _db.Fabrics.Update(fabric);
+        var entity = await _db.Fabrics.FindAsync([fabric.Id], ct)
+            ?? throw new InvalidOperationException("Tela no encontrada.");
+
+        var name = (fabric.Name ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new InvalidOperationException("El nombre es obligatorio.");
+        }
+
+        entity.Name = name;
+        entity.Code = string.IsNullOrWhiteSpace(fabric.Code) ? null : fabric.Code.Trim();
+        entity.IsActive = fabric.IsActive;
         await _db.SaveChangesAsync(ct);
     }
 

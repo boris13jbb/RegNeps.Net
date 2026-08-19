@@ -43,8 +43,9 @@
                         <ul class="sidebar-section-list">
                             @foreach (var item in link.Items)
                             {
+                                var linkClass = IsSectionActive(item.Href) ? "sidebar-link active" : "sidebar-link";
                                 <li>
-                                    <NavLink class="sidebar-link" href="@item.Href">
+                                    <NavLink class="@linkClass" href="@item.Href">
                                         <span class="nav-icon" aria-hidden="true">@MarkupIcon(item.Icon)</span>
                                         <span class="nav-label">@item.Label</span>
                                     </NavLink>
@@ -64,9 +65,7 @@
                 <span class="sidebar-user-avatar" aria-hidden="true">@Initials(_session.DisplayName)</span>
                 <span class="sidebar-user-meta">
                     <span class="sidebar-user-name">@_session.DisplayName</span>
-                    <form method="post" action="/api/logout" class="d-inline">
-                        <button type="submit" class="sidebar-logout btn btn-link p-0 align-baseline">Cerrar sesión</button>
-                    </form>
+                    <span class="sidebar-user-role">@_session.EffectiveRole</span>
                 </span>
                 <button type="button"
                         class="sidebar-collapse-btn"
@@ -97,7 +96,7 @@
                 </svg>
             </label>
             <nav class="topbar-crumbs" aria-label="Ruta">
-                <span class="topbar-crumb-root">Panel de calidad</span>
+                <span class="topbar-crumb-root">RegNeps</span>
                 <span class="topbar-crumb-sep" aria-hidden="true">/</span>
                 <span class="topbar-crumb-current">@CurrentSection</span>
             </nav>
@@ -133,16 +132,15 @@
             var path = Nav.ToBaseRelativePath(Nav.Uri).Trim('/').Split('?', '#')[0].ToLowerInvariant();
             return path switch
             {
-                "" or "dashboard" => "Dashboard",
+                "" or "dashboard" => "Inicio",
                 "captura" => "Captura",
                 "registros" => "Registros",
                 "alertas" => "Alertas",
-                "graficas" => "Gráficas",
+                "graficas" => "Análisis",
                 "telas" => "Telas",
                 "lotes" => "Lotes",
                 "informes" => "Informes",
-                "reportes" => "Reportes",
-                "exportar" => "Exportar",
+                "reportes" or "exportar" => "Informes",
                 "usuarios" => "Usuarios",
                 "migracion" => "Migración",
                 "config" => "Configuración",
@@ -163,6 +161,23 @@
 
     private void ToggleCollapsed() => _collapsed = !_collapsed;
 
+    /// <summary>Mantiene Informes activo también en Exportar (misma sección, sin duplicar menú).</summary>
+    private bool IsSectionActive(string href)
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri).Trim('/').Split('?', '#')[0].ToLowerInvariant();
+        if (href is "informes")
+        {
+            return path is "informes" or "exportar" or "reportes";
+        }
+
+        if (href is "telas")
+        {
+            return path is "telas";
+        }
+
+        return false;
+    }
+
     public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
 
     private List<NavLinkDef> BuildLinks()
@@ -170,42 +185,38 @@
         var links = new List<NavLinkDef>();
 
         if (_session?.Has(AppPermission.ViewDashboard) == true)
-            links.Add(new NavLinkDef("home", "Resumen", "/dashboard", "home"));
+            links.Add(new NavLinkDef("home", "Inicio", "/dashboard", "home"));
 
-        var operacion = new List<NavItemDef>();
+        var diario = new List<NavItemDef>();
         if (_session?.Has(AppPermission.CaptureRecords) == true)
-            operacion.Add(new("captura", "Captura", "camera"));
+            diario.Add(new("captura", "Captura", "camera"));
         if (_session?.Has(AppPermission.ViewRecords) == true)
-            operacion.Add(new("registros", "Registros", "list"));
+            diario.Add(new("registros", "Registros", "list"));
         if (_session?.Has(AppPermission.ViewAlerts) == true)
-            operacion.Add(new("alertas", "Alertas", "alert"));
+            diario.Add(new("alertas", "Alertas", "alert"));
+        if (diario.Count > 0)
+            links.Add(new NavLinkDef("diario", "Trabajo diario", diario));
+
+        var analisis = new List<NavItemDef>();
         if (_session?.Has(AppPermission.ViewDashboard) == true)
-            operacion.Add(new("graficas", "Gráficas", "chart"));
+            analisis.Add(new("graficas", "Análisis", "chart"));
+        if (_session?.Has(AppPermission.ManageReports) == true || _session?.Has(AppPermission.ExportReports) == true)
+            analisis.Add(new("informes", "Informes", "bookmark"));
+        if (analisis.Count > 0)
+            links.Add(new NavLinkDef("analisis", "Consultas", analisis));
+
         if (_session?.Has(AppPermission.ManageFabrics) == true)
         {
-            operacion.Add(new("telas", "Telas", "fabric"));
-            operacion.Add(new("lotes", "Lotes de trama", "lote"));
+            links.Add(new NavLinkDef("catalogo", "Catálogo",
+            [
+                new("telas", "Telas", "fabric"),
+                new("lotes", "Lotes", "lote")
+            ]));
         }
-        if (operacion.Count > 0)
-            links.Add(new NavLinkDef("operacion", "Operación", operacion));
-
-        var reportes = new List<NavItemDef>();
-        if (_session?.Has(AppPermission.ManageReports) == true)
-            reportes.Add(new("informes", "Informes guardados", "bookmark"));
-        if (_session?.Has(AppPermission.ExportReports) == true)
-        {
-            reportes.Add(new("reportes", "Reportes profesionales", "report"));
-            reportes.Add(new("exportar", "Exportar", "export"));
-        }
-        if (reportes.Count > 0)
-            links.Add(new NavLinkDef("reportes", "Reportes", reportes));
 
         var admin = new List<NavItemDef>();
         if (_session?.Has(AppPermission.ManageUsers) == true)
-        {
             admin.Add(new("usuarios", "Usuarios", "users"));
-            admin.Add(new("migracion", "Migración histórica", "database"));
-        }
         if (_session?.Has(AppPermission.ViewSettings) == true)
             admin.Add(new("config", "Configuración", "gear"));
         if (admin.Count > 0)

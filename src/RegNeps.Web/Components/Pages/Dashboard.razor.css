@@ -28,6 +28,50 @@
     font-size: 0.925rem;
 }
 
+.dash-shortcuts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.35rem;
+}
+
+.dash-shortcut {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.85rem 1rem;
+    border-radius: var(--rn-radius);
+    background: var(--rn-surface);
+    border: 1px solid var(--rn-border);
+    box-shadow: var(--rn-shadow-sm);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.dash-shortcut:hover {
+    border-color: var(--vicunha-accent);
+    box-shadow: var(--rn-shadow);
+    transform: translateY(-1px);
+    color: inherit;
+}
+
+.dash-shortcut-kicker {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--vicunha-accent);
+    letter-spacing: 0.04em;
+}
+
+.dash-shortcut strong {
+    font-size: 0.95rem;
+}
+
+.dash-shortcut span:last-child {
+    font-size: 0.78rem;
+    color: var(--rn-text-muted);
+}
+
 .dash-actions {
     display: flex;
     flex-wrap: wrap;

@@ -36,6 +36,15 @@ var options = new DbContextOptionsBuilder<RegNepsDbContext>()
 
 await using var db = new RegNepsDbContext(options);
 await db.Database.EnsureCreatedAsync();
+try
+{
+    await db.Database.ExecuteSqlRawAsync(
+        """ALTER TABLE "SavedReports" ADD COLUMN "SnapshotJson" TEXT NULL""");
+}
+catch (Exception)
+{
+    // Columna ya existe en bases creadas con el esquema actual.
+}
 
 var migration = new HistoricalDataMigrationService(db);
 Console.WriteLine($"Importando {file} → {dbPath} ...");

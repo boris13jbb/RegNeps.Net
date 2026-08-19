@@ -69,14 +69,8 @@
             items.Add(new("registros", "Registros", "list"));
         if (session.Has(AppPermission.ViewAlerts))
             items.Add(new("alertas", "Alertas", "alert"));
-        if (session.Has(AppPermission.ViewDashboard))
-            items.Add(new("graficas", "Gráficas", "chart"));
-        if (session.Has(AppPermission.ExportReports))
-            items.Add(new("reportes", "Reportes", "file"));
-        if (session.Has(AppPermission.ManageUsers))
-            items.Add(new("usuarios", "Usuarios", "users"));
-        if (session.Has(AppPermission.ViewSettings))
-            items.Add(new("config", "Config", "gear"));
+        if (session.Has(AppPermission.ManageReports) || session.Has(AppPermission.ExportReports))
+            items.Add(new("informes", "Informes", "file"));
 
         return items;
     }

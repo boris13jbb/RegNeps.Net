@@ -5,7 +5,7 @@
 @inject CurrentUserService CurrentUser
 @inject NavigationManager Nav
 
-<PageTitle>Informes guardados — RegNeps</PageTitle>
+<PageTitle>Informes — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
@@ -13,25 +13,25 @@
 }
 else
 {
-    <PageHeader Title="Informes guardados"
-                Subtitle="Ver datos abre Registros o Reportes. Editar solo cambia nombre y fechas del informe.">
+    <PageHeader Title="Informes" Subtitle="Guarde periodos para el equipo o exporte CSV, Excel y PDF.">
         <Actions>
             @if (_loadedId is not null)
             {
                 <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ClearEdit">
-                    + Nuevo informe
+                    Nuevo informe
                 </button>
             }
         </Actions>
     </PageHeader>
 
+    <HubTabs AriaLabel="Informes" Tabs="InformesTabs" />
+
     @if (_totalRecordsInDb == 0 && _list.Count > 0)
     {
         <div class="alert alert-warning" role="alert" style="max-width: 960px;">
             <strong>No hay mediciones en la base (0 registros).</strong>
-            Tiene @_list.Count informe(s) guardados, pero la tabla de mediciones está vacía
-            (por ejemplo tras «Vaciar todos»). Al pulsar Ver en Registros no habrá filas que editar
-            hasta que capture o migre datos.
+            Tiene @_list.Count informe(s) guardados. «Ver datos» restaura las filas
+            que el informe guardó (si hay copia) o pide recargar la migración histórica.
             <div class="mt-2 d-flex flex-wrap gap-2">
                 <a class="btn btn-primary btn-sm" href="/captura">Ir a captura</a>
                 <a class="btn btn-outline-primary btn-sm" href="/migracion">Migración histórica</a>
@@ -82,12 +82,12 @@ else
                         <button type="button" class="btn btn-outline-primary btn-sm"
                                 disabled="@(_fromLocal is null || _toLocal is null)"
                                 @onclick="OpenRegistrosFromForm">
-                            Abrir en Registros
+                            Ver datos
                         </button>
                         <button type="button" class="btn btn-outline-primary btn-sm"
                                 disabled="@(_fromLocal is null || _toLocal is null)"
-                                @onclick="OpenReportesFromForm">
-                            Abrir en Reportes
+                                @onclick="OpenExportarFromForm">
+                            Exportar
                         </button>
                         <button type="button" class="btn btn-link btn-sm" @onclick="ClearEdit">Cancelar</button>
                     }
@@ -123,19 +123,18 @@ else
                         <div class="d-flex flex-wrap gap-1 align-items-center">
                             <button type="button" class="btn btn-primary btn-sm"
                                     @onclick="() => OpenRegistrosAsync(r)">
-                                Ver en Registros
+                                Ver datos
                             </button>
                             <button type="button" class="btn btn-outline-primary btn-sm"
-                                    @onclick="() => OpenReportesAsync(r)">
-                                Ver en Reportes
+                                    @onclick="() => OpenExportarAsync(r)">
+                                Exportar
                             </button>
                             <button type="button" class="btn btn-outline-secondary btn-sm"
                                     @onclick="() => EditAsync(r)">
                                 Editar
                             </button>
-                            <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "csv")">CSV</a>
-                            <a class="btn btn-outline-success btn-sm" href="@ExportUrl(r.Id, "xlsx")">Excel</a>
-                            <a class="btn btn-outline-danger btn-sm" href="@ExportUrl(r.Id, "pdf")">PDF</a>
+                            <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "xlsx")" title="Excel">Excel</a>
+                            <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "pdf")" title="PDF">PDF</a>
                             <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => DeleteAsync(r.Id)">
                                 Borrar
                             </button>
@@ -162,10 +161,21 @@ else
     private Guid? _loadedId;
     private int _totalRecordsInDb;
 
+    private static readonly IReadOnlyList<(string Href, string Label)> InformesTabs =
+    [
+        ("/informes", "Guardados"),
+        ("/exportar", "Exportar")
+    ];
+
     protected override async Task OnInitializedAsync()
     {
         _session = await CurrentUser.GetAsync();
         _allowed = _session?.Has(AppPermission.ManageReports) == true;
+        if (_session?.Has(AppPermission.ExportReports) == true && !_allowed)
+        {
+            Nav.NavigateTo("/exportar", replace: true);
+            return;
+        }
         if (_allowed)
         {
             await LoadAsync();
@@ -225,12 +235,17 @@ else
         return path + "?" + string.Join('&', q);
     }
 
-    private static string BuildQueryUrl(string path, RecordFilters filters, int savedCount)
+    private static string BuildQueryUrl(string path, RecordFilters filters, int savedCount, Guid? reportId = null)
     {
         var url = BuildQueryUrl(path, filters);
         if (savedCount > 0)
         {
             url += $"&saved={savedCount}";
+        }
+
+        if (reportId is Guid id)
+        {
+            url += $"&reportId={id:N}";
         }
 
         return url;
@@ -254,35 +269,35 @@ else
         _error = null;
         _message = null;
         ApplyReportToForm(report);
-        _message = "Nombre y fechas cargados arriba. Guarde cambios aquí, o use «Ver en Registros / Reportes» para ver las mediciones.";
+        _message = "Nombre y fechas listos para guardar. «Ver datos» abre las mediciones; «Exportar» descarga el archivo.";
     }
 
     private void OpenRegistrosAsync(SavedReport report)
     {
         _error = null;
         var filters = Reports.ResolveSavedFilters(report).Filters;
-        if (filters.FromUtc is null)
+        if (filters.FromUtc is null && string.IsNullOrWhiteSpace(report.SnapshotJson))
         {
             ApplyReportToForm(report);
-            _error = "Este informe no tiene fechas. Edítelas arriba y luego pulse Abrir en Registros.";
+            _error = "Este informe no tiene fechas ni copia de mediciones. Edítelas arriba y luego pulse Ver datos.";
             return;
         }
 
-        Nav.NavigateTo(BuildQueryUrl("/registros", filters, report.RecordCount), forceLoad: true);
+        Nav.NavigateTo(BuildQueryUrl("/registros", filters, report.RecordCount, report.Id), forceLoad: true);
     }
 
-    private void OpenReportesAsync(SavedReport report)
+    private void OpenExportarAsync(SavedReport report)
     {
         _error = null;
         var filters = Reports.ResolveSavedFilters(report).Filters;
         if (filters.FromUtc is null)
         {
             ApplyReportToForm(report);
-            _error = "Este informe no tiene fechas. Edítelas arriba y luego pulse Abrir en Reportes.";
+            _error = "Este informe no tiene fechas. Edítelas arriba y luego pulse Exportar.";
             return;
         }
 
-        Nav.NavigateTo(BuildQueryUrl("/reportes", filters, report.RecordCount), forceLoad: true);
+        Nav.NavigateTo(BuildQueryUrl("/exportar", filters, report.RecordCount, report.Id), forceLoad: true);
     }
 
     private void OpenRegistrosFromForm()
@@ -294,10 +309,10 @@ else
             return;
         }
 
-        Nav.NavigateTo(BuildQueryUrl("/registros", filters), forceLoad: true);
+        Nav.NavigateTo(BuildQueryUrl("/registros", filters, 0, _loadedId), forceLoad: true);
     }
 
-    private void OpenReportesFromForm()
+    private void OpenExportarFromForm()
     {
         var filters = BuildFiltersFromForm();
         if (filters.FromUtc is null)
@@ -306,7 +321,7 @@ else
             return;
         }
 
-        Nav.NavigateTo(BuildQueryUrl("/reportes", filters), forceLoad: true);
+        Nav.NavigateTo(BuildQueryUrl("/exportar", filters), forceLoad: true);
     }
 
     private void ClearEdit()

@@ -36,6 +36,10 @@ public sealed class SavedReportRepository : ISavedReportRepository
         entity.FiltersJson = report.FiltersJson;
         entity.RecordCount = report.RecordCount;
         entity.SummaryText = report.SummaryText;
+        if (report.SnapshotJson is not null)
+        {
+            entity.SnapshotJson = report.SnapshotJson;
+        }
         await _db.SaveChangesAsync(ct);
     }
 

@@ -252,8 +252,44 @@ h1:focus {
 .rn-page-actions {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
     gap: 0.5rem;
+    align-items: center;
+}
+
+.rn-hub-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: -0.5rem 0 1.25rem;
+    padding: 0.25rem;
+    width: fit-content;
+    max-width: 100%;
+    background: var(--rn-surface);
+    border: 1px solid var(--rn-border);
+    border-radius: 999px;
+    box-shadow: var(--rn-shadow-sm);
+}
+
+.rn-hub-tab {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 0.95rem;
+    border-radius: 999px;
+    font-size: 0.875rem;
+    font-weight: 650;
+    color: var(--rn-text-muted);
+    text-decoration: none;
+    transition: background 0.15s var(--rn-ease), color 0.15s var(--rn-ease);
+}
+
+.rn-hub-tab:hover {
+    color: var(--vicunha-blue);
+    background: var(--vicunha-sky);
+}
+
+.rn-hub-tab.is-active {
+    color: #fff;
+    background: var(--vicunha-blue);
 }
 
 /* ----- Surface / panel ----- */

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using RegNeps.Application.Abstractions;
 using RegNeps.Application.Auth;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
@@ -17,7 +18,7 @@ namespace RegNeps.Infrastructure.Migration;
 /// Idempotente: reimportar actualiza por id de origen (Firestore).
 /// Incluye registros embebidos en snapshots de informes (históricos reales en Flutter).
 /// </summary>
-public sealed class HistoricalDataMigrationService
+public sealed class HistoricalDataMigrationService : IReportSnapshotService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -207,60 +208,11 @@ public sealed class HistoricalDataMigrationService
 
         var existingIds = await _db.NepRecords.AsNoTracking().Select(r => r.Id).ToListAsync(ct);
         var existingSet = existingIds.ToHashSet();
-
-        foreach (var raw in mergedRecords)
-        {
-            try
-            {
-                var sourceId = raw.Id ?? Guid.NewGuid().ToString("N");
-                var id = ToDeterministicGuid(sourceId);
-                var entity = MapRecord(raw, id, sourceId);
-
-                if (existingSet.Contains(id))
-                {
-                    var tracked = await _db.NepRecords
-                        .Include(r => r.HistorialAcciones)
-                        .FirstAsync(r => r.Id == id, ct);
-                    tracked.Telar = entity.Telar;
-                    tracked.Neps = entity.Neps;
-                    tracked.Tela = entity.Tela;
-                    tracked.LoteTrama = entity.LoteTrama;
-                    tracked.CreatedAt = entity.CreatedAt;
-                    tracked.Turno = entity.Turno;
-                    tracked.Operario = entity.Operario;
-                    tracked.LineaProduccion = entity.LineaProduccion;
-                    tracked.Observacion = entity.Observacion;
-                    tracked.RevisadoPorSupervisor = entity.RevisadoPorSupervisor;
-                    tracked.AccionCorrectiva = entity.AccionCorrectiva;
-                    tracked.ResponsableRevision = entity.ResponsableRevision;
-                    tracked.FechaRevision = entity.FechaRevision;
-                    tracked.CreatedByUserId = entity.CreatedByUserId;
-                    tracked.CreatedByEmail = entity.CreatedByEmail;
-                    tracked.CreatedByRole = entity.CreatedByRole;
-                    tracked.UpdatedAt = DateTime.UtcNow;
-
-                    _db.CorrectiveActions.RemoveRange(tracked.HistorialAcciones);
-                    tracked.HistorialAcciones = entity.HistorialAcciones;
-                    foreach (var h in tracked.HistorialAcciones)
-                    {
-                        h.NepRecordId = tracked.Id;
-                    }
-
-                    result.RecordsUpdated++;
-                }
-                else
-                {
-                    _db.NepRecords.Add(entity);
-                    existingSet.Add(id);
-                    result.RecordsInserted++;
-                }
-            }
-            catch (Exception ex)
-            {
-                result.RecordsSkipped++;
-                result.Warnings.Add($"Registro omitido: {ex.Message}");
-            }
-        }
+        var upsert = await UpsertRawRecordsAsync(mergedRecords, existingSet, ct);
+        result.RecordsInserted = upsert.Inserted;
+        result.RecordsUpdated = upsert.Updated;
+        result.RecordsSkipped = upsert.Skipped;
+        result.Warnings.AddRange(upsert.Warnings);
 
         // 5) Informes: metadatos + FiltersJson usable (Firestore suele traer appliedFilters null)
         var existingReports = await _db.SavedReports.ToListAsync(ct);
@@ -271,6 +223,9 @@ public sealed class HistoricalDataMigrationService
                 var sourceId = r.Id ?? Guid.NewGuid().ToString("N");
                 var id = ToDeterministicGuid("report:" + sourceId);
                 var existing = existingReports.FirstOrDefault(x => x.Id == id);
+                var snapshotJson = r.Records is { Count: > 0 }
+                    ? JsonSerializer.Serialize(r.Records, JsonOptions)
+                    : null;
                 var filtersJson = BuildReportFiltersJson(r);
                 var count = r.Records?.Count ?? 0;
                 var periodLabel = DescribeReportPeriod(filtersJson, r);
@@ -287,7 +242,8 @@ public sealed class HistoricalDataMigrationService
                         CreatedAt = ParseDate(r.CreatedAt) ?? DateTime.UtcNow,
                         FiltersJson = filtersJson,
                         RecordCount = count,
-                        SummaryText = summary
+                        SummaryText = summary,
+                        SnapshotJson = snapshotJson
                     });
                     result.ReportsInserted++;
                 }
@@ -297,6 +253,10 @@ public sealed class HistoricalDataMigrationService
                     existing.FiltersJson = filtersJson;
                     existing.RecordCount = count;
                     existing.SummaryText = summary;
+                    if (snapshotJson is not null)
+                    {
+                        existing.SnapshotJson = snapshotJson;
+                    }
                     result.ReportsUpdated++;
                 }
             }
@@ -406,6 +366,126 @@ public sealed class HistoricalDataMigrationService
         }
 
         return byId.Values.ToList();
+    }
+
+    /// <summary>
+    /// Restaura las filas guardadas en el informe y las devuelve para mostrarlas,
+    /// aunque la tabla viva se haya vaciado o el filtro de fechas no coincida.
+    /// </summary>
+    public async Task<IReadOnlyList<NepRecord>> LoadSnapshotRecordsAsync(
+        Guid reportId,
+        CancellationToken ct = default)
+    {
+        var report = await _db.SavedReports.AsNoTracking().FirstOrDefaultAsync(r => r.Id == reportId, ct);
+        if (report is null || string.IsNullOrWhiteSpace(report.SnapshotJson))
+        {
+            return [];
+        }
+
+        List<FirestoreRecordDto> rows;
+        try
+        {
+            rows = JsonSerializer.Deserialize<List<FirestoreRecordDto>>(report.SnapshotJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+
+        if (rows.Count == 0)
+        {
+            return [];
+        }
+
+        var existingIds = await _db.NepRecords.AsNoTracking().Select(r => r.Id).ToListAsync(ct);
+        await UpsertRawRecordsAsync(rows, existingIds.ToHashSet(), ct);
+        await _db.SaveChangesAsync(ct);
+        await RepairRecordOwnershipAsync(ct);
+
+        var ids = rows
+            .Select(r => r.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => ToDeterministicGuid(id!))
+            .ToList();
+
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        return await _db.NepRecords.AsNoTracking()
+            .Include(r => r.HistorialAcciones)
+            .Where(r => ids.Contains(r.Id))
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync(ct);
+    }
+
+    private async Task<(int Inserted, int Updated, int Skipped, List<string> Warnings)> UpsertRawRecordsAsync(
+        IReadOnlyList<FirestoreRecordDto> rawRecords,
+        HashSet<Guid> existingSet,
+        CancellationToken ct)
+    {
+        var inserted = 0;
+        var updated = 0;
+        var skipped = 0;
+        var warnings = new List<string>();
+
+        foreach (var raw in rawRecords)
+        {
+            try
+            {
+                var sourceId = raw.Id ?? Guid.NewGuid().ToString("N");
+                raw.Id ??= sourceId;
+                var id = ToDeterministicGuid(sourceId);
+                var entity = MapRecord(raw, id, sourceId);
+
+                if (existingSet.Contains(id))
+                {
+                    var tracked = await _db.NepRecords
+                        .Include(r => r.HistorialAcciones)
+                        .FirstAsync(r => r.Id == id, ct);
+                    tracked.Telar = entity.Telar;
+                    tracked.Neps = entity.Neps;
+                    tracked.Tela = entity.Tela;
+                    tracked.LoteTrama = entity.LoteTrama;
+                    tracked.CreatedAt = entity.CreatedAt;
+                    tracked.Turno = entity.Turno;
+                    tracked.Operario = entity.Operario;
+                    tracked.LineaProduccion = entity.LineaProduccion;
+                    tracked.Observacion = entity.Observacion;
+                    tracked.RevisadoPorSupervisor = entity.RevisadoPorSupervisor;
+                    tracked.AccionCorrectiva = entity.AccionCorrectiva;
+                    tracked.ResponsableRevision = entity.ResponsableRevision;
+                    tracked.FechaRevision = entity.FechaRevision;
+                    tracked.CreatedByUserId = entity.CreatedByUserId;
+                    tracked.CreatedByEmail = entity.CreatedByEmail;
+                    tracked.CreatedByRole = entity.CreatedByRole;
+                    tracked.UpdatedAt = DateTime.UtcNow;
+
+                    _db.CorrectiveActions.RemoveRange(tracked.HistorialAcciones);
+                    tracked.HistorialAcciones = entity.HistorialAcciones;
+                    foreach (var h in tracked.HistorialAcciones)
+                    {
+                        h.NepRecordId = tracked.Id;
+                    }
+
+                    updated++;
+                }
+                else
+                {
+                    _db.NepRecords.Add(entity);
+                    existingSet.Add(id);
+                    inserted++;
+                }
+            }
+            catch (Exception ex)
+            {
+                skipped++;
+                warnings.Add($"Registro omitido: {ex.Message}");
+            }
+        }
+
+        return (inserted, updated, skipped, warnings);
     }
 
     /// <summary>

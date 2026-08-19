@@ -15,17 +15,20 @@ public sealed class ReportExportAppService
     private readonly IAlertConfigRepository _alertConfig;
     private readonly IExportFileService _export;
     private readonly ISavedReportRepository _saved;
+    private readonly IReportSnapshotService _snapshots;
 
     public ReportExportAppService(
         INepRecordRepository records,
         IAlertConfigRepository alertConfig,
         IExportFileService export,
-        ISavedReportRepository saved)
+        ISavedReportRepository saved,
+        IReportSnapshotService snapshots)
     {
         _records = records;
         _alertConfig = alertConfig;
         _export = export;
         _saved = saved;
+        _snapshots = snapshots;
     }
 
     public async Task<(byte[] Bytes, string FileName, string ContentType)> ExportAsync(
@@ -40,8 +43,6 @@ public sealed class ReportExportAppService
         filters ??= new RecordFilters();
         ReportDateRange.EnsureConsolidatedRange(filters);
 
-        var config = await _alertConfig.GetAsync(ct);
-        // Límite alto: el informe consolidado debe incluir todo el periodo, no un solo día.
         var records = await _records.QueryAsync(filters, viewerUserId, viewerSeesAll, 50_000, ct);
         if (records.Count == 0)
         {
@@ -50,8 +51,19 @@ public sealed class ReportExportAppService
                 "Ajuste el periodo e intente de nuevo.");
         }
 
-        // Orden cronológico ascendente (consolidado del periodo).
-        records = records
+        return await BuildExportFileAsync(format, records, filters, style, ct, columns);
+    }
+
+    private async Task<(byte[] Bytes, string FileName, string ContentType)> BuildExportFileAsync(
+        string format,
+        IReadOnlyList<NepRecord> records,
+        RecordFilters filters,
+        string style,
+        CancellationToken ct,
+        IReadOnlyList<string>? columns = null)
+    {
+        var config = await _alertConfig.GetAsync(ct);
+        var ordered = records
             .OrderBy(r => r.CreatedAt)
             .ThenBy(r => r.Telar, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -65,15 +77,50 @@ public sealed class ReportExportAppService
 
         return format switch
         {
-            "csv" => (_export.BuildCsv(records, config, style, selectedColumns),
+            "csv" => (_export.BuildCsv(ordered, config, style, selectedColumns),
                 $"reporte_neps{styleSuffix}{periodSuffix}_{Stamp()}.csv", "text/csv"),
-            "xlsx" or "excel" => (_export.BuildExcel(records, config, style: style, columns: selectedColumns),
+            "xlsx" or "excel" => (_export.BuildExcel(ordered, config, style: style, columns: selectedColumns),
                 $"reporte_neps{styleSuffix}{periodSuffix}_{Stamp()}.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            "pdf" => (_export.BuildPdf(records, config, filtersDescription: filtersDescription, style: style, columns: selectedColumns),
+            "pdf" => (_export.BuildPdf(ordered, config, filtersDescription: filtersDescription, style: style, columns: selectedColumns),
                 $"reporte_neps{styleSuffix}{periodSuffix}_{Stamp()}.pdf", "application/pdf"),
             _ => throw new ArgumentException("Formato no soportado. Use csv, xlsx o pdf.")
         };
+    }
+
+    /// <summary>
+    /// Copia de las filas del informe en el mismo formato que el export de Firestore,
+    /// para poder reabrirlas aunque se vacíe la tabla viva.
+    /// </summary>
+    private static string BuildSnapshotJson(IReadOnlyList<NepRecord> records)
+    {
+        var rows = records.Select(r => new
+        {
+            Id = r.Id.ToString("N"),
+            r.Telar,
+            r.Neps,
+            r.Tela,
+            r.LoteTrama,
+            CreatedAt = r.CreatedAt.ToUniversalTime().ToString("o"),
+            r.Turno,
+            r.Operario,
+            r.LineaProduccion,
+            r.Observacion,
+            r.RevisadoPorSupervisor,
+            r.AccionCorrectiva,
+            r.ResponsableRevision,
+            FechaRevision = r.FechaRevision?.ToUniversalTime().ToString("o"),
+            r.CreatedByUserId,
+            r.CreatedByEmail,
+            r.CreatedByRole,
+            HistorialAcciones = r.HistorialAcciones.Select(h => new
+            {
+                Fecha = h.Fecha.ToUniversalTime().ToString("o"),
+                h.Responsable,
+                Accion = h.Accion
+            }).ToList()
+        });
+        return JsonSerializer.Serialize(rows);
     }
 
     private static string PeriodFileSuffix(RecordFilters filters)
@@ -161,6 +208,7 @@ public sealed class ReportExportAppService
             CreatedByName = userName,
             RecordCount = records.Count,
             FiltersJson = JsonSerializer.Serialize(filters),
+            SnapshotJson = BuildSnapshotJson(records),
             SummaryText =
                 $"{records.Count} registros del {fromLabel} al {toLabel}, " +
                 $"promedio {avg:0.##} neps, {criticos} críticos."
@@ -204,6 +252,7 @@ public sealed class ReportExportAppService
             Name = name.Trim(),
             RecordCount = records.Count,
             FiltersJson = JsonSerializer.Serialize(filters),
+            SnapshotJson = records.Count > 0 ? BuildSnapshotJson(records) : null,
             SummaryText = records.Count == 0
                 ? $"Sin registros vivos del {fromLabel} al {toLabel} (filtros actualizados)."
                 : $"{records.Count} registros del {fromLabel} al {toLabel}, " +
@@ -258,7 +307,10 @@ public sealed class ReportExportAppService
             ?? throw new InvalidOperationException("Informe no encontrado.");
 
         var filters = ResolveSavedFilters(report).Filters;
-        var file = await ExportAsync(format, filters, viewerUserId, viewerSeesAll, "completo", ct: ct);
+        var snapshot = await _snapshots.LoadSnapshotRecordsAsync(savedReportId, ct);
+        var file = snapshot.Count > 0
+            ? await BuildExportFileAsync(format, snapshot, filters, "completo", ct)
+            : await ExportAsync(format, filters, viewerUserId, viewerSeesAll, "completo", ct: ct);
         var safeName = SanitizeFileName(report.Name);
         var ext = Path.GetExtension(file.FileName);
         return (file.Bytes, $"{safeName}_{Stamp()}{ext}", file.ContentType);

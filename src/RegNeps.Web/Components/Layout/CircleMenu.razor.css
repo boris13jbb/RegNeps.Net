@@ -180,6 +180,12 @@
     cursor: default;
 }
 
+@media (min-width: 992px) {
+    .circle-menu {
+        display: none;
+    }
+}
+
 @media (max-width: 640px) {
     .circle-menu {
         right: 0.75rem;

@@ -92,6 +92,7 @@ public sealed class RegNepsDbContext : DbContext
             e.Property(x => x.CreatedByName).HasMaxLength(128);
             e.Property(x => x.FiltersJson).HasMaxLength(8000);
             e.Property(x => x.SummaryText).HasMaxLength(2000);
+            e.Property(x => x.SnapshotJson);
             e.HasIndex(x => x.CreatedAt);
         });
 

@@ -32,15 +32,22 @@ public static class DatabaseInitializer
         }
 
         // Solo añadir ExternalUserId si aún no existe (evita el log fail: de EF en cada arranque).
-        if (await SqliteColumnExistsAsync(db, "Users", "ExternalUserId"))
+        if (!await SqliteColumnExistsAsync(db, "Users", "ExternalUserId"))
         {
-            return;
+            await TryAddColumnAsync(db, """ALTER TABLE "Users" ADD COLUMN "ExternalUserId" TEXT NULL""");
         }
 
+        if (!await SqliteColumnExistsAsync(db, "SavedReports", "SnapshotJson"))
+        {
+            await TryAddColumnAsync(db, """ALTER TABLE "SavedReports" ADD COLUMN "SnapshotJson" TEXT NULL""");
+        }
+    }
+
+    private static async Task TryAddColumnAsync(RegNepsDbContext db, string sql)
+    {
         try
         {
-            await db.Database.ExecuteSqlRawAsync(
-                """ALTER TABLE "Users" ADD COLUMN "ExternalUserId" TEXT NULL""");
+            await db.Database.ExecuteSqlRawAsync(sql);
         }
         catch (Exception ex) when (
             ex is SqliteException ||

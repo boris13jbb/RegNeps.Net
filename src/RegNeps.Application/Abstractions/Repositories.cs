@@ -52,6 +52,14 @@ public interface ISavedReportRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
+/// <summary>
+/// Restaura las filas embebidas en un informe (snapshot) aunque la tabla viva se haya vaciado.
+/// </summary>
+public interface IReportSnapshotService
+{
+    Task<IReadOnlyList<NepRecord>> LoadSnapshotRecordsAsync(Guid reportId, CancellationToken ct = default);
+}
+
 public interface ILoteTramaRepository
 {
     Task<IReadOnlyList<LoteTramaItem>> GetActiveAsync(CancellationToken ct = default);

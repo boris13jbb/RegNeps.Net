@@ -6,7 +6,7 @@
             aria-busy="@IsLoading"
             aria-pressed="@IsLoading"
             aria-label="@(IsLoading ? ActiveLabel : Text)"
-            @onclick="OnClick"
+            @onclick="HandleClickAsync"
             @attributes="AdditionalAttributes">
         @if (IsLoading)
         {
@@ -87,6 +87,19 @@
 
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    /// <summary>
+    /// Si no hay OnClick (p. ej. Type=submit en EditForm), no intercepta el envío del formulario.
+    /// </summary>
+    private async Task HandleClickAsync(MouseEventArgs e)
+    {
+        if (!OnClick.HasDelegate)
+        {
+            return;
+        }
+
+        await OnClick.InvokeAsync(e);
+    }
 
     private bool ShouldShowSparkle
     {

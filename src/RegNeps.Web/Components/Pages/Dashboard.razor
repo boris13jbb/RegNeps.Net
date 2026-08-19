@@ -19,7 +19,7 @@ else
         <header class="dash-head">
             <div>
                 <h1 class="dash-title">Dashboard de calidad</h1>
-                <p class="dash-sub">Monitoreo operativo de neps en planta.</p>
+                <p class="dash-sub">Hoy: capture, revise alertas y consulte calidad. Un solo inicio, sin pantallas repetidas.</p>
             </div>
             <div class="dash-actions">
                 <span class="dash-fresh" title="Datos del periodo seleccionado">
@@ -38,6 +38,49 @@ else
                 </button>
             </div>
         </header>
+
+        <nav class="dash-shortcuts" aria-label="Accesos frecuentes">
+            @if (_session?.Has(AppPermission.CaptureRecords) == true)
+            {
+                <a class="dash-shortcut" href="/captura">
+                    <span class="dash-shortcut-kicker">1</span>
+                    <strong>Capturar</strong>
+                    <span>Registrar neps</span>
+                </a>
+            }
+            @if (_session?.Has(AppPermission.ViewRecords) == true)
+            {
+                <a class="dash-shortcut" href="/registros">
+                    <span class="dash-shortcut-kicker">2</span>
+                    <strong>Consultar</strong>
+                    <span>Historial y filtros</span>
+                </a>
+            }
+            @if (_session?.Has(AppPermission.ViewAlerts) == true)
+            {
+                <a class="dash-shortcut" href="/alertas">
+                    <span class="dash-shortcut-kicker">3</span>
+                    <strong>Alertas</strong>
+                    <span>Críticos y pendientes</span>
+                </a>
+            }
+            @if (_session?.Has(AppPermission.ViewDashboard) == true)
+            {
+                <a class="dash-shortcut" href="/graficas">
+                    <span class="dash-shortcut-kicker">4</span>
+                    <strong>Analizar</strong>
+                    <span>Gráficas y filtros</span>
+                </a>
+            }
+            @if (_session?.Has(AppPermission.ManageReports) == true || _session?.Has(AppPermission.ExportReports) == true)
+            {
+                <a class="dash-shortcut" href="/informes">
+                    <span class="dash-shortcut-kicker">5</span>
+                    <strong>Informes</strong>
+                    <span>Guardar o exportar</span>
+                </a>
+            }
+        </nav>
 
         @if (_summary is null)
         {
@@ -95,7 +138,10 @@ else
                     <div class="rn-panel h-100">
                         <div class="rn-panel-body">
                             <h2 class="rn-section-title mb-1">Tendencia de neps</h2>
-                            <p class="dash-card-hint mb-3">Promedio diario con umbrales de alerta.</p>
+                            <p class="dash-card-hint mb-3">
+                                Promedio del periodo.
+                                <a href="/graficas">Abrir análisis con filtros</a>
+                            </p>
                             @if (_summary.TotalRecords == 0)
                             {
                                 <EmptyState Title="Sin datos en el periodo"

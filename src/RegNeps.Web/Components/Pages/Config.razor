@@ -11,7 +11,7 @@
 }
 else
 {
-    <PageHeader Title="Configuración de alertas"
+    <PageHeader Title="Configuración"
                 Subtitle="Umbrales de neps y reglas de seguimiento operativo." />
 
     @if (!string.IsNullOrEmpty(_error))
@@ -79,6 +79,19 @@ else
                 </fieldset>
             </div>
         </div>
+
+        @if (_canMigrate)
+        {
+            <div class="rn-panel mt-3" style="max-width: 560px;">
+                <div class="rn-panel-body">
+                    <h2 class="h6 mb-2">Datos históricos</h2>
+                    <p class="small text-muted mb-3">
+                        La importación desde Firestore está en una sola pantalla, fuera del menú diario.
+                    </p>
+                    <a class="btn btn-outline-primary btn-sm" href="/migracion">Abrir migración</a>
+                </div>
+            </div>
+        }
     }
 }
 
@@ -86,6 +99,7 @@ else
     private AlertConfig? _config;
     private bool _canView;
     private bool _canEdit;
+    private bool _canMigrate;
     private bool _saving;
     private string? _error;
     private string? _message;
@@ -96,6 +110,7 @@ else
         _canView = session?.Has(AppPermission.ViewSettings) == true
                    || session?.Has(AppPermission.EditAlertConfig) == true;
         _canEdit = session?.Has(AppPermission.EditAlertConfig) == true;
+        _canMigrate = session?.Has(AppPermission.ManageUsers) == true;
 
         if (_canView)
         {

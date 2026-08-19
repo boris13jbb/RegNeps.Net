@@ -5,6 +5,7 @@
 @inject IRecordImportService ImportService
 @inject CurrentUserService CurrentUser
 @inject NavigationManager Nav
+@inject IReportSnapshotService Snapshots
 @implements IDisposable
 
 <PageTitle>Registros — RegNeps</PageTitle>
@@ -49,8 +50,7 @@ else
     {
         <div class="alert alert-warning" role="alert" style="max-width: 1100px;">
             <strong>La base de datos no tiene mediciones (0 registros).</strong>
-            El informe solo guarda el periodo (filtros), no una copia de las filas.
-            Si usó «Vaciar todos», las mediciones se borraron y por eso la tabla está vacía.
+            Si el informe no trae copia de filas, recargue la migración histórica o capture de nuevo.
             <div class="mt-2 d-flex flex-wrap gap-2">
                 <a class="btn btn-primary btn-sm" href="/captura">Capturar mediciones</a>
                 <a class="btn btn-outline-primary btn-sm" href="/migracion">Migración histórica (Firestore)</a>
@@ -106,7 +106,7 @@ else
                 </div>
             </div>
             <div class="col-12 col-md-auto">
-                <button class="btn btn-primary btn-sm" @onclick="LoadAsync">Filtrar</button>
+                <button class="btn btn-primary btn-sm" @onclick="FilterAsync">Filtrar</button>
             </div>
         </div>
     </div>
@@ -120,19 +120,28 @@ else
         @if (_totalInDb == 0)
         {
             <EmptyState Title="No hay mediciones en la base"
-                        Message="No es un fallo al abrir el informe: la tabla NepRecords está vacía (0 filas). Capture datos o importe el histórico de Firestore. Los informes guardados siguen listados, pero no tienen filas que mostrar.">
+                        Message="@(_informeSavedCount > 0
+                            ? $"La tabla de mediciones está vacía (0 filas), aunque el informe recordaba {_informeSavedCount} registros. Pulse «Ver datos» de nuevo tras reimportar el histórico, o capture mediciones."
+                            : "La tabla NepRecords está vacía (0 filas). Capture mediciones o importe el histórico de Firestore.")">
                 <a class="btn btn-primary btn-sm" href="/captura">Ir a captura</a>
                 <a class="btn btn-outline-primary btn-sm" href="/migracion">Migración histórica</a>
+                @if (_openedFromInforme)
+                {
+                    <a class="btn btn-outline-secondary btn-sm" href="/informes">Volver a Informes</a>
+                }
             </EmptyState>
         }
         else
         {
-            <EmptyState Title="Sin resultados en este periodo"
-                        Message="@($"Hay {_totalInDb} mediciones en total, pero ninguna entre {_filterFrom:dd/MM/yyyy} y {_filterTo:dd/MM/yyyy}. Amplíe las fechas y pulse Filtrar.")">
+            <EmptyState Title="Sin resultados con estos filtros"
+                        Message="@BuildFilteredEmptyMessage()">
                 <button type="button" class="btn btn-primary btn-sm" @onclick="ClearDatesAndReloadAsync">
                     Quitar filtro de fechas y ver todo
                 </button>
-                <a class="btn btn-outline-primary btn-sm" href="/captura">Ir a captura</a>
+                <button type="button" class="btn btn-outline-primary btn-sm" @onclick="ClearAllFiltersAndReloadAsync">
+                    Limpiar todos los filtros
+                </button>
+                <a class="btn btn-outline-secondary btn-sm" href="/captura">Ir a captura</a>
             </EmptyState>
         }
     }
@@ -295,6 +304,8 @@ else
     private bool _openedFromInforme;
     private int _totalInDb;
     private int _informeSavedCount;
+    private Guid? _openedReportId;
+    private bool _preferSnapshot;
 
     private NepRecord? _editTarget;
     private string _editTelar = "";
@@ -377,6 +388,15 @@ else
             applied = true;
         }
 
+        if (query.TryGetValue("reportId", out var reportRaw) &&
+            Guid.TryParse(reportRaw.ToString(), out var reportId))
+        {
+            _openedReportId = reportId;
+            _openedFromInforme = true;
+            _preferSnapshot = true;
+            applied = true;
+        }
+
         if (query.TryGetValue("saved", out var savedRaw) &&
             int.TryParse(savedRaw.ToString(), out var savedCount))
         {
@@ -419,7 +439,48 @@ else
         _filterTo = null;
         _openedFromInforme = false;
         _message = "Filtro de fechas quitado. Mostrando mediciones disponibles.";
+        _preferSnapshot = false;
         await LoadAsync();
+    }
+
+    private async Task ClearAllFiltersAndReloadAsync()
+    {
+        _filterTelar = "";
+        _filterTela = "";
+        _filterLote = "";
+        _filterTurno = "";
+        _filterAlert = "";
+        _filterFrom = null;
+        _filterTo = null;
+        _soloPendientes = false;
+        _openedFromInforme = false;
+        _informeSavedCount = 0;
+        _openedReportId = null;
+        _preferSnapshot = false;
+        _message = "Filtros limpiados. Mostrando las mediciones disponibles.";
+        await LoadAsync();
+    }
+
+    private string BuildFilteredEmptyMessage()
+    {
+        var hasDates = IsUsableDate(_filterFrom) || IsUsableDate(_filterTo);
+        var range = hasDates
+            ? $" entre {(_filterFrom ?? _filterTo):dd/MM/yyyy} y {(_filterTo ?? _filterFrom):dd/MM/yyyy}"
+            : "";
+        var saved = _informeSavedCount > 0
+            ? $" El informe recordaba {_informeSavedCount} filas en ese periodo, pero ya no están en la base."
+            : "";
+        return $"Hay {_totalInDb} mediciones en total, pero ninguna coincide con los filtros actuales{range}.{saved} Amplíe fechas o limpie filtros.";
+    }
+
+    /// <summary>InputDate a veces deja DateTime.MinValue; no debe usarse como filtro real.</summary>
+    private static bool IsUsableDate(DateTime? value) =>
+        value is { Year: >= 2000 };
+
+    private Task FilterAsync()
+    {
+        _preferSnapshot = false;
+        return LoadAsync();
     }
 
     private async Task LoadAsync()
@@ -433,12 +494,39 @@ else
         _error = null;
         try
         {
+            // Contar siempre al refrescar: evita estado vacío obsoleto tras captura/migración.
+            _totalInDb = await RecordService.CountAllAsync();
             _config = await AlertConfigRepository.GetAsync();
             AlertLevel? alert = null;
             if (!string.IsNullOrEmpty(_filterAlert) &&
                 Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
             {
                 alert = parsed;
+            }
+
+            if (_preferSnapshot && _openedReportId is Guid reportId)
+            {
+                var snapshot = await Snapshots.LoadSnapshotRecordsAsync(reportId);
+                if (snapshot.Count > 0)
+                {
+                    _records = snapshot;
+                    _totalInDb = await RecordService.CountAllAsync();
+                    _message =
+                        $"Informe abierto: {snapshot.Count} mediciones restauradas y mostradas " +
+                        $"(el informe recordaba {(_informeSavedCount > 0 ? _informeSavedCount : snapshot.Count)} filas).";
+                    return;
+                }
+            }
+
+            // Descarta fechas inválidas que InputDate puede dejar en el modelo.
+            if (!IsUsableDate(_filterFrom))
+            {
+                _filterFrom = null;
+            }
+
+            if (!IsUsableDate(_filterTo))
+            {
+                _filterTo = null;
             }
 
             var filters = new RecordFilters
@@ -473,7 +561,8 @@ else
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _error = $"No se pudieron cargar los registros: {ex.Message}";
+            _records = [];
         }
         finally
         {

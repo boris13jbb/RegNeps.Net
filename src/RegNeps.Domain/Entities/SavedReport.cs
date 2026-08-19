@@ -3,7 +3,7 @@ using RegNeps.Domain.Enums;
 
 namespace RegNeps.Domain.Entities;
 
-/// <summary>Informe guardado (snapshot de filtros + metadatos).</summary>
+/// <summary>Informe guardado (filtros, metadatos y copia de las filas).</summary>
 public sealed class SavedReport
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -18,8 +18,11 @@ public sealed class SavedReport
     /// <summary>Cantidad de registros al momento del guardado.</summary>
     public int RecordCount { get; set; }
 
-    /// <summary>Resumen textual (promedio, críticos, etc.).</summary>
-    public string SummaryText { get; set; } = string.Empty;
+    /// <summary>Resumen visible en la lista de informes.</summary>
+    public string? SummaryText { get; set; }
+
+    /// <summary>Copia JSON de las filas al guardar, para poder reabrir el informe aunque se vacíe la tabla viva.</summary>
+    public string? SnapshotJson { get; set; }
 }
 
 /// <summary>Entrada del catálogo de lotes/trama.</summary>

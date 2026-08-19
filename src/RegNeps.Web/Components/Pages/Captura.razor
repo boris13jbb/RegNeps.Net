@@ -14,11 +14,9 @@
 else
 {
     <div class="capture-page">
-        <PageHeader Title="Captura de registros" Subtitle="Su tabla personal. Guarde informes para compartir con el equipo.">
+        <PageHeader Title="Captura de registros" Subtitle="Anote telar y neps. El resto de consultas está en Registros e Informes.">
             <Actions>
-                <a class="btn btn-sm btn-outline-secondary" href="/telas">Telas</a>
-                <a class="btn btn-sm btn-outline-secondary" href="/lotes">Lotes</a>
-                <a class="btn btn-sm btn-outline-secondary" href="/registros">Filtros</a>
+                <a class="btn btn-sm btn-outline-secondary" href="/registros">Ver registros</a>
                 <button type="button" class="btn btn-sm btn-outline-danger" @onclick="NewSessionAsync">Nueva sesión</button>
             </Actions>
         </PageHeader>
@@ -350,7 +348,9 @@ else
         }
 
         var filters = new RecordFilters { FromUtc = _sessionFromUtc };
-        _sessionRecords = await RecordService.QueryAsync(filters, _session.UserId, viewerSeesAll: false, take: 500);
+        // Sesión personal: solo lo capturado por el usuario actual (aunque sea admin).
+        _sessionRecords = await RecordService.QueryAsync(
+            filters, _session.UserId, viewerSeesAll: false, take: 500);
         _totalNeps = _sessionRecords.Sum(r => r.Neps);
         _totalMts = _sessionRecords.Sum(r => r.MtsCalculados);
         _loomCount = _sessionRecords.Select(r => r.Telar).Distinct(StringComparer.OrdinalIgnoreCase).Count();
@@ -475,9 +475,19 @@ else
             _model.CreatedByRole = _session.EffectiveRole.ToString();
 
             var saved = await RecordService.CreateAsync(_model);
-            var eval = await RecordService.EvaluateAsync(saved.Neps, saved.Telar);
-            _previewLevel = eval.Level;
-            _success = $"Agregado: telar {saved.Telar}, {saved.Neps} neps, {saved.MtsCalculados:0} mts — {eval.Level.ToDisplayLabel()}.";
+            try
+            {
+                var eval = await RecordService.EvaluateAsync(saved.Neps, saved.Telar);
+                _previewLevel = eval.Level;
+                _success = $"Agregado: telar {saved.Telar}, {saved.Neps} neps, {saved.MtsCalculados:0} mts — {eval.Level.ToDisplayLabel()}.";
+            }
+            catch
+            {
+                // La medición ya quedó guardada; no bloquear la UI de sesión por fallo de evaluación.
+                _previewLevel = null;
+                _success = $"Agregado: telar {saved.Telar}, {saved.Neps} neps, {saved.MtsCalculados:0} mts.";
+            }
+
             _model.Telar = "";
             _model.Neps = 0;
             _model.Observacion = "";

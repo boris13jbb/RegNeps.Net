@@ -12,7 +12,7 @@
 }
 else
 {
-    <PageHeader Title="Telas" Subtitle="Catálogo de telas y referencias usadas en captura.">
+    <PageHeader Title="Telas" Subtitle="Catálogo usado al capturar. Los lotes están en la pestaña de al lado.">
         <Actions>
             <InputFile class="form-control form-control-sm" style="max-width: 260px;" OnChange="OnImportFile"
                        accept=".xlsx,.xls" disabled="@_importing" aria-label="Importar telas desde Excel" />
@@ -21,7 +21,9 @@ else
         </Actions>
     </PageHeader>
 
-    @if (!string.IsNullOrEmpty(_error))
+    <HubTabs AriaLabel="Catálogo" Tabs="CatalogoTabs" />
+
+    @if (!string.IsNullOrEmpty(_error) && _editing is null)
     {
         <div class="alert alert-danger" role="alert">@_error</div>
     }
@@ -32,15 +34,15 @@ else
 
     <div class="card border-0 shadow-sm mb-4" style="max-width: 560px;">
         <div class="card-body">
-            <h2 class="h5 card-title">@( _editing is null ? "Nueva tela" : "Editar tela" )</h2>
+            <h2 class="h5 card-title">Nueva tela</h2>
             <div class="row g-2">
                 <div class="col-md-6">
-                    <label class="form-label">Nombre *</label>
-                    <input class="form-control" @bind="_name" />
+                    <label class="form-label" for="tela-nombre">Nombre *</label>
+                    <input id="tela-nombre" class="form-control" @bind="_name" maxlength="128" />
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Código</label>
-                    <input class="form-control" @bind="_code" />
+                    <label class="form-label" for="tela-codigo">Código</label>
+                    <input id="tela-codigo" class="form-control" @bind="_code" maxlength="64" />
                 </div>
                 <div class="col-md-2 d-flex align-items-end">
                     <div class="form-check mb-2">
@@ -49,13 +51,9 @@ else
                     </div>
                 </div>
                 <div class="col-12">
-                    <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@_saving">
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="SaveNewAsync" disabled="@_saving">
                         @(_saving ? "Guardando…" : "Guardar")
                     </button>
-                    @if (_editing is not null)
-                    {
-                        <button class="btn btn-outline-secondary btn-sm ms-2" @onclick="CancelEdit">Cancelar</button>
-                    }
                 </div>
             </div>
             <p class="text-muted small mb-0 mt-2">
@@ -77,7 +75,7 @@ else
             <tbody>
                 @foreach (var f in _list)
                 {
-                    <tr>
+                    <tr class="@(_editing?.Id == f.Id ? "table-active" : null)">
                         <td>@f.Name</td>
                         <td>@(f.Code ?? "—")</td>
                         <td>
@@ -86,14 +84,50 @@ else
                             </StatusBadge>
                         </td>
                         <td class="text-nowrap">
-                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => StartEdit(f)">Editar</button>
-                            <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(f.Id)">Eliminar</button>
+                            <button type="button" class="btn btn-link btn-sm p-0 me-2"
+                                    @onclick="() => StartEdit(f)" @onclick:stopPropagation="true">
+                                Editar
+                            </button>
+                            <button type="button" class="btn btn-link btn-sm text-danger p-0"
+                                    @onclick="() => DeleteAsync(f.Id)" @onclick:stopPropagation="true">
+                                Eliminar
+                            </button>
                         </td>
                     </tr>
                 }
             </tbody>
         </table>
     </div>
+
+    @if (_editing is not null)
+    {
+        <AppModal Title="@($"Editar tela — {_editing.Name}")" OnClose="CancelEdit">
+            <ChildContent>
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="alert alert-danger" role="alert">@_error</div>
+                }
+                <div class="mb-3">
+                    <label class="form-label" for="edit-tela-nombre">Nombre *</label>
+                    <input id="edit-tela-nombre" class="form-control" @bind="_editName" maxlength="128" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="edit-tela-codigo">Código</label>
+                    <input id="edit-tela-codigo" class="form-control" @bind="_editCode" maxlength="64" />
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="edit-tela-activa" @bind="_editIsActive" />
+                    <label class="form-check-label" for="edit-tela-activa">Activa</label>
+                </div>
+            </ChildContent>
+            <Footer>
+                <button type="button" class="btn btn-secondary" @onclick="CancelEdit">Cancelar</button>
+                <button type="button" class="btn btn-primary" @onclick="SaveEditAsync" disabled="@_saving">
+                    @(_saving ? "Guardando…" : "Guardar cambios")
+                </button>
+            </Footer>
+        </AppModal>
+    }
 }
 
 @code {
@@ -102,11 +136,20 @@ else
     private string _name = "";
     private string _code = "";
     private bool _isActive = true;
+    private string _editName = "";
+    private string _editCode = "";
+    private bool _editIsActive = true;
     private Fabric? _editing;
     private bool _saving;
     private bool _importing;
     private string? _error;
     private string? _message;
+
+    private static readonly IReadOnlyList<(string Href, string Label)> CatalogoTabs =
+    [
+        ("/telas", "Telas"),
+        ("/lotes", "Lotes")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -123,9 +166,9 @@ else
     private void StartEdit(Fabric f)
     {
         _editing = f;
-        _name = f.Name;
-        _code = f.Code ?? "";
-        _isActive = f.IsActive;
+        _editName = f.Name;
+        _editCode = f.Code ?? "";
+        _editIsActive = f.IsActive;
         _message = null;
         _error = null;
     }
@@ -133,9 +176,9 @@ else
     private void CancelEdit()
     {
         _editing = null;
-        _name = "";
-        _code = "";
-        _isActive = true;
+        _editName = "";
+        _editCode = "";
+        _editIsActive = true;
     }
 
     private async Task OnImportFile(InputFileChangeEventArgs e)
@@ -188,11 +231,23 @@ else
         }
     }
 
-    private async Task SaveAsync()
+    private Task SaveNewAsync() => PersistAsync(
+        name: _name,
+        code: _code,
+        isActive: _isActive,
+        existing: null);
+
+    private Task SaveEditAsync() => PersistAsync(
+        name: _editName,
+        code: _editCode,
+        isActive: _editIsActive,
+        existing: _editing);
+
+    private async Task PersistAsync(string name, string code, bool isActive, Fabric? existing)
     {
         _error = null;
         _message = null;
-        if (string.IsNullOrWhiteSpace(_name))
+        if (string.IsNullOrWhiteSpace(name))
         {
             _error = "El nombre es obligatorio.";
             return;
@@ -201,26 +256,29 @@ else
         _saving = true;
         try
         {
-            if (_editing is null)
+            if (existing is null)
             {
                 await Fabrics.AddAsync(new Fabric
                 {
-                    Name = _name.Trim(),
-                    Code = string.IsNullOrWhiteSpace(_code) ? null : _code.Trim(),
-                    IsActive = _isActive
+                    Name = name.Trim(),
+                    Code = string.IsNullOrWhiteSpace(code) ? null : code.Trim(),
+                    IsActive = isActive
                 });
                 _message = "Tela creada.";
+                _name = "";
+                _code = "";
+                _isActive = true;
             }
             else
             {
-                _editing.Name = _name.Trim();
-                _editing.Code = string.IsNullOrWhiteSpace(_code) ? null : _code.Trim();
-                _editing.IsActive = _isActive;
-                await Fabrics.UpdateAsync(_editing);
+                existing.Name = name.Trim();
+                existing.Code = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
+                existing.IsActive = isActive;
+                await Fabrics.UpdateAsync(existing);
                 _message = "Tela actualizada.";
+                CancelEdit();
             }
 
-            CancelEdit();
             await LoadAsync();
         }
         catch (Exception ex)

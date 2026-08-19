@@ -11,12 +11,14 @@
 }
 else
 {
-    <PageHeader Title="Lotes de trama" Subtitle="Catálogo de lotes usados en captura de registros.">
+    <PageHeader Title="Lotes de trama" Subtitle="Catálogo usado al capturar. Las telas están en la pestaña de al lado.">
         <Actions>
             <a class="btn btn-outline-secondary btn-sm" href="/api/export/lotes/csv">CSV</a>
             <a class="btn btn-outline-secondary btn-sm" href="/api/export/lotes/xlsx">Excel</a>
         </Actions>
     </PageHeader>
+
+    <HubTabs AriaLabel="Catálogo" Tabs="CatalogoTabs" />
 
     @if (!string.IsNullOrEmpty(_error))
     {
@@ -80,8 +82,14 @@ else
                         </td>
                         <td>@lote.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy")</td>
                         <td class="text-nowrap">
-                            <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => StartEdit(lote)">Editar</button>
-                            <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(lote.Id)">Eliminar</button>
+                            <button type="button" class="btn btn-link btn-sm p-0 me-2"
+                                    @onclick="() => StartEdit(lote)" @onclick:stopPropagation="true">
+                                Editar
+                            </button>
+                            <button type="button" class="btn btn-link btn-sm text-danger p-0"
+                                    @onclick="() => DeleteAsync(lote.Id)" @onclick:stopPropagation="true">
+                                Eliminar
+                            </button>
                         </td>
                     </tr>
                 }
@@ -106,6 +114,12 @@ else
     private bool _saving;
     private string? _error;
     private string? _message;
+
+    private static readonly IReadOnlyList<(string Href, string Label)> CatalogoTabs =
+    [
+        ("/telas", "Telas"),
+        ("/lotes", "Lotes")
+    ];
 
     protected override async Task OnInitializedAsync()
     {

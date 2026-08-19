@@ -6,8 +6,9 @@
 @inject RegNeps.Web.Export.TempExportStore TempStore
 @inject NavigationManager Nav
 @inject IJSRuntime Js
+@inject IReportSnapshotService Snapshots
 
-<PageTitle>Exportar — RegNeps</PageTitle>
+<PageTitle>Informes — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
@@ -16,15 +17,13 @@
 else
 {
     <div class="export-page">
-        <PageHeader Title="Exportar y compartir"
-                    Subtitle="Generar archivos e informes de los registros visibles.">
+        <PageHeader Title="Informes" Subtitle="Elija fechas y descargue CSV, Excel o PDF. Puede guardar el informe para el equipo.">
             <Actions>
-                <span class="export-sync" title="Listo para generar">
-                    <span class="export-sync-dot" aria-hidden="true"></span>
-                    Listo
-                </span>
+                <a class="btn btn-sm btn-outline-secondary" href="/graficas">Ver análisis</a>
             </Actions>
         </PageHeader>
+
+        <HubTabs AriaLabel="Informes" Tabs="@(_canSave ? InformesTabs : ExportOnlyTabs)" />
 
         @if (!string.IsNullOrEmpty(_error))
         {
@@ -235,7 +234,7 @@ else
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
                                 </Icon>
                             </MorphButton>
-                            <p class="export-hint mt-2 mb-3">También puede gestionarlos en <a href="/informes">Informes guardados</a>.</p>
+                            <p class="export-hint mt-2 mb-3">Los informes guardados aparecen en la pestaña <a href="/informes">Guardados</a>.</p>
                         }
                         else
                         {
@@ -274,7 +273,19 @@ else
     private int _visibleCount;
     private string? _error;
     private string? _info;
+    private Guid? _openedReportId;
     private List<ColumnOpt> _columns = DefaultColumns();
+
+    private static readonly IReadOnlyList<(string Href, string Label)> InformesTabs =
+    [
+        ("/informes", "Guardados"),
+        ("/exportar", "Exportar")
+    ];
+
+    private static readonly IReadOnlyList<(string Href, string Label)> ExportOnlyTabs =
+    [
+        ("/exportar", "Exportar")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -301,6 +312,12 @@ else
             _fromLocal = range.FromUtc.ToLocalTime().Date;
             _toLocal = range.ToInclusiveUtc.ToLocalTime().Date;
             _info = $"Filtros recibidos desde Informes: {_fromLocal:dd/MM/yyyy} – {_toLocal:dd/MM/yyyy}.";
+        }
+
+        if (query.TryGetValue("reportId", out var reportRaw) &&
+            Guid.TryParse(reportRaw.ToString(), out var reportId))
+        {
+            _openedReportId = reportId;
         }
 
         if (query.TryGetValue("telar", out var telarRaw) && !string.IsNullOrWhiteSpace(telarRaw))
@@ -337,6 +354,17 @@ else
             {
                 _visibleCount = 0;
                 return;
+            }
+
+            if (_openedReportId is Guid reportId)
+            {
+                var restored = await Snapshots.LoadSnapshotRecordsAsync(reportId);
+                if (restored.Count > 0)
+                {
+                    _visibleCount = restored.Count;
+                    _info = $"Informe abierto: {restored.Count} mediciones restauradas para exportar.";
+                    return;
+                }
             }
 
             var records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 50_000);
@@ -408,6 +436,11 @@ else
         _busyFormat = format;
         try
         {
+            if (_openedReportId is Guid reportId)
+            {
+                await Snapshots.LoadSnapshotRecordsAsync(reportId);
+            }
+
             var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
             var filters = BuildFilters()!;
 

@@ -7,7 +7,7 @@
 @inject TempExportStore TempExports
 @inject IJSRuntime Js
 
-<PageTitle>Gráficas — RegNeps</PageTitle>
+<PageTitle>Análisis — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
@@ -15,7 +15,7 @@
 }
 else
 {
-    <PageHeader Title="Gráficas" Subtitle="Filtre por periodo, telar, tela, lote, turno o alerta y analice la calidad.">
+    <PageHeader Title="Análisis" Subtitle="Filtre por lo que necesita: periodo, telar, tela, lote, turno o alerta.">
         <Actions>
             <div class="d-flex gap-2 flex-wrap align-items-center">
             @if (_summary is not null)
