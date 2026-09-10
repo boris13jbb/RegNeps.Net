@@ -7,6 +7,7 @@ on:
       - feature/android-apk-shell
     paths:
       - 'src/RegNeps.Mobile/**'
+      - 'scripts/build_android_apk.ps1'
       - '.github/workflows/android-apk.yml'
 
 jobs:
@@ -17,14 +18,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Install .NET MAUI Android workload
         shell: pwsh
         run: dotnet workload install maui-android
+
+      - name: Restore Android workload
+        shell: pwsh
+        run: dotnet workload restore src/RegNeps.Mobile/RegNeps.Mobile.csproj
 
       - name: Restore Android project
         shell: pwsh
@@ -32,12 +37,12 @@ jobs:
 
       - name: Build installable QA APK
         shell: pwsh
-        run: dotnet build src/RegNeps.Mobile/RegNeps.Mobile.csproj -f net8.0-android -c Debug -p:AndroidPackageFormat=apk
+        run: dotnet build src/RegNeps.Mobile/RegNeps.Mobile.csproj -f net10.0-android -c Debug -p:AndroidPackageFormat=apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: RegNeps-Android-QA
-          path: src/RegNeps.Mobile/bin/Debug/net8.0-android/**/*.apk
+          path: src/RegNeps.Mobile/bin/Debug/net10.0-android/**/*.apk
           if-no-files-found: error
           retention-days: 14
