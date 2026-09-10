@@ -367,7 +367,8 @@ else
                 }
             }
 
-            var records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 50_000);
+            var records = await RecordService.QueryAsync(
+                filters, _session.ToActor(), RecordQueryScope.Default, 50_000);
             _visibleCount = records.Count;
         }
         catch

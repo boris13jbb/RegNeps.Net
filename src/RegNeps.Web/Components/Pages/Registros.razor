@@ -557,7 +557,8 @@ else
             var take = filters.FromUtc is not null || filters.ToExclusiveUtc is not null || filters.ToUtc is not null
                 ? 50_000
                 : 1_000;
-            _records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, take);
+            _records = await RecordService.QueryAsync(
+                filters, _session.ToActor(), RecordQueryScope.Default, take);
         }
         catch (Exception ex)
         {
@@ -634,8 +635,9 @@ else
                 Turno = _editTurno,
                 Operario = _editOperario,
                 LineaProduccion = _editLinea,
-                Observacion = _editObservacion
-            });
+                Observacion = _editObservacion,
+                ExpectedConcurrencyStamp = _editTarget.ConcurrencyStamp
+            }, _session!.ToActor());
             _message = "Registro actualizado.";
             CloseEdit();
             await LoadAsync();
@@ -679,7 +681,7 @@ else
                 Accion = _accion,
                 Responsable = _responsable,
                 MarcarRevisado = _marcarRevisado
-            });
+            }, _session!.ToActor());
             CloseCorrective();
             await LoadAsync();
         }
@@ -704,7 +706,7 @@ else
         _message = null;
         try
         {
-            await RecordService.ClearAllAsync();
+            await RecordService.ClearAllAsync(_session!.ToActor());
             _totalInDb = 0;
             _message =
                 "Todas las mediciones fueron eliminadas. Los informes guardados siguen existiendo, " +
@@ -726,7 +728,7 @@ else
 
         try
         {
-            await RecordService.DeleteAsync(id);
+            await RecordService.DeleteAsync(id, _session!.ToActor());
             await LoadAsync();
         }
         catch (Exception ex)

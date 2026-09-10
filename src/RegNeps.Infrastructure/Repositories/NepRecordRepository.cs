@@ -10,16 +10,20 @@ namespace RegNeps.Infrastructure.Repositories;
 
 public sealed class NepRecordRepository : INepRecordRepository
 {
-    private readonly RegNepsDbContext _db;
+    private readonly IDbContextFactory<RegNepsDbContext> _factory;
 
-    public NepRecordRepository(RegNepsDbContext db) => _db = db;
+    public NepRecordRepository(IDbContextFactory<RegNepsDbContext> factory) =>
+        _factory = factory;
 
-    public async Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default) =>
-        await _db.NepRecords
+    public async Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords
             .AsNoTracking()
             .OrderByDescending(r => r.CreatedAt)
             .Take(take)
             .ToListAsync(ct);
+    }
 
     public async Task<IReadOnlyList<NepRecord>> QueryAsync(
         RecordFilters filters,
@@ -31,20 +35,27 @@ public sealed class NepRecordRepository : INepRecordRepository
         filters ??= new RecordFilters();
         ReportDateRange.EnsureConsolidatedRange(filters);
 
+        // Fail-closed: consulta personal sin usuario válido nunca se convierte en global.
+        if (!viewerSeesAll && string.IsNullOrWhiteSpace(viewerUserId))
+        {
+            return Array.Empty<NepRecord>();
+        }
+
         var hasDateRange = filters.FromUtc is not null
             || filters.ToExclusiveUtc is not null
             || filters.ToUtc is not null;
         var maxTake = hasDateRange ? 50_000 : 10_000;
         take = Math.Clamp(take, 1, maxTake);
 
-        var query = _db.NepRecords.AsNoTracking().AsQueryable();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = db.NepRecords.AsNoTracking().AsQueryable();
 
-        if (!viewerSeesAll && !string.IsNullOrWhiteSpace(viewerUserId))
+        if (!viewerSeesAll)
         {
             string? externalUid = null;
             if (Guid.TryParse(viewerUserId, out var viewerGuid))
             {
-                externalUid = await _db.Users.AsNoTracking()
+                externalUid = await db.Users.AsNoTracking()
                     .Where(u => u.Id == viewerGuid)
                     .Select(u => u.ExternalUserId)
                     .FirstOrDefaultAsync(ct);
@@ -59,6 +70,12 @@ public sealed class NepRecordRepository : INepRecordRepository
             {
                 query = query.Where(r => r.CreatedByUserId == viewerUserId);
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(filters.CaptureSessionId))
+        {
+            var sessionId = filters.CaptureSessionId.Trim();
+            query = query.Where(r => r.CaptureSessionId == sessionId);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Telar))
@@ -121,7 +138,6 @@ public sealed class NepRecordRepository : INepRecordRepository
             query = query.Where(r => r.Neps <= filters.NepsMax.Value);
         }
 
-        // Mts = Neps / TestLengthM → filtrar por neps equivalentes (traducible a SQL).
         if (filters.MtsMin is not null)
         {
             var nepsMin = filters.MtsMin.Value * NepsConstants.TestLengthM;
@@ -160,14 +176,11 @@ public sealed class NepRecordRepository : INepRecordRepository
                 : query.Where(r => r.AccionCorrectiva == null || r.AccionCorrectiva == string.Empty);
         }
 
-        // Umbrales en SQL (antes del Take). Evita filtrar alerta en memoria sobre un subconjunto truncado.
         if (filters.AlertLevel is not null || filters.SoloPendientes)
         {
-            var config = await _db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
+            var config = await db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
             if (config.AlertasActivas)
             {
-                // Equivalente a Math.Round(neps, AwayFromZero) para neps >= 0:
-                // Round(x) <= L  ⇔  x < L + 0.5
                 var normalExclusive = config.LimiteNormalMax + 0.5;
                 var warningExclusive = config.LimiteAdvertenciaMax + 0.5;
 
@@ -196,7 +209,6 @@ public sealed class NepRecordRepository : INepRecordRepository
             }
         }
 
-        // Listados: más recientes primero. Exports/Analytics reordenan si lo necesitan.
         return await query
             .OrderByDescending(r => r.CreatedAt)
             .ThenBy(r => r.Telar)
@@ -204,43 +216,144 @@ public sealed class NepRecordRepository : INepRecordRepository
             .ToListAsync(ct);
     }
 
-    public Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
-        _db.NepRecords
+    public async Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords
+            .AsNoTracking()
             .Include(r => r.HistorialAcciones)
             .FirstOrDefaultAsync(r => r.Id == id, ct);
+    }
+
+    public async Task<NepRecord?> FindByClientOperationAsync(
+        string userId,
+        string clientOperationId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(clientOperationId))
+        {
+            return null;
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r =>
+                r.CreatedByUserId == userId && r.ClientOperationId == clientOperationId, ct);
+    }
 
     public async Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default)
     {
-        _db.NepRecords.Add(record);
-        await _db.SaveChangesAsync(ct);
-        return record;
+        if (string.IsNullOrWhiteSpace(record.ConcurrencyStamp))
+        {
+            record.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+        }
+
+        if (record.Id == Guid.Empty)
+        {
+            record.Id = Guid.NewGuid();
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        db.NepRecords.Add(record);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return record;
+        }
+        catch (DbUpdateException) when (!string.IsNullOrWhiteSpace(record.ClientOperationId)
+                                        && !string.IsNullOrWhiteSpace(record.CreatedByUserId))
+        {
+            // Contexto limpio: el Add fallido deja el tracker en estado inconsistente.
+            await using var read = await _factory.CreateDbContextAsync(ct);
+            var existing = await read.NepRecords
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r =>
+                    r.CreatedByUserId == record.CreatedByUserId
+                    && r.ClientOperationId == record.ClientOperationId, ct);
+            if (existing is not null)
+            {
+                return existing;
+            }
+
+            throw;
+        }
     }
 
     public async Task UpdateAsync(NepRecord record, CancellationToken ct = default)
     {
-        record.UpdatedAt = DateTime.UtcNow;
-        _db.NepRecords.Update(record);
-        await _db.SaveChangesAsync(ct);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var entity = await db.NepRecords
+            .Include(r => r.HistorialAcciones)
+            .FirstOrDefaultAsync(r => r.Id == record.Id, ct)
+            ?? throw new InvalidOperationException("Registro no encontrado.");
+
+        if (!string.Equals(entity.ConcurrencyStamp, record.ConcurrencyStamp, StringComparison.Ordinal))
+        {
+            throw new Application.Records.RecordConcurrencyConflictException(
+                "El registro fue modificado por otro usuario.");
+        }
+
+        entity.Telar = record.Telar;
+        entity.Neps = record.Neps;
+        entity.Tela = record.Tela;
+        entity.LoteTrama = record.LoteTrama;
+        entity.Turno = record.Turno;
+        entity.Operario = record.Operario;
+        entity.LineaProduccion = record.LineaProduccion;
+        entity.Observacion = record.Observacion;
+        entity.RevisadoPorSupervisor = record.RevisadoPorSupervisor;
+        entity.AccionCorrectiva = record.AccionCorrectiva;
+        entity.ResponsableRevision = record.ResponsableRevision;
+        entity.FechaRevision = record.FechaRevision;
+        entity.UpdatedAt = DateTime.UtcNow;
+        entity.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+
+        // Sincronizar historial de acciones si el caller añadió entradas nuevas.
+        foreach (var entry in record.HistorialAcciones)
+        {
+            if (entry.Id == Guid.Empty || entity.HistorialAcciones.All(h => h.Id != entry.Id))
+            {
+                entity.HistorialAcciones.Add(entry);
+            }
+        }
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            record.ConcurrencyStamp = entity.ConcurrencyStamp;
+            record.UpdatedAt = entity.UpdatedAt;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new Application.Records.RecordConcurrencyConflictException(
+                "El registro fue modificado por otro usuario.");
+        }
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
-        var entity = await _db.NepRecords.FindAsync([id], ct);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var entity = await db.NepRecords.FindAsync([id], ct);
         if (entity is null)
         {
             return;
         }
 
-        _db.NepRecords.Remove(entity);
-        await _db.SaveChangesAsync(ct);
+        db.NepRecords.Remove(entity);
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task ClearAllAsync(CancellationToken ct = default)
     {
-        await _db.CorrectiveActions.ExecuteDeleteAsync(ct);
-        await _db.NepRecords.ExecuteDeleteAsync(ct);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.CorrectiveActions.ExecuteDeleteAsync(ct);
+        await db.NepRecords.ExecuteDeleteAsync(ct);
     }
 
-    public Task<int> CountAsync(CancellationToken ct = default) =>
-        _db.NepRecords.CountAsync(ct);
+    public async Task<int> CountAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords.CountAsync(ct);
+    }
 }

@@ -85,7 +85,14 @@ public class RecordFilterTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    private NepRecordRepository CreateRepo() => new(new RegNepsDbContext(_options));
+    private NepRecordRepository CreateRepo() => new(new TestDbFactory(_options));
+
+    private sealed class TestDbFactory : IDbContextFactory<RegNepsDbContext>
+    {
+        private readonly DbContextOptions<RegNepsDbContext> _options;
+        public TestDbFactory(DbContextOptions<RegNepsDbContext> options) => _options = options;
+        public RegNepsDbContext CreateDbContext() => new(_options);
+    }
 
     [Fact]
     public async Task AlertLevel_Critico_Is_Applied_In_Sql_Before_Take()

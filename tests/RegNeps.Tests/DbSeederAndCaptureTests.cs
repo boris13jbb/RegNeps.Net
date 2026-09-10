@@ -80,10 +80,11 @@ public class DbSeederAndCaptureTests : IAsyncLifetime
     [Fact]
     public async Task Create_Rejects_Zero_And_Negative_Neps()
     {
-        await using var db = CreateDb();
-        var records = new NepRecordRepository(db);
-        var alerts = new AlertConfigRepository(db);
-        var service = new NepRecordService(records, alerts);
+        var factory = new TestDbFactory(_options);
+        var service = new NepRecordService(
+            new NepRecordRepository(factory),
+            new AlertConfigRepository(factory.CreateDbContext()));
+        var actor = RecordActor.Create(Guid.NewGuid().ToString(), "op", "op", AppUserRole.Operario, false);
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(new CreateNepRecordRequest
         {
@@ -92,7 +93,7 @@ public class DbSeederAndCaptureTests : IAsyncLifetime
             Tela = "A",
             Turno = "1",
             Operario = "op"
-        }));
+        }, actor));
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(new CreateNepRecordRequest
         {
@@ -101,16 +102,17 @@ public class DbSeederAndCaptureTests : IAsyncLifetime
             Tela = "A",
             Turno = "1",
             Operario = "op"
-        }));
+        }, actor));
     }
 
     [Fact]
     public async Task Create_Persists_Valid_Record_With_Meters()
     {
-        await using var db = CreateDb();
-        var records = new NepRecordRepository(db);
-        var alerts = new AlertConfigRepository(db);
-        var service = new NepRecordService(records, alerts);
+        var factory = new TestDbFactory(_options);
+        var service = new NepRecordService(
+            new NepRecordRepository(factory),
+            new AlertConfigRepository(factory.CreateDbContext()));
+        var actor = RecordActor.Create(Guid.NewGuid().ToString(), "juan", "juan", AppUserRole.Operario, false);
 
         var saved = await service.CreateAsync(new CreateNepRecordRequest
         {
@@ -119,10 +121,19 @@ public class DbSeederAndCaptureTests : IAsyncLifetime
             Tela = "Denim",
             Turno = "A",
             Operario = "juan",
-            LoteTrama = "63E26401"
-        });
+            LoteTrama = "63E26401",
+            ClientOperationId = Guid.NewGuid().ToString("N")
+        }, actor);
 
         Assert.Equal(100, saved.MtsCalculados, precision: 6);
+        await using var db = CreateDb();
         Assert.Equal(1, await db.NepRecords.CountAsync());
+    }
+
+    private sealed class TestDbFactory : IDbContextFactory<RegNepsDbContext>
+    {
+        private readonly DbContextOptions<RegNepsDbContext> _options;
+        public TestDbFactory(DbContextOptions<RegNepsDbContext> options) => _options = options;
+        public RegNepsDbContext CreateDbContext() => new(_options);
     }
 }

@@ -407,7 +407,7 @@
         try
         {
             _config = await AlertConfigRepository.GetAsync();
-            var alerts = await RecordService.GetAlertsAsync(_session.UserId, _session.SeesAllRecords);
+            var alerts = await RecordService.GetAlertsAsync(_session.ToActor());
             _items = alerts.Select(MapItem).ToList();
             ApplySeenFlags();
         }

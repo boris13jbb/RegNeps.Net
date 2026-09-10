@@ -129,7 +129,7 @@ else
         try
         {
             _config = await AlertConfigRepository.GetAsync();
-            _alerts = await RecordService.GetAlertsAsync(_session.UserId, _session.SeesAllRecords);
+            _alerts = await RecordService.GetAlertsAsync(_session.ToActor());
         }
         finally
         {
@@ -163,7 +163,7 @@ else
                 Accion = _accion,
                 Responsable = _responsable,
                 MarcarRevisado = true
-            });
+            }, _session!.ToActor());
             CloseCorrective();
             await LoadAsync();
         }

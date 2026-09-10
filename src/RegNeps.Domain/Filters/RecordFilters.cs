@@ -27,4 +27,10 @@ public sealed class RecordFilters
     public bool? RevisadoPorSupervisor { get; set; }
     public bool? ConAccionCorrectiva { get; set; }
     public bool SoloPendientes { get; set; }
+
+    /// <summary>
+    /// Filtra por sesión de captura (usuario + CaptureSessionId).
+    /// No incluye históricos con CaptureSessionId NULL.
+    /// </summary>
+    public string? CaptureSessionId { get; set; }
 }

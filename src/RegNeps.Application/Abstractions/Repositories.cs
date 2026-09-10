@@ -10,6 +10,7 @@ public interface INepRecordRepository
     Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default);
     Task<IReadOnlyList<NepRecord>> QueryAsync(RecordFilters filters, string? viewerUserId, bool viewerSeesAll, int take = 500, CancellationToken ct = default);
     Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<NepRecord?> FindByClientOperationAsync(string userId, string clientOperationId, CancellationToken ct = default);
     Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default);
     Task UpdateAsync(NepRecord record, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
@@ -27,7 +28,10 @@ public interface IFabricRepository
 {
     Task<IReadOnlyList<Fabric>> GetActiveAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Fabric>> GetAllAsync(CancellationToken ct = default);
+    Task<Fabric?> FindByNameAsync(string name, CancellationToken ct = default);
     Task<Fabric> AddAsync(Fabric fabric, CancellationToken ct = default);
+    /// <summary>Inserta o reutiliza una tela por nombre (carrera segura entre usuarios).</summary>
+    Task<Fabric> EnsureActiveByNameAsync(string name, CancellationToken ct = default);
     Task UpdateAsync(Fabric fabric, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
@@ -66,6 +70,8 @@ public interface ILoteTramaRepository
     Task<IReadOnlyList<LoteTramaItem>> GetAllAsync(CancellationToken ct = default);
     Task<LoteTramaItem?> FindByCodeAsync(string code, CancellationToken ct = default);
     Task<LoteTramaItem> AddAsync(LoteTramaItem item, CancellationToken ct = default);
+    /// <summary>Inserta o reutiliza un lote por código (carrera segura entre usuarios).</summary>
+    Task<LoteTramaItem> EnsureActiveByCodeAsync(string code, CancellationToken ct = default);
     Task UpdateAsync(LoteTramaItem item, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }

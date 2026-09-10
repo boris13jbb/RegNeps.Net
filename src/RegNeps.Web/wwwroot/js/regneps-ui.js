@@ -159,6 +159,34 @@ window.regnepsUi = (function () {
             } catch (_) {
                 /* storage lleno o modo privado */
             }
+        },
+
+        /** Sesión de captura activa por usuario (recuperación al volver a /captura). */
+        getCaptureSessionId: function (userId) {
+            if (!userId) {
+                return null;
+            }
+            try {
+                return sessionStorage.getItem('regneps.captureSession.' + userId);
+            } catch (_) {
+                return null;
+            }
+        },
+
+        setCaptureSessionId: function (userId, sessionId) {
+            if (!userId) {
+                return;
+            }
+            try {
+                var key = 'regneps.captureSession.' + userId;
+                if (!sessionId) {
+                    sessionStorage.removeItem(key);
+                    return;
+                }
+                sessionStorage.setItem(key, sessionId);
+            } catch (_) {
+                /* storage no disponible */
+            }
         }
     };
 })();

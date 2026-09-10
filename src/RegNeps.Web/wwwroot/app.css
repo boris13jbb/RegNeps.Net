@@ -46,7 +46,7 @@
 
     /* Shell */
     --rn-sidebar-bg: #0b1727;
-    --rn-sidebar-width: 270px;
+    --rn-sidebar-width: 240px;
     --rn-sidebar-collapsed-width: 4.75rem;
     --rn-topbar-height: 4.25rem;
 
@@ -834,13 +834,48 @@ html.rn-modal-open body {
 
 .rn-modal-root .modal-dialog {
     pointer-events: auto;
-    margin: 1.75rem auto;
+    margin: 1rem auto;
+    width: calc(100% - 1.5rem);
+    max-width: min(36rem, calc(100% - 1.5rem));
+    max-height: calc(100dvh - 2rem);
 }
 
 .rn-modal-root .modal-content {
     border: 1px solid transparent;
     border-radius: var(--rn-radius-lg);
     box-shadow: var(--rn-shadow-lg);
+    max-height: calc(100dvh - 2rem);
+}
+
+.rn-modal-root .modal-body {
+    overflow-y: auto;
+}
+
+@media (max-width: 575.98px) {
+    .rn-modal-root .modal-dialog {
+        margin: 0.5rem;
+        width: calc(100% - 1rem);
+        max-width: calc(100% - 1rem);
+    }
+
+    .rn-modal-root .modal-footer {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+}
+
+/* Contraste menú: NavLink no hereda CSS scoped sin ::deep; refuerzo global */
+.app-sidebar a.sidebar-link {
+    color: rgba(255, 255, 255, 0.92);
+}
+
+.app-sidebar a.sidebar-link:hover,
+.app-sidebar a.sidebar-link:focus-visible {
+    color: #fff;
+}
+
+.app-sidebar a.sidebar-link.active {
+    color: #fff;
 }
 
 /* ----- Result / metric summary (migración, reportes) ----- */

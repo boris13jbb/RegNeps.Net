@@ -18,7 +18,7 @@
     z-index: 50;
     display: flex;
     flex-direction: column;
-    width: var(--rn-sidebar-width, 270px);
+    width: var(--rn-sidebar-width, 240px);
     height: 100vh;
     background: #0b1727;
     border-right: none;
@@ -33,7 +33,7 @@
     transform: translateX(0);
 }
 
-@media (min-width: 992px) {
+@media (min-width: 768px) {
     .app-sidebar {
         transform: none;
     }
@@ -49,7 +49,7 @@
         display: none;
     }
 
-    .app-sidebar.is-collapsed .sidebar-link {
+    .app-sidebar.is-collapsed ::deep .sidebar-link {
         justify-content: center;
         padding-left: 0.65rem;
         padding-right: 0.65rem;
@@ -159,35 +159,38 @@
     gap: 0.12rem;
 }
 
-.sidebar-link {
+/* ::deep: NavLink renderiza <a> sin atributo de scope de Blazor */
+::deep .sidebar-link {
     display: flex;
     align-items: center;
     gap: 0.75rem;
     padding: 0.62rem 0.85rem;
     border-radius: 0.65rem;
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 0.9rem;
+    /* Contraste alto sobre fondo #0b1727 (evita azul de app.css en <a>) */
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 0.95rem;
     font-weight: 500;
     text-decoration: none;
+    min-height: 2.75rem;
     transition: background 0.15s ease, color 0.15s ease;
 }
 
-.nav-icon {
+::deep .sidebar-link .nav-icon {
     display: inline-flex;
     flex-shrink: 0;
     width: 1.25rem;
     height: 1.25rem;
-    opacity: 0.85;
+    opacity: 0.95;
     color: inherit;
 }
 
-.nav-label {
+::deep .sidebar-link .nav-label {
     min-width: 0;
     line-height: 1.25;
 }
 
-.sidebar-link:hover {
-    background: rgba(255, 255, 255, 0.06);
+::deep .sidebar-link:hover {
+    background: rgba(255, 255, 255, 0.1);
     color: #fff;
     text-decoration: none;
 }
@@ -205,9 +208,9 @@
     color: #fff;
 }
 
-.sidebar-link:focus-visible {
-    outline: 2px solid #3b82f6;
-    outline-offset: 1px;
+::deep .sidebar-link:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 2px;
 }
 
 .sidebar-footer {
@@ -292,7 +295,7 @@
     color: #fff;
 }
 
-@media (min-width: 992px) {
+@media (min-width: 768px) {
     .sidebar-collapse-btn {
         display: inline-flex;
     }
@@ -311,9 +314,9 @@
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
 }
 
-@media (min-width: 992px) {
+@media (min-width: 768px) {
     .app-topbar {
-        left: var(--rn-sidebar-width, 270px);
+        left: var(--rn-sidebar-width, 240px);
     }
 }
 
@@ -496,7 +499,7 @@
     transform: rotate(135deg);
 }
 
-@media (min-width: 992px) {
+@media (min-width: 768px) {
     .mobile-toggle {
         display: none;
     }
@@ -516,7 +519,7 @@
     cursor: pointer;
 }
 
-@media (min-width: 992px) {
+@media (min-width: 768px) {
     .mobile-backdrop,
     .mobile-toggle-input:checked ~ .mobile-backdrop {
         display: none !important;

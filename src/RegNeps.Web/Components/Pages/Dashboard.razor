@@ -338,7 +338,8 @@ else
             var range = ReportDateRange.FromLocalCalendarDates(fromUtc.ToLocalTime().Date, toUtc.ToLocalTime().Date);
             var filters = new RecordFilters();
             range.ApplyTo(filters);
-            var records = await RecordService.QueryAsync(filters, _session.UserId, _session.SeesAllRecords, 50_000);
+            var records = await RecordService.QueryAsync(
+                filters, _session.ToActor(), RecordQueryScope.Default, 50_000);
             _pendientes = records.Count(r => r.RequiereSeguimiento(_config));
             _ultimos = records
                 .OrderByDescending(r => r.CreatedAt)
@@ -348,7 +349,8 @@ else
             var prevRange = ReportDateRange.FromLocalCalendarDates(prevFrom.ToLocalTime().Date, prevTo.ToLocalTime().Date.AddDays(-1));
             var prevFilters = new RecordFilters();
             prevRange.ApplyTo(prevFilters);
-            var prevRecords = await RecordService.QueryAsync(prevFilters, _session.UserId, _session.SeesAllRecords, 50_000);
+            var prevRecords = await RecordService.QueryAsync(
+                prevFilters, _session.ToActor(), RecordQueryScope.Default, 50_000);
             _prevPendientes = prevRecords.Count(r => r.RequiereSeguimiento(_config));
 
             _currentPage = 1;

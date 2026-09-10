@@ -474,5 +474,6 @@ static UserSession SessionFrom(ClaimsPrincipal user)
     var display = user.FindFirstValue(AuthClaims.DisplayName) ?? username;
     Enum.TryParse<AppUserRole>(user.FindFirstValue(AuthClaims.Role), out var role);
     var isSuper = IsSuperAdminUser(user);
-    return new UserSession(id, username, display, role, isSuper);
+    var external = user.FindFirstValue(AuthClaims.ExternalUserId);
+    return new UserSession(id, username, display, role, isSuper, external);
 }
