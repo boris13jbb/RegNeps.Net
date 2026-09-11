@@ -20,3 +20,12 @@ node_modules/
 secrets/
 *-firebase-adminsdk-*.json
 FTS/firestore_export.json
+
+# Artefactos Android y credenciales de firma (nunca versionar)
+apk/
+*.apk
+*.aab
+*.keystore
+*.jks
+*.pfx
+*.sqlite

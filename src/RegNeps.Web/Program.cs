@@ -103,32 +103,20 @@ app.MapPost("/api/login", async (
     [FromForm] string username,
     [FromForm] string password) =>
 {
-    // #region agent log
-    DebugSessionLog.Write("H1", "Program.cs:login", "login_attempt", new { hasUser = !string.IsNullOrWhiteSpace(username) });
-    // #endregion
     try
     {
         var user = await auth.LoginAsync(username, password);
         await AuthClaims.SignInAsync(http, user);
-        // #region agent log
-        DebugSessionLog.Write("H1", "Program.cs:login", "login_ok", new { role = user.EffectiveRole.ToString(), isSuper = user.IsSuperAdmin });
-        // #endregion
         return Results.Redirect("/");
     }
     catch (Exception)
     {
-        // #region agent log
-        DebugSessionLog.Write("H1", "Program.cs:login", "login_fail", new { });
-        // #endregion
         return Results.Redirect("/login?error=1");
     }
 }).DisableAntiforgery().AllowAnonymous();
 
 app.MapPost("/api/logout", async (HttpContext http) =>
 {
-    // #region agent log
-    DebugSessionLog.Write("H2", "Program.cs:logout", "logout_post", new { auth = http.User.Identity?.IsAuthenticated == true });
-    // #endregion
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 }).DisableAntiforgery().RequireAuthorization();
@@ -136,9 +124,6 @@ app.MapPost("/api/logout", async (HttpContext http) =>
 // Compatibilidad con enlaces antiguos; no cierra sesión sin autenticación activa.
 app.MapGet("/api/logout", async (HttpContext http) =>
 {
-    // #region agent log
-    DebugSessionLog.Write("H2", "Program.cs:logout", "logout_get", new { auth = http.User.Identity?.IsAuthenticated == true });
-    // #endregion
     if (http.User.Identity?.IsAuthenticated == true)
     {
         await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
@@ -340,9 +325,6 @@ app.MapGet("/api/export/temp/{id:guid}", async (
     }
 
     var ownerId = http.User.FindFirstValue(AuthClaims.UserId);
-    // #region agent log
-    DebugSessionLog.Write("H3", "Program.cs:temp-export", "temp_take", new { hasOwner = !string.IsNullOrEmpty(ownerId) });
-    // #endregion
     if (!store.TryTake(id, ownerId, out var entry) || entry is null)
     {
         return Results.NotFound("El archivo temporal expiró, no existe o no le pertenece. Genere el export de nuevo.");
@@ -426,9 +408,6 @@ app.MapPost("/api/migration/import", async (
     // Migración restringida a superadministrador (no solo ManageUsers).
     if (!IsSuperAdminUser(http.User))
     {
-        // #region agent log
-        DebugSessionLog.Write("H4", "Program.cs:migration", "migration_forbidden", new { });
-        // #endregion
         return Results.Forbid();
     }
 
@@ -448,9 +427,6 @@ app.MapPost("/api/migration/import", async (
         return Results.BadRequest("Solo se aceptan archivos .json.");
     }
 
-    // #region agent log
-    DebugSessionLog.Write("H4", "Program.cs:migration", "migration_start", new { size = file.Length });
-    // #endregion
     await using var stream = file.OpenReadStream();
     var result = await migration.ImportFromJsonAsync(stream, tempPassword);
     return Results.Json(result);
