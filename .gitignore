@@ -11,3 +11,12 @@ App_Data/
 *.db-wal
 appsettings.Development.json
 *.log
+
+## Node (export Firestore)
+scripts/node_modules/
+node_modules/
+
+## Credenciales y exports reales (el sample sí se versiona)
+secrets/
+*-firebase-adminsdk-*.json
+FTS/firestore_export.json

@@ -22,7 +22,7 @@ public static class RolePermissions
                 AppPermission.ViewDashboard, AppPermission.CaptureRecords, AppPermission.ViewRecords,
                 AppPermission.EditRecords, AppPermission.DeleteRecords, AppPermission.ClearAllRecords,
                 AppPermission.ViewAlerts, AppPermission.ApplyCorrectiveAction, AppPermission.ManageFabrics,
-                AppPermission.ManageReports, AppPermission.ExportReports,
+                AppPermission.ManageReports, AppPermission.ExportReports, AppPermission.EditAlertConfig,
                 AppPermission.ViewSettings, AppPermission.ManageSettings
             ],
             [AppUserRole.Supervisor] =

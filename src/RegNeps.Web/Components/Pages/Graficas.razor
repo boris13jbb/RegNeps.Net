@@ -7,38 +7,17 @@
 @inject TempExportStore TempExports
 @inject IJSRuntime Js
 
-<PageTitle>Gráficas — RegNeps</PageTitle>
+<PageTitle>Análisis — RegNeps</PageTitle>
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para ver gráficas.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para ver gráficas.</div>
 }
 else
 {
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h1 class="mb-0">Gráficas</h1>
-        <div class="d-flex gap-2 flex-wrap align-items-end">
-            <div>
-                <label class="form-label small mb-0">Periodo</label>
-                <select class="form-select form-select-sm" @bind="_periodDays" @bind:after="LoadAsync">
-                    <option value="7">Últimos 7 días</option>
-                    <option value="30">Últimos 30 días</option>
-                    <option value="90">Últimos 90 días</option>
-                    <option value="0">Personalizado</option>
-                </select>
-            </div>
-            @if (_periodDays == 0)
-            {
-                <div>
-                    <label class="form-label small mb-0">Desde</label>
-                    <InputDate class="form-control form-control-sm" @bind-Value="_fromLocal" />
-                </div>
-                <div>
-                    <label class="form-label small mb-0">Hasta</label>
-                    <InputDate class="form-control form-control-sm" @bind-Value="_toLocal" />
-                </div>
-                <button class="btn btn-primary btn-sm" @onclick="LoadAsync">Aplicar</button>
-            }
+    <PageHeader Title="Análisis" Subtitle="Filtre por lo que necesita: periodo, telar, tela, lote, turno o alerta.">
+        <Actions>
+            <div class="d-flex gap-2 flex-wrap align-items-center">
             @if (_summary is not null)
             {
                 <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl("csv")">CSV</a>
@@ -51,54 +30,157 @@ else
                     Gráfico PNG
                 </button>
             }
+            </div>
+        </Actions>
+    </PageHeader>
+
+    <div class="rn-filters mb-3" style="max-width: 1100px;">
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+            <span class="rn-field-label mb-0">Agrupar tendencia</span>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Agrupación temporal">
+                <button type="button" class="btn @(_grouping == ChartTimeGrouping.Day ? "btn-primary" : "btn-outline-primary")"
+                        @onclick="() => SetGroupingAsync(ChartTimeGrouping.Day)">Día</button>
+                <button type="button" class="btn @(_grouping == ChartTimeGrouping.Week ? "btn-primary" : "btn-outline-primary")"
+                        @onclick="() => SetGroupingAsync(ChartTimeGrouping.Week)">Semana</button>
+                <button type="button" class="btn @(_grouping == ChartTimeGrouping.Month ? "btn-primary" : "btn-outline-primary")"
+                        @onclick="() => SetGroupingAsync(ChartTimeGrouping.Month)">Mes</button>
+                <button type="button" class="btn @(_grouping == ChartTimeGrouping.Year ? "btn-primary" : "btn-outline-primary")"
+                        @onclick="() => SetGroupingAsync(ChartTimeGrouping.Year)">Año</button>
+            </div>
         </div>
+
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-periodo">Periodo</label>
+                <select id="graficas-periodo" class="form-select form-select-sm" @bind="_periodDays" @bind:after="OnPeriodChangedAsync">
+                    <option value="7">Últimos 7 días</option>
+                    <option value="30">Últimos 30 días</option>
+                    <option value="90">Últimos 90 días</option>
+                    <option value="365">Último año</option>
+                    <option value="0">Rango personalizado</option>
+                    <option value="-1">Todo el histórico</option>
+                </select>
+            </div>
+            @if (_periodDays == 0)
+            {
+                <div class="col-6 col-md-2">
+                    <label class="rn-field-label" for="graficas-desde">Desde</label>
+                    <InputDate id="graficas-desde" class="form-control form-control-sm" @bind-Value="_fromLocal" />
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="rn-field-label" for="graficas-hasta">Hasta</label>
+                    <InputDate id="graficas-hasta" class="form-control form-control-sm" @bind-Value="_toLocal" />
+                </div>
+            }
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-telar">Telar</label>
+                <input id="graficas-telar" class="form-control form-control-sm" @bind="_filterTelar" placeholder="Ej. 912" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-tela">Tela</label>
+                <input id="graficas-tela" class="form-control form-control-sm" @bind="_filterTela" placeholder="Nombre tela" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-lote">Lote</label>
+                <input id="graficas-lote" class="form-control form-control-sm" @bind="_filterLote" placeholder="Lote trama" />
+            </div>
+            <div class="col-6 col-md-1">
+                <label class="rn-field-label" for="graficas-turno">Turno</label>
+                <select id="graficas-turno" class="form-select form-select-sm" @bind="_filterTurno">
+                    <option value="">Todos</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-alerta">Alerta</label>
+                <select id="graficas-alerta" class="form-select form-select-sm" @bind="_filterAlert">
+                    <option value="">Todas</option>
+                    <option value="Normal">Normal</option>
+                    <option value="Advertencia">Advertencia</option>
+                    <option value="Critico">Crítico</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-operario">Operario</label>
+                <input id="graficas-operario" class="form-control form-control-sm" @bind="_filterOperario" placeholder="Opcional" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="graficas-ranking-telar">Ranking telar</label>
+                <select id="graficas-ranking-telar" class="form-select form-select-sm" @bind="_telarRanking" @bind:after="OnTelarRankingChangedAsync">
+                    <option value="">Todos los telares</option>
+                    <option value="best">Mejor telar (menor neps)</option>
+                    <option value="worst">Peor telar (mayor neps)</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-auto d-flex flex-wrap gap-2">
+                <button class="btn btn-primary btn-sm" @onclick="LoadAsync" disabled="@_loading" aria-busy="@_loading">
+                    @(_loading ? "Filtrando…" : "Filtrar")
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ClearFiltersAsync" disabled="@_loading">
+                    Limpiar
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_filterSummary))
+        {
+            <p class="small text-muted mb-0 mt-2">@_filterSummary</p>
+        }
     </div>
 
     @if (!string.IsNullOrEmpty(_exportMessage))
     {
-        <div class="alert alert-info py-2">@_exportMessage</div>
+        <div class="alert alert-info py-2" role="status">@_exportMessage</div>
     }
     @if (!string.IsNullOrEmpty(_exportError))
     {
-        <div class="alert alert-danger py-2">@_exportError</div>
+        <div class="alert alert-danger py-2" role="alert">@_exportError</div>
+    }
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger py-2" role="alert">@_error</div>
     }
 
     @if (_summary is null)
     {
-        <p>Cargando…</p>
+        <LoadingBlock Message="Cargando gráficas…" />
     }
     else
     {
         <div class="row g-3 mb-4">
-            <div class="col-6 col-md-3">
-                <div class="card border-0 shadow-sm"><div class="card-body">
-                    <div class="text-muted small">Registros</div>
-                    <div class="fs-4 fw-semibold">@_summary.TotalRecords</div>
-                </div></div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Registros">@_summary.TotalRecords</KpiCard>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card border-0 shadow-sm"><div class="card-body">
-                    <div class="text-muted small">Promedio neps</div>
-                    <div class="fs-4 fw-semibold">@_summary.AverageNeps.ToString("0.##")</div>
-                </div></div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Promedio neps">@_summary.AverageNeps.ToString("0.##")</KpiCard>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card border-0 shadow-sm"><div class="card-body">
-                    <div class="text-muted small">Críticos</div>
-                    <div class="fs-4 fw-semibold text-danger">@_summary.CriticalCount</div>
-                </div></div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Total neps">@_summary.TotalNeps.ToString("0.##")</KpiCard>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card border-0 shadow-sm"><div class="card-body">
-                    <div class="text-muted small">Índice calidad</div>
-                    <div class="fs-4 fw-semibold">@_summary.QualityIndex.ToString("0.#")%</div>
-                </div></div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Mts calc.">@_summary.TotalMts.ToString("0.#")</KpiCard>
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Advertencias" Tone="warning">@_summary.WarningCount</KpiCard>
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Críticos" Tone="danger">@_summary.CriticalCount</KpiCard>
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="% normales" Tone="success">@NormalPct.ToString("0.#")%</KpiCard>
+            </div>
+            <div class="col-6 col-md-3 col-xl-2">
+                <KpiCard Label="Índice calidad" Tone="success">@_summary.QualityIndex.ToString("0.#")%</KpiCard>
             </div>
         </div>
 
         @if (_summary.TotalRecords == 0)
         {
-            <div class="alert alert-light border">Sin datos en el periodo seleccionado.</div>
+            <EmptyState Title="Sin datos con estos filtros"
+                        Message="Ajuste el periodo o los criterios (telar, tela, lote, turno, alerta) e intente de nuevo.">
+                <button type="button" class="btn btn-outline-primary btn-sm" @onclick="ClearFiltersAsync">Limpiar filtros</button>
+            </EmptyState>
         }
         else
         {
@@ -106,7 +188,7 @@ else
                 <div class="col-lg-8">
                     <div class="card border-0 shadow-sm h-100">
                         <div class="card-body">
-                            <h5 class="card-title mb-3">Tendencia diaria (promedio neps)</h5>
+                            <h5 class="card-title mb-3">@TrendTitle()</h5>
                             <div class="chart-wrap">
                                 <canvas id="chart-day"></canvas>
                             </div>
@@ -146,7 +228,34 @@ else
             </div>
         }
 
-        <h5>Por telar</h5>
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <h5 class="mb-0">Por telar</h5>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <label class="rn-field-label mb-0" for="graficas-orden-telar">Orden</label>
+                <select id="graficas-orden-telar" class="form-select form-select-sm" style="width: auto; min-width: 11rem;"
+                        @bind="_telarTableSort" @bind:after="StateHasChangedAsync">
+                    <option value="code">Código (003 → 912)</option>
+                    <option value="best">Mejor promedio</option>
+                    <option value="worst">Peor promedio</option>
+                </select>
+                @if (_summary.BestTelars.Count > 0)
+                {
+                    <button type="button" class="btn btn-outline-success btn-sm"
+                            title="Aplica filtro al telar con menor promedio de neps"
+                            @onclick="FilterBestTelarAsync" disabled="@_loading">
+                        Filtrar mejor (@_summary.BestTelars[0].Key)
+                    </button>
+                }
+                @if (_summary.WorstTelars.Count > 0)
+                {
+                    <button type="button" class="btn btn-outline-danger btn-sm"
+                            title="Aplica filtro al telar con mayor promedio de neps"
+                            @onclick="FilterWorstTelarAsync" disabled="@_loading">
+                        Filtrar peor (@_summary.WorstTelars[0].Key)
+                    </button>
+                }
+            </div>
+        </div>
         @if (_summary.ByTelar.Count == 0)
         {
             <p class="text-muted">Sin datos.</p>
@@ -166,10 +275,24 @@ else
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var g in _summary.ByTelar.Take(25))
+                        @foreach (var g in OrderedTelars)
                         {
-                            <tr>
-                                <td>@g.Key</td>
+                            var isBest = _summary.BestTelars.Count > 0 &&
+                                         string.Equals(g.Key, _summary.BestTelars[0].Key, StringComparison.OrdinalIgnoreCase);
+                            var isWorst = _summary.WorstTelars.Count > 0 &&
+                                          string.Equals(g.Key, _summary.WorstTelars[0].Key, StringComparison.OrdinalIgnoreCase);
+                            <tr class="@(isBest ? "table-success" : isWorst ? "table-danger" : null)">
+                                <td>
+                                    @g.Key
+                                    @if (isBest)
+                                    {
+                                        <span class="badge text-bg-success ms-1">Mejor</span>
+                                    }
+                                    else if (isWorst)
+                                    {
+                                        <span class="badge text-bg-danger ms-1">Peor</span>
+                                    }
+                                </td>
                                 <td>@g.AverageNeps.ToString("0.##")</td>
                                 <td>@g.RecordCount</td>
                                 <td>@g.CriticalCount</td>
@@ -218,21 +341,55 @@ else
             </div>
         }
 
-        <h5 class="mt-4">Por día</h5>
+        <h5 class="mt-4">Por lote/trama</h5>
+        @if (_summary.ByLote.Count == 0)
+        {
+            <p class="text-muted">Sin datos.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Lote</th>
+                            <th>Total neps</th>
+                            <th>Promedio</th>
+                            <th>Registros</th>
+                            <th>Críticos</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in _summary.ByLote.Take(25))
+                        {
+                            <tr>
+                                <td>@g.Key</td>
+                                <td>@g.TotalNeps.ToString("0.##")</td>
+                                <td>@g.AverageNeps.ToString("0.##")</td>
+                                <td>@g.RecordCount</td>
+                                <td>@g.CriticalCount</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <h5 class="mt-4">Serie temporal</h5>
         @if (_summary.ByDay.Count == 0)
         {
-            <p class="text-muted">Sin datos en el periodo.</p>
+            <p class="text-muted">Sin puntos en la serie.</p>
         }
         else
         {
             <div class="table-responsive" style="max-width: 640px;">
                 <table class="table table-sm table-striped">
-                    <thead><tr><th>Fecha</th><th>Promedio</th><th>Cantidad</th></tr></thead>
+                    <thead><tr><th>Periodo</th><th>Promedio</th><th>Cantidad</th></tr></thead>
                     <tbody>
                         @foreach (var d in _summary.ByDay)
                         {
                             <tr>
-                                <td>@d.Date.ToString("dd/MM/yyyy")</td>
+                                <td>@(d.Label ?? d.Date.ToString("dd/MM/yyyy"))</td>
                                 <td>@d.AverageNeps.ToString("0.##")</td>
                                 <td>@d.Count</td>
                             </tr>
@@ -251,6 +408,18 @@ else
     private int _periodDays = 30;
     private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
     private DateTime? _toLocal = DateTime.Today;
+    private string _filterTelar = "";
+    private string _filterTela = "";
+    private string _filterLote = "";
+    private string _filterTurno = "";
+    private string _filterAlert = "";
+    private string _filterOperario = "";
+    private string _telarRanking = "";
+    private string _telarTableSort = "code";
+    private ChartTimeGrouping _grouping = ChartTimeGrouping.Day;
+    private string? _filterSummary;
+    private string? _error;
+    private bool _loading;
     private bool _chartsDirty;
     private bool _jsReady;
     private int _chartRetries;
@@ -258,10 +427,16 @@ else
     private string? _exportMessage;
     private string? _exportError;
 
+    private double NormalPct =>
+        _summary is null || _summary.TotalRecords == 0
+            ? 0
+            : 100.0 * _summary.NormalCount / _summary.TotalRecords;
+
     private static readonly string[] ChartIds = ["chart-day", "chart-alerts", "chart-telar", "chart-tela"];
-    private static readonly string[] ChartTitles =
+
+    private string[] ChartTitles =>
     [
-        "Tendencia diaria (promedio neps)",
+        TrendTitle(),
         "Estado de alertas",
         "Top telares (peor promedio)",
         "Top telas (volumen)"
@@ -291,6 +466,161 @@ else
         }
     }
 
+    private async Task OnPeriodChangedAsync()
+    {
+        if (_periodDays != 0)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task SetGroupingAsync(ChartTimeGrouping grouping)
+    {
+        if (_grouping == grouping)
+        {
+            return;
+        }
+
+        _grouping = grouping;
+        await LoadAsync();
+    }
+
+    private IEnumerable<GroupSummary> OrderedTelars
+    {
+        get
+        {
+            if (_summary is null)
+            {
+                return [];
+            }
+
+            return _telarTableSort switch
+            {
+                "best" => _summary.ByTelar.OrderBy(t => t.AverageNeps)
+                    .ThenBy(t => t.Key, TelarKeyComparer.Instance),
+                "worst" => _summary.ByTelar.OrderByDescending(t => t.AverageNeps)
+                    .ThenBy(t => t.Key, TelarKeyComparer.Instance),
+                _ => _summary.ByTelar
+            };
+        }
+    }
+
+    private Task StateHasChangedAsync()
+    {
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task OnTelarRankingChangedAsync()
+    {
+        if (string.IsNullOrEmpty(_telarRanking))
+        {
+            // Solo quita el filtro de telar si venía de ranking; no borra un telar escrito a mano
+            // si el usuario eligió "Todos" conscientemente tras un ranking.
+            await LoadAsync();
+            return;
+        }
+
+        if (_telarRanking == "best")
+        {
+            await FilterBestTelarAsync();
+        }
+        else if (_telarRanking == "worst")
+        {
+            await FilterWorstTelarAsync();
+        }
+    }
+
+    private async Task FilterBestTelarAsync()
+    {
+        await ApplyRankingTelarFilterAsync(preferBest: true);
+    }
+
+    private async Task FilterWorstTelarAsync()
+    {
+        await ApplyRankingTelarFilterAsync(preferBest: false);
+    }
+
+    /// <summary>
+    /// Calcula el mejor/peor telar con el resto de filtros (sin telar) y luego aplica ese código.
+    /// </summary>
+    private async Task ApplyRankingTelarFilterAsync(bool preferBest)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            _filterTelar = "";
+            var baseFilters = BuildFilters(out var validationError);
+            if (validationError is not null)
+            {
+                _error = validationError;
+                return;
+            }
+
+            var probe = await Analytics.BuildAsync(
+                baseFilters, _session.UserId, _session.SeesAllRecords, _grouping);
+
+            GroupSummary? pick = preferBest
+                ? probe.BestTelars.FirstOrDefault()
+                  ?? probe.ByTelar.OrderBy(t => t.AverageNeps).FirstOrDefault()
+                : probe.WorstTelars.FirstOrDefault()
+                  ?? probe.ByTelar.OrderByDescending(t => t.AverageNeps).FirstOrDefault();
+
+            if (pick is null || string.Equals(pick.Key, "(sin telar)", StringComparison.OrdinalIgnoreCase))
+            {
+                _error = preferBest
+                    ? "No hay telares para determinar el mejor en este periodo."
+                    : "No hay telares para determinar el peor en este periodo.";
+                _summary = probe;
+                _filterSummary = BuildFilterSummary(baseFilters);
+                _chartsDirty = true;
+                return;
+            }
+
+            _filterTelar = pick.Key;
+            _telarRanking = preferBest ? "best" : "worst";
+            _telarTableSort = preferBest ? "best" : "worst";
+            await LoadAsync();
+            if (_summary is not null && string.IsNullOrEmpty(_error))
+            {
+                var label = preferBest ? "Mejor" : "Peor";
+                _filterSummary =
+                    $"{_filterSummary} · {label} telar aplicado: {pick.Key} (prom. {pick.AverageNeps:0.##})";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ClearFiltersAsync()
+    {
+        _periodDays = 30;
+        _fromLocal = DateTime.Today.AddDays(-30);
+        _toLocal = DateTime.Today;
+        _filterTelar = "";
+        _filterTela = "";
+        _filterLote = "";
+        _filterTurno = "";
+        _filterAlert = "";
+        _filterOperario = "";
+        _telarRanking = "";
+        _telarTableSort = "code";
+        _grouping = ChartTimeGrouping.Day;
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
         if (_session is null)
@@ -298,34 +628,124 @@ else
             return;
         }
 
-        DateTime? fromUtc;
-        DateTime? toUtc;
-        if (_periodDays > 0)
+        _loading = true;
+        _error = null;
+        _exportError = null;
+        try
         {
-            toUtc = DateTime.UtcNow;
-            fromUtc = toUtc.Value.AddDays(-_periodDays);
-        }
-        else
-        {
-            fromUtc = _fromLocal?.Date.ToUniversalTime();
-            toUtc = _toLocal?.Date.AddDays(1).AddTicks(-1).ToUniversalTime();
-        }
+            var filters = BuildFilters(out var validationError);
+            if (validationError is not null)
+            {
+                _error = validationError;
+                return;
+            }
 
-        _summary = await Analytics.BuildAsync(fromUtc, toUtc, _session.UserId, _session.SeesAllRecords);
-        _chartsDirty = true;
-        _chartRetries = 0;
-        if (_summary.TotalRecords == 0 && _jsReady)
+            _summary = await Analytics.BuildAsync(
+                filters, _session.UserId, _session.SeesAllRecords, _grouping);
+            _filterSummary = BuildFilterSummary(filters);
+            _chartsDirty = true;
+            _chartRetries = 0;
+            if (_summary.TotalRecords == 0 && _jsReady)
+            {
+                try
+                {
+                    await Js.InvokeVoidAsync("regnepsCharts.destroyAll");
+                }
+                catch
+                {
+                    // Ignorar si aún no hay charts.
+                }
+            }
+        }
+        catch (Exception ex)
         {
-            try
-            {
-                await Js.InvokeVoidAsync("regnepsCharts.destroyAll");
-            }
-            catch
-            {
-                // Ignorar si aún no hay charts.
-            }
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
         }
     }
+
+    private RecordFilters BuildFilters(out string? error)
+    {
+        error = null;
+        AlertLevel? alert = null;
+        if (!string.IsNullOrEmpty(_filterAlert) &&
+            Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
+        {
+            alert = parsed;
+        }
+
+        var filters = new RecordFilters
+        {
+            Telar = string.IsNullOrWhiteSpace(_filterTelar) ? null : _filterTelar.Trim(),
+            Tela = string.IsNullOrWhiteSpace(_filterTela) ? null : _filterTela.Trim(),
+            LoteTrama = string.IsNullOrWhiteSpace(_filterLote) ? null : _filterLote.Trim(),
+            Turno = string.IsNullOrWhiteSpace(_filterTurno) ? null : _filterTurno.Trim(),
+            Operario = string.IsNullOrWhiteSpace(_filterOperario) ? null : _filterOperario.Trim(),
+            AlertLevel = alert
+        };
+
+        if (_periodDays > 0)
+        {
+            var toDay = DateTime.Today;
+            var fromDay = toDay.AddDays(-(_periodDays - 1));
+            ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
+            return filters;
+        }
+
+        if (_periodDays == -1)
+        {
+            // Sin rango: todo el histórico visible para el usuario.
+            return filters;
+        }
+
+        if (_fromLocal is null || _toLocal is null)
+        {
+            error = "Indique fecha inicial y final para el rango personalizado.";
+            return filters;
+        }
+
+        var fromDayCustom = _fromLocal.Value.Date;
+        var toDayCustom = _toLocal.Value.Date;
+        if (fromDayCustom > toDayCustom)
+        {
+            error = "La fecha inicial no puede ser posterior a la fecha final.";
+            return filters;
+        }
+
+        ReportDateRange.FromLocalCalendarDates(fromDayCustom, toDayCustom).ApplyTo(filters);
+        return filters;
+    }
+
+    private string BuildFilterSummary(RecordFilters filters)
+    {
+        var parts = new List<string> { PeriodDescription(), $"Agrupación: {GroupingLabel(_grouping)}" };
+        if (!string.IsNullOrWhiteSpace(filters.Telar)) parts.Add($"Telar={filters.Telar}");
+        if (!string.IsNullOrWhiteSpace(filters.Tela)) parts.Add($"Tela={filters.Tela}");
+        if (!string.IsNullOrWhiteSpace(filters.LoteTrama)) parts.Add($"Lote={filters.LoteTrama}");
+        if (!string.IsNullOrWhiteSpace(filters.Turno)) parts.Add($"Turno={filters.Turno}");
+        if (filters.AlertLevel is not null) parts.Add($"Alerta={filters.AlertLevel}");
+        if (!string.IsNullOrWhiteSpace(filters.Operario)) parts.Add($"Operario={filters.Operario}");
+        return string.Join(" · ", parts);
+    }
+
+    private string TrendTitle() => _grouping switch
+    {
+        ChartTimeGrouping.Week => "Tendencia semanal (promedio neps)",
+        ChartTimeGrouping.Month => "Tendencia mensual (promedio neps)",
+        ChartTimeGrouping.Year => "Tendencia anual (promedio neps)",
+        _ => "Tendencia diaria (promedio neps)"
+    };
+
+    private static string GroupingLabel(ChartTimeGrouping g) => g switch
+    {
+        ChartTimeGrouping.Week => "Semana",
+        ChartTimeGrouping.Month => "Mes",
+        ChartTimeGrouping.Year => "Año",
+        _ => "Día"
+    };
 
     private async Task RenderChartsAsync()
     {
@@ -336,10 +756,11 @@ else
 
         try
         {
-            // Asegura que los canvas estén en el DOM tras el render.
             await Task.Yield();
 
-            var dayLabels = _summary.ByDay.Select(d => d.Date.ToString("dd/MM")).ToArray();
+            var dayLabels = _summary.ByDay
+                .Select(d => string.IsNullOrWhiteSpace(d.Label) ? d.Date.ToString("dd/MM") : d.Label!)
+                .ToArray();
             var dayAvg = _summary.ByDay.Select(d => Math.Round(d.AverageNeps, 2)).ToArray();
             var dayCount = _summary.ByDay.Select(d => (double)d.Count).ToArray();
 
@@ -393,7 +814,6 @@ else
                 }
             });
 
-            var okCount = Math.Max(0, _summary.TotalRecords - _summary.CriticalCount - _summary.WarningCount);
             await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-alerts", new
             {
                 type = "doughnut",
@@ -404,7 +824,7 @@ else
                     {
                         new
                         {
-                            data = new[] { okCount, _summary.WarningCount, _summary.CriticalCount },
+                            data = new[] { _summary.NormalCount, _summary.WarningCount, _summary.CriticalCount },
                             backgroundColor = new[] { "#1F6F5B", "#C4A35A", "#B33A3A" },
                             borderWidth = 0
                         }
@@ -418,7 +838,11 @@ else
                 }
             });
 
-            var telars = _summary.ByTelar.Take(10).ToList();
+            // Gráfica: top 10 peores por promedio (la tabla "Por telar" ya va ordenada por código).
+            var telars = _summary.ByTelar
+                .OrderByDescending(t => t.AverageNeps)
+                .Take(10)
+                .ToList();
             await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-telar", new
             {
                 type = "bar",
@@ -502,19 +926,41 @@ else
             return $"Últimos {_periodDays} días";
         }
 
-        return $"{_fromLocal?.ToString("yyyy-MM-dd") ?? "inicio"} → {_toLocal?.ToString("yyyy-MM-dd") ?? "hoy"}";
+        if (_periodDays == -1)
+        {
+            return "Todo el histórico";
+        }
+
+        return $"{_fromLocal?.ToString("dd/MM/yyyy") ?? "?"} – {_toLocal?.ToString("dd/MM/yyyy") ?? "?"}";
     }
 
     private string ExportUrl(string format)
     {
+        var q = new List<string> { $"grouping={_grouping.ToString().ToLowerInvariant()}" };
         if (_periodDays > 0)
         {
-            return $"/api/export/analytics/{format}?days={_periodDays}";
+            q.Add($"days={_periodDays}");
+        }
+        else if (_periodDays == 0 && _fromLocal is not null && _toLocal is not null)
+        {
+            q.Add($"from={_fromLocal:yyyy-MM-dd}");
+            q.Add($"to={_toLocal:yyyy-MM-dd}");
         }
 
-        var from = _fromLocal?.ToString("yyyy-MM-dd") ?? "";
-        var to = _toLocal?.ToString("yyyy-MM-dd") ?? "";
-        return $"/api/export/analytics/{format}?from={Uri.EscapeDataString(from)}&to={Uri.EscapeDataString(to)}";
+        if (!string.IsNullOrWhiteSpace(_filterTelar))
+            q.Add($"telar={Uri.EscapeDataString(_filterTelar.Trim())}");
+        if (!string.IsNullOrWhiteSpace(_filterTela))
+            q.Add($"tela={Uri.EscapeDataString(_filterTela.Trim())}");
+        if (!string.IsNullOrWhiteSpace(_filterLote))
+            q.Add($"lote={Uri.EscapeDataString(_filterLote.Trim())}");
+        if (!string.IsNullOrWhiteSpace(_filterTurno))
+            q.Add($"turno={Uri.EscapeDataString(_filterTurno)}");
+        if (!string.IsNullOrWhiteSpace(_filterAlert))
+            q.Add($"alerta={Uri.EscapeDataString(_filterAlert)}");
+        if (!string.IsNullOrWhiteSpace(_filterOperario))
+            q.Add($"operario={Uri.EscapeDataString(_filterOperario.Trim())}");
+
+        return $"/api/export/analytics/{format}?" + string.Join('&', q);
     }
 
     private async Task ExportPdfWithChartsAsync()
@@ -536,11 +982,9 @@ else
             }
             catch (JSDisconnectedException)
             {
-                // Circuito caído: PDF sin charts.
             }
             catch (TaskCanceledException)
             {
-                // Timeout / cancelación de interop: PDF sin charts.
             }
             catch (OperationCanceledException)
             {
@@ -549,11 +993,10 @@ else
             {
             }
 
-            var pdf = ExportFiles.BuildAnalyticsPdf(_summary, PeriodDescription(), images);
+            var pdf = ExportFiles.BuildAnalyticsPdf(_summary, _filterSummary ?? PeriodDescription(), images);
             var stamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
             var fileName = $"graficas_analytics_{stamp}.pdf";
-            var id = TempExports.Put(pdf, "application/pdf", fileName);
-            // Descarga por HTTP sin recargar la página (no satura SignalR ni cancela el circuito).
+            var id = TempExports.Put(pdf, "application/pdf", fileName, _session?.UserId);
             await Js.InvokeVoidAsync("regnepsDownload.downloadUrl", $"/api/export/temp/{id}");
 
             _exportMessage = images.Count > 0
@@ -587,7 +1030,6 @@ else
         try
         {
             var stamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
-            // Descarga 100% en el navegador: no envía el mosaic a Blazor.
             var ok = await Js.InvokeAsync<bool>(
                 "regnepsCharts.downloadMosaicAsync",
                 ChartIds,

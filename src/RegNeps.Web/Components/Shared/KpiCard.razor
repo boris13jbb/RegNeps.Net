@@ -1,0 +1,80 @@
+<div class="rn-kpi @ToneClass @FilledClass @SoftClass" role="group" aria-label="@Label">
+    <div class="rn-kpi-inner">
+        @if (!string.IsNullOrEmpty(Icon))
+        {
+            <span class="rn-kpi-icon" aria-hidden="true">@((MarkupString)IconSvg)</span>
+        }
+        <div class="rn-kpi-body">
+            <div class="rn-kpi-label">@Label</div>
+            <div class="rn-kpi-value">@ChildContent</div>
+            @if (!string.IsNullOrEmpty(Delta))
+            {
+                <div class="rn-kpi-delta @DeltaClass">@Delta</div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = "";
+
+    /// <summary>default | danger | warning | success | info | indigo | cyan</summary>
+    [Parameter]
+    public string Tone { get; set; } = "default";
+
+    /// <summary>Estilo sólido tipo CoreUI (fondo de color + texto blanco).</summary>
+    [Parameter]
+    public bool Filled { get; set; }
+
+    /// <summary>Tarjeta clara con icono lateral (mockup dashboard).</summary>
+    [Parameter]
+    public bool Soft { get; set; }
+
+    /// <summary>Icono: list | chart | ruler | alert | warn | clock</summary>
+    [Parameter]
+    public string? Icon { get; set; }
+
+    /// <summary>Texto de variación vs periodo anterior, p. ej. ↑ 12.7%</summary>
+    [Parameter]
+    public string? Delta { get; set; }
+
+    /// <summary>up | down | flat — color del delta</summary>
+    [Parameter]
+    public string DeltaTone { get; set; } = "flat";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    private string ToneClass => Tone switch
+    {
+        "danger" => "rn-kpi--danger",
+        "warning" => "rn-kpi--warning",
+        "success" => "rn-kpi--success",
+        "info" => "rn-kpi--info",
+        "indigo" => "rn-kpi--indigo",
+        "cyan" => "rn-kpi--cyan",
+        _ => ""
+    };
+
+    private string FilledClass => Filled ? "rn-kpi--filled" : "";
+    private string SoftClass => Soft ? "rn-kpi--soft" : "";
+
+    private string DeltaClass => DeltaTone switch
+    {
+        "up" => "rn-kpi-delta--up",
+        "down" => "rn-kpi-delta--down",
+        _ => "rn-kpi-delta--flat"
+    };
+
+    private string IconSvg => Icon switch
+    {
+        "list" => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>""",
+        "chart" => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>""",
+        "ruler" => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20 20 4"/><path d="m8 16-1 1"/><path d="m12 12-1 1"/><path d="m16 8-1 1"/></svg>""",
+        "alert" => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>""",
+        "warn" => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>""",
+        "clock" => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>""",
+        _ => """<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>"""
+    };
+}

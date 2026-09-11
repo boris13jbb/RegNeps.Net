@@ -34,8 +34,23 @@ public sealed class RegNepsDbContext : DbContext
             e.Property(x => x.CreatedByUserId).HasMaxLength(64);
             e.Property(x => x.CreatedByEmail).HasMaxLength(256);
             e.Property(x => x.CreatedByRole).HasMaxLength(64);
+            e.Property(x => x.ConcurrencyStamp).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ClientOperationId).HasMaxLength(64);
+            e.Property(x => x.CaptureSessionId).HasMaxLength(64);
+            e.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
             e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => x.Telar);
+            // Garantía DB: una sola fila por (usuario, operación). Históricos con NULL no entran al índice filtrado.
+            // Filtro con sintaxis compatible SQLite; SQL Server se asegura en DatabaseInitializer.
+            var clientOpFilter = Database.IsSqlServer()
+                ? "[ClientOperationId] IS NOT NULL AND [ClientOperationId] <> ''"
+                : "\"ClientOperationId\" IS NOT NULL AND \"ClientOperationId\" <> ''";
+            e.HasIndex(x => new { x.CreatedByUserId, x.ClientOperationId })
+                .IsUnique()
+                .HasDatabaseName("IX_NepRecords_CreatedBy_ClientOperation")
+                .HasFilter(clientOpFilter);
+            e.HasIndex(x => new { x.CreatedByUserId, x.CaptureSessionId })
+                .HasDatabaseName("IX_NepRecords_CreatedBy_CaptureSession");
             e.HasMany(x => x.HistorialAcciones)
                 .WithOne(x => x.NepRecord!)
                 .HasForeignKey(x => x.NepRecordId)
@@ -68,7 +83,9 @@ public sealed class RegNepsDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.Name).HasMaxLength(128).IsRequired();
             e.Property(x => x.Code).HasMaxLength(64);
-            e.HasIndex(x => x.Name);
+            e.HasIndex(x => x.Name)
+                .IsUnique()
+                .HasDatabaseName("IX_Fabrics_Name_Unique");
         });
 
         modelBuilder.Entity<AlertConfig>(e =>
@@ -92,6 +109,7 @@ public sealed class RegNepsDbContext : DbContext
             e.Property(x => x.CreatedByName).HasMaxLength(128);
             e.Property(x => x.FiltersJson).HasMaxLength(8000);
             e.Property(x => x.SummaryText).HasMaxLength(2000);
+            e.Property(x => x.SnapshotJson);
             e.HasIndex(x => x.CreatedAt);
         });
 

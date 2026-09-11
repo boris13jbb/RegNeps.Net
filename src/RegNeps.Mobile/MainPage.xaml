@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="RegNeps.Mobile.MainPage"
+             Title="RegNeps"
+             BackgroundColor="#F4F5F2">
+
+    <Grid RowDefinitions="Auto,*">
+        <Grid Grid.Row="0"
+              Padding="10"
+              ColumnDefinitions="*,Auto,Auto"
+              ColumnSpacing="8"
+              BackgroundColor="White">
+            <Entry x:Name="ServerEntry"
+                   Grid.Column="0"
+                   Placeholder="URL del servidor"
+                   Keyboard="Url"
+                   ClearButtonVisibility="WhileEditing" />
+
+            <Button Grid.Column="1"
+                    Text="Conectar"
+                    Padding="14,8"
+                    Clicked="OnConnectClicked" />
+
+            <Button Grid.Column="2"
+                    Text="↻"
+                    FontSize="20"
+                    Padding="12,8"
+                    Clicked="OnReloadClicked" />
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <WebView x:Name="Browser"
+                     Navigating="OnBrowserNavigating"
+                     Navigated="OnBrowserNavigated" />
+
+            <Grid x:Name="StatusOverlay"
+                  IsVisible="False"
+                  BackgroundColor="#F4F5F2"
+                  Padding="30">
+                <VerticalStackLayout VerticalOptions="Center"
+                                     HorizontalOptions="Center"
+                                     Spacing="14">
+                    <ActivityIndicator x:Name="LoadingIndicator"
+                                       IsRunning="False"
+                                       WidthRequest="36"
+                                       HeightRequest="36" />
+                    <Label x:Name="StatusLabel"
+                           Text="Conectando con RegNeps..."
+                           HorizontalTextAlignment="Center"
+                           FontSize="16" />
+                    <Button x:Name="RetryButton"
+                            Text="Reintentar"
+                            IsVisible="False"
+                            Clicked="OnReloadClicked" />
+                </VerticalStackLayout>
+            </Grid>
+        </Grid>
+    </Grid>
+</ContentPage>

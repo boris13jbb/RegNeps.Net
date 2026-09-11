@@ -71,10 +71,10 @@ tempPassword=Migracion123!
 
 | Entidad | Regla |
 |---------|--------|
-| Registros | Upsert por id Firestore (GUID determinístico) |
+| Registros | Upsert por id Firestore (GUID determinístico). Incluye la colección `records` **y** los registros embebidos en snapshots de informes (histórico real de Flutter). |
 | Usuarios | Upsert por username/email; password temporal |
 | Telas | Inserta si no existe el nombre |
-| Informes | Metadatos + filtros; snapshot resumido |
+| Informes | Metadatos + filtros; si `appliedFilters` viene vacío, se reconstruyen desde fechas del snapshot o el nombre (`Informe yyyyMMdd_…`) |
 | Alertas config | Actualiza umbrales si vienen en el JSON |
 
 La importación es **idempotente**: puede repetirse sin duplicar registros.

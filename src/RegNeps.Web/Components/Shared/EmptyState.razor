@@ -1,0 +1,22 @@
+<div class="rn-empty" role="status">
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <p class="rn-empty-title">@Title</p>
+    }
+    <p class="rn-empty-text">@Message</p>
+    @if (ChildContent is not null)
+    {
+        <div class="rn-empty-actions">@ChildContent</div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string? Title { get; set; }
+
+    [Parameter, EditorRequired]
+    public string Message { get; set; } = "";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+}

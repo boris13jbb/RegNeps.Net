@@ -8,42 +8,47 @@
 
 @if (!_allowed)
 {
-    <div class="alert alert-warning">No tiene permiso para ver alertas.</div>
+    <div class="alert alert-warning" role="alert">No tiene permiso para ver alertas.</div>
 }
 else
 {
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1 class="mb-0">Alertas</h1>
-        <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
-            @(_loading ? "Cargando…" : "Actualizar")
-        </button>
-    </div>
+    <PageHeader Title="Alertas" Subtitle="Umbrales, reincidencias y acciones correctivas pendientes.">
+        <Actions>
+            <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading" aria-busy="@_loading">
+                @(_loading ? "Cargando…" : "Actualizar")
+            </button>
+        </Actions>
+    </PageHeader>
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="alert alert-danger">@_error</div>
+        <div class="alert alert-danger" role="alert">@_error</div>
     }
 
     @if (_loading && _alerts.Count == 0)
     {
-        <p>Cargando alertas…</p>
+        <LoadingBlock Message="Cargando alertas…" />
     }
     else if (_alerts.Count == 0)
     {
-        <div class="alert alert-success">No hay alertas activas.</div>
+        <EmptyState Title="Sin alertas activas"
+                    Message="No hay mediciones por encima de umbral ni pendientes de revisión." />
     }
     else
     {
-        <div class="list-group" style="max-width: 900px;">
+        <div class="rn-alert-list" style="max-width: 900px;">
             @foreach (var r in _alerts)
             {
                 var level = r.GetAlertLevel(_config);
-                <div class="list-group-item">
-                    <div class="d-flex justify-content-between align-items-start gap-2">
+                var itemTone = level == AlertLevel.Critico ? "rn-alert-item--critical"
+                    : level == AlertLevel.Advertencia ? "rn-alert-item--warning"
+                    : "";
+                <div class="rn-alert-item @itemTone">
+                    <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
                         <div>
-                            <span class="badge @BadgeClass(level) me-2">@level.ToDisplayLabel()</span>
-                            <strong>Telar @r.Telar</strong> — @r.Neps.ToString("0.##") neps
-                            <div class="small text-muted">
+                            <StatusBadge Tone="@BadgeTone(level)">@level.ToDisplayLabel()</StatusBadge>
+                            <strong class="ms-2">Telar @r.Telar</strong> — @r.Neps.ToString("0.##") neps
+                            <div class="small text-muted mt-1">
                                 @r.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
                                 @if (!string.IsNullOrWhiteSpace(r.Tela))
                                 {
@@ -51,7 +56,7 @@ else
                                 }
                                 @if (r.RequiereSeguimiento(_config))
                                 {
-                                    <span class="text-danger"> · Pendiente revisión</span>
+                                    <span class="text-danger fw-semibold"> · Pendiente revisión</span>
                                 }
                             </div>
                         </div>
@@ -67,30 +72,22 @@ else
 
     @if (_correctiveTarget is not null)
     {
-        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,.4);">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Acción correctiva — Telar @_correctiveTarget.Telar</h5>
-                        <button type="button" class="btn-close" @onclick="CloseCorrective"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label">Acción *</label>
-                            <textarea class="form-control" rows="3" @bind="_accion"></textarea>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Responsable</label>
-                            <input class="form-control" @bind="_responsable" />
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" @onclick="CloseCorrective">Cancelar</button>
-                        <button class="btn btn-primary" @onclick="SaveCorrectiveAsync" disabled="@_saving">Guardar</button>
-                    </div>
-                </div>
+        <AppModal Title="@($"Acción correctiva — Telar {_correctiveTarget.Telar}")" OnClose="CloseCorrective">
+            <ChildContent>
+            <div class="mb-3">
+                <label class="form-label" for="corrective-accion">Acción *</label>
+                <textarea id="corrective-accion" class="form-control" rows="3" @bind="_accion" required></textarea>
             </div>
-        </div>
+            <div class="mb-3">
+                <label class="form-label" for="corrective-responsable">Responsable</label>
+                <input id="corrective-responsable" class="form-control" @bind="_responsable" />
+            </div>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="CloseCorrective">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveCorrectiveAsync" disabled="@_saving">Guardar</button>
+            </Footer>
+        </AppModal>
     }
 }
 
@@ -132,7 +129,7 @@ else
         try
         {
             _config = await AlertConfigRepository.GetAsync();
-            _alerts = await RecordService.GetAlertsAsync(_session.UserId, _session.SeesAllRecords);
+            _alerts = await RecordService.GetAlertsAsync(_session.ToActor());
         }
         finally
         {
@@ -166,7 +163,7 @@ else
                 Accion = _accion,
                 Responsable = _responsable,
                 MarcarRevisado = true
-            });
+            }, _session!.ToActor());
             CloseCorrective();
             await LoadAsync();
         }
@@ -180,10 +177,11 @@ else
         }
     }
 
-    private static string BadgeClass(AlertLevel level) => level switch
+    private static string BadgeTone(AlertLevel level) => level switch
     {
-        AlertLevel.Advertencia => "text-bg-warning",
-        AlertLevel.Critico => "text-bg-danger",
-        _ => "text-bg-secondary"
+        AlertLevel.Advertencia => "warning",
+        AlertLevel.Critico => "critical",
+        AlertLevel.Normal => "normal",
+        _ => "muted"
     };
 }

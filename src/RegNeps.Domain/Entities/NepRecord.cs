@@ -26,6 +26,21 @@ public sealed class NepRecord
     public string? CreatedByRole { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
+    /// <summary>Token de concurrencia optimista (regenerado en cada actualización).</summary>
+    public string ConcurrencyStamp { get; set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// Idempotencia de creación por usuario (anti doble clic / reintento).
+    /// No es clave de negocio: el mismo telar+lote de dos usuarios produce dos filas.
+    /// </summary>
+    public string? ClientOperationId { get; set; }
+
+    /// <summary>
+    /// Sesión de captura en pantalla (muchas mediciones por sesión).
+    /// Distinto de <see cref="ClientOperationId"/>. Históricos sin sesión quedan en NULL.
+    /// </summary>
+    public string? CaptureSessionId { get; set; }
+
     public List<CorrectiveActionEntry> HistorialAcciones { get; set; } = [];
 
     /// <summary>Metros calculados: Neps / 0.09</summary>

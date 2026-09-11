@@ -1,0 +1,158 @@
+@* Botón animado (glow + letras + morph a spinner). Port Blazor de AnimatedGenerateButton. *@
+<div class="@WrapCssClasses" style="@HighlightStyle">
+    <button type="@Type"
+            class="@BtnCssClasses"
+            disabled="@(Disabled || IsLoading)"
+            aria-busy="@IsLoading"
+            aria-pressed="@IsLoading"
+            aria-label="@(IsLoading ? ActiveLabel : Text)"
+            @onclick="HandleClickAsync"
+            @attributes="AdditionalAttributes">
+        @if (IsLoading)
+        {
+            <span class="rn-morph-btn__loader" aria-hidden="true">
+                <span class="rn-morph-btn__spinner"></span>
+            </span>
+        }
+        else
+        {
+            @if (Icon is not null)
+            {
+                <span class="rn-morph-btn__icon rn-morph-btn-svg">@Icon</span>
+            }
+            else if (ShouldShowSparkle)
+            {
+                <svg class="rn-morph-btn-svg"
+                     xmlns="http://www.w3.org/2000/svg"
+                     viewBox="0 0 24 24"
+                     aria-hidden="true">
+                    <path stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+                </svg>
+            }
+
+            <span class="rn-morph-btn__txt-wrap" aria-hidden="true">
+                <span class="rn-morph-btn__txt rn-morph-btn__txt--idle">
+                    @foreach (var ch in Text)
+                    {
+                        <span class="rn-morph-btn__letter">@(ch == ' ' ? '\u00A0' : ch)</span>
+                    }
+                </span>
+            </span>
+        }
+    </button>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Text { get; set; } = "";
+
+    /// <summary>Texto anunciado por aria cuando IsLoading (p. ej. "Guardando").</summary>
+    [Parameter]
+    public string? LoadingText { get; set; }
+
+    [Parameter]
+    public bool IsLoading { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    /// <summary>primary | secondary | ghost | danger</summary>
+    [Parameter]
+    public string Variant { get; set; } = "primary";
+
+    [Parameter]
+    public string Type { get; set; } = "button";
+
+    [Parameter]
+    public bool Block { get; set; }
+
+    [Parameter]
+    public string? CssClass { get; set; }
+
+    /// <summary>Matiz del brillo (grados HSL). Si es null: primary/secondary/ghost=210, danger=0.</summary>
+    [Parameter]
+    public double? HighlightHueDeg { get; set; }
+
+    /// <summary>Muestra el icono sparkle cuando no hay Icon. En ghost/secondary se omite salvo que se fuerce.</summary>
+    [Parameter]
+    public bool ShowSparkle { get; set; } = true;
+
+    [Parameter]
+    public RenderFragment? Icon { get; set; }
+
+    [Parameter]
+    public EventCallback<MouseEventArgs> OnClick { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    /// <summary>
+    /// Si no hay OnClick (p. ej. Type=submit en EditForm), no intercepta el envío del formulario.
+    /// </summary>
+    private async Task HandleClickAsync(MouseEventArgs e)
+    {
+        if (!OnClick.HasDelegate)
+        {
+            return;
+        }
+
+        await OnClick.InvokeAsync(e);
+    }
+
+    private bool ShouldShowSparkle
+    {
+        get
+        {
+            if (!ShowSparkle || Icon is not null)
+            {
+                return false;
+            }
+
+            var v = Variant.ToLowerInvariant();
+            return v is not ("ghost" or "secondary");
+        }
+    }
+
+    private string ActiveLabel =>
+        string.IsNullOrWhiteSpace(LoadingText) ? $"{Text} (cargando)" : LoadingText;
+
+    private string? HighlightStyle =>
+        HighlightHueDeg is double hue
+            ? $"--highlight-hue: {hue.ToString(System.Globalization.CultureInfo.InvariantCulture)}deg"
+            : null;
+
+    private string WrapCssClasses =>
+        string.Join(' ', new[]
+        {
+            "rn-morph-btn-wrap",
+            Block ? "rn-morph-btn-wrap--block" : null,
+            Variant.Equals("danger", StringComparison.OrdinalIgnoreCase) && HighlightHueDeg is null
+                ? "rn-morph-btn-wrap--danger"
+                : null,
+            CssClass
+        }.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    private string BtnCssClasses
+    {
+        get
+        {
+            var variant = Variant.ToLowerInvariant() switch
+            {
+                "secondary" => "rn-morph-btn--secondary",
+                "ghost" => "rn-morph-btn--ghost",
+                "danger" => "rn-morph-btn--danger",
+                _ => "rn-morph-btn--primary"
+            };
+
+            return string.Join(' ', new[]
+            {
+                "rn-morph-btn",
+                variant,
+                IsLoading ? "is-loading" : null,
+                Block ? "rn-morph-btn--block" : null
+            }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        }
+    }
+}

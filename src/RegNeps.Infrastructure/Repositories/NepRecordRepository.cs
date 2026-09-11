@@ -1,25 +1,29 @@
 using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
-using RegNeps.Domain.Services;
 using RegNeps.Infrastructure.Persistence;
 
 namespace RegNeps.Infrastructure.Repositories;
 
 public sealed class NepRecordRepository : INepRecordRepository
 {
-    private readonly RegNepsDbContext _db;
+    private readonly IDbContextFactory<RegNepsDbContext> _factory;
 
-    public NepRecordRepository(RegNepsDbContext db) => _db = db;
+    public NepRecordRepository(IDbContextFactory<RegNepsDbContext> factory) =>
+        _factory = factory;
 
-    public async Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default) =>
-        await _db.NepRecords
+    public async Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords
             .AsNoTracking()
             .OrderByDescending(r => r.CreatedAt)
             .Take(take)
             .ToListAsync(ct);
+    }
 
     public async Task<IReadOnlyList<NepRecord>> QueryAsync(
         RecordFilters filters,
@@ -31,20 +35,27 @@ public sealed class NepRecordRepository : INepRecordRepository
         filters ??= new RecordFilters();
         ReportDateRange.EnsureConsolidatedRange(filters);
 
+        // Fail-closed: consulta personal sin usuario válido nunca se convierte en global.
+        if (!viewerSeesAll && string.IsNullOrWhiteSpace(viewerUserId))
+        {
+            return Array.Empty<NepRecord>();
+        }
+
         var hasDateRange = filters.FromUtc is not null
             || filters.ToExclusiveUtc is not null
             || filters.ToUtc is not null;
         var maxTake = hasDateRange ? 50_000 : 10_000;
         take = Math.Clamp(take, 1, maxTake);
 
-        var query = _db.NepRecords.AsNoTracking().AsQueryable();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = db.NepRecords.AsNoTracking().AsQueryable();
 
-        if (!viewerSeesAll && !string.IsNullOrWhiteSpace(viewerUserId))
+        if (!viewerSeesAll)
         {
             string? externalUid = null;
             if (Guid.TryParse(viewerUserId, out var viewerGuid))
             {
-                externalUid = await _db.Users.AsNoTracking()
+                externalUid = await db.Users.AsNoTracking()
                     .Where(u => u.Id == viewerGuid)
                     .Select(u => u.ExternalUserId)
                     .FirstOrDefaultAsync(ct);
@@ -61,40 +72,46 @@ public sealed class NepRecordRepository : INepRecordRepository
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(filters.CaptureSessionId))
+        {
+            var sessionId = filters.CaptureSessionId.Trim();
+            query = query.Where(r => r.CaptureSessionId == sessionId);
+        }
+
         if (!string.IsNullOrWhiteSpace(filters.Telar))
         {
-            var telar = filters.Telar.Trim();
-            query = query.Where(r => r.Telar == telar);
+            var telar = filters.Telar.Trim().ToLower();
+            query = query.Where(r => r.Telar.ToLower() == telar);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Tela))
         {
-            var tela = filters.Tela.Trim();
-            query = query.Where(r => r.Tela == tela);
+            var tela = filters.Tela.Trim().ToLower();
+            query = query.Where(r => r.Tela.ToLower() == tela);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.LoteTrama))
         {
-            var lote = filters.LoteTrama.Trim();
-            query = query.Where(r => r.LoteTrama == lote);
+            var lote = filters.LoteTrama.Trim().ToLower();
+            query = query.Where(r => r.LoteTrama.ToLower() == lote);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Turno))
         {
-            var turno = filters.Turno.Trim();
-            query = query.Where(r => r.Turno == turno);
+            var turno = filters.Turno.Trim().ToLower();
+            query = query.Where(r => r.Turno.ToLower() == turno);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Operario))
         {
-            var operario = filters.Operario.Trim();
-            query = query.Where(r => r.Operario == operario);
+            var operario = filters.Operario.Trim().ToLower();
+            query = query.Where(r => r.Operario.ToLower() == operario);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.LineaProduccion))
         {
-            var linea = filters.LineaProduccion.Trim();
-            query = query.Where(r => r.LineaProduccion == linea);
+            var linea = filters.LineaProduccion.Trim().ToLower();
+            query = query.Where(r => r.LineaProduccion.ToLower() == linea);
         }
 
         if (!string.IsNullOrWhiteSpace(filters.Search))
@@ -121,12 +138,23 @@ public sealed class NepRecordRepository : INepRecordRepository
             query = query.Where(r => r.Neps <= filters.NepsMax.Value);
         }
 
+        if (filters.MtsMin is not null)
+        {
+            var nepsMin = filters.MtsMin.Value * NepsConstants.TestLengthM;
+            query = query.Where(r => r.Neps >= nepsMin);
+        }
+
+        if (filters.MtsMax is not null)
+        {
+            var nepsMax = filters.MtsMax.Value * NepsConstants.TestLengthM;
+            query = query.Where(r => r.Neps <= nepsMax);
+        }
+
         if (filters.FromUtc is not null)
         {
             query = query.Where(r => r.CreatedAt >= filters.FromUtc.Value);
         }
 
-        // Preferir fin exclusivo para incluir todo el día "Hasta" sin ambigüedad de ticks.
         if (filters.ToExclusiveUtc is not null)
         {
             query = query.Where(r => r.CreatedAt < filters.ToExclusiveUtc.Value);
@@ -148,100 +176,184 @@ public sealed class NepRecordRepository : INepRecordRepository
                 : query.Where(r => r.AccionCorrectiva == null || r.AccionCorrectiva == string.Empty);
         }
 
-        var needsMemoryFilter =
-            filters.AlertLevel is not null ||
-            filters.SoloPendientes ||
-            filters.MtsMin is not null ||
-            filters.MtsMax is not null;
+        if (filters.AlertLevel is not null || filters.SoloPendientes)
+        {
+            var config = await db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
+            if (config.AlertasActivas)
+            {
+                var normalExclusive = config.LimiteNormalMax + 0.5;
+                var warningExclusive = config.LimiteAdvertenciaMax + 0.5;
 
-        var dbTake = needsMemoryFilter ? Math.Min(take * 3, maxTake) : take;
+                if (filters.AlertLevel is not null)
+                {
+                    query = filters.AlertLevel.Value switch
+                    {
+                        AlertLevel.Normal => query.Where(r => r.Neps < normalExclusive),
+                        AlertLevel.Advertencia => query.Where(r =>
+                            r.Neps >= normalExclusive && r.Neps < warningExclusive),
+                        AlertLevel.Critico => query.Where(r => r.Neps >= warningExclusive),
+                        _ => query
+                    };
+                }
 
-        var ordered = hasDateRange
-            ? query.OrderBy(r => r.CreatedAt)
-            : query.OrderByDescending(r => r.CreatedAt);
+                if (filters.SoloPendientes)
+                {
+                    query = query.Where(r =>
+                        !r.RevisadoPorSupervisor && r.Neps >= normalExclusive);
+                }
+            }
+            else if (filters.AlertLevel is AlertLevel.Advertencia or AlertLevel.Critico
+                     || filters.SoloPendientes)
+            {
+                return Array.Empty<NepRecord>();
+            }
+        }
 
-        var candidates = await ordered
-            .Take(dbTake)
+        return await query
+            .OrderByDescending(r => r.CreatedAt)
+            .ThenBy(r => r.Telar)
+            .Take(take)
             .ToListAsync(ct);
-
-        if (!needsMemoryFilter)
-        {
-            return candidates;
-        }
-
-        var config = await _db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
-
-        IEnumerable<NepRecord> filtered = candidates;
-
-        if (filters.AlertLevel is not null)
-        {
-            filtered = filtered.Where(r => AlertEvaluator.GetLevel(r.Neps, config) == filters.AlertLevel.Value);
-        }
-
-        if (filters.SoloPendientes)
-        {
-            filtered = filtered.Where(r => r.RequiereSeguimiento(config));
-        }
-
-        if (filters.MtsMin is not null)
-        {
-            filtered = filtered.Where(r => r.MtsCalculados >= filters.MtsMin.Value);
-        }
-
-        if (filters.MtsMax is not null)
-        {
-            filtered = filtered.Where(r => r.MtsCalculados <= filters.MtsMax.Value);
-        }
-
-        var result = filtered.Take(take).ToList();
-        if (hasDateRange)
-        {
-            result = result
-                .OrderBy(r => r.CreatedAt)
-                .ThenBy(r => r.Telar, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        return result;
     }
 
-    public Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
-        _db.NepRecords
+    public async Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords
+            .AsNoTracking()
             .Include(r => r.HistorialAcciones)
             .FirstOrDefaultAsync(r => r.Id == id, ct);
+    }
+
+    public async Task<NepRecord?> FindByClientOperationAsync(
+        string userId,
+        string clientOperationId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(clientOperationId))
+        {
+            return null;
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r =>
+                r.CreatedByUserId == userId && r.ClientOperationId == clientOperationId, ct);
+    }
 
     public async Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default)
     {
-        _db.NepRecords.Add(record);
-        await _db.SaveChangesAsync(ct);
-        return record;
+        if (string.IsNullOrWhiteSpace(record.ConcurrencyStamp))
+        {
+            record.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+        }
+
+        if (record.Id == Guid.Empty)
+        {
+            record.Id = Guid.NewGuid();
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        db.NepRecords.Add(record);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return record;
+        }
+        catch (DbUpdateException) when (!string.IsNullOrWhiteSpace(record.ClientOperationId)
+                                        && !string.IsNullOrWhiteSpace(record.CreatedByUserId))
+        {
+            // Contexto limpio: el Add fallido deja el tracker en estado inconsistente.
+            await using var read = await _factory.CreateDbContextAsync(ct);
+            var existing = await read.NepRecords
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r =>
+                    r.CreatedByUserId == record.CreatedByUserId
+                    && r.ClientOperationId == record.ClientOperationId, ct);
+            if (existing is not null)
+            {
+                return existing;
+            }
+
+            throw;
+        }
     }
 
     public async Task UpdateAsync(NepRecord record, CancellationToken ct = default)
     {
-        record.UpdatedAt = DateTime.UtcNow;
-        _db.NepRecords.Update(record);
-        await _db.SaveChangesAsync(ct);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var entity = await db.NepRecords
+            .Include(r => r.HistorialAcciones)
+            .FirstOrDefaultAsync(r => r.Id == record.Id, ct)
+            ?? throw new InvalidOperationException("Registro no encontrado.");
+
+        if (!string.Equals(entity.ConcurrencyStamp, record.ConcurrencyStamp, StringComparison.Ordinal))
+        {
+            throw new Application.Records.RecordConcurrencyConflictException(
+                "El registro fue modificado por otro usuario.");
+        }
+
+        entity.Telar = record.Telar;
+        entity.Neps = record.Neps;
+        entity.Tela = record.Tela;
+        entity.LoteTrama = record.LoteTrama;
+        entity.Turno = record.Turno;
+        entity.Operario = record.Operario;
+        entity.LineaProduccion = record.LineaProduccion;
+        entity.Observacion = record.Observacion;
+        entity.RevisadoPorSupervisor = record.RevisadoPorSupervisor;
+        entity.AccionCorrectiva = record.AccionCorrectiva;
+        entity.ResponsableRevision = record.ResponsableRevision;
+        entity.FechaRevision = record.FechaRevision;
+        entity.UpdatedAt = DateTime.UtcNow;
+        entity.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+
+        // Sincronizar historial de acciones si el caller añadió entradas nuevas.
+        foreach (var entry in record.HistorialAcciones)
+        {
+            if (entry.Id == Guid.Empty || entity.HistorialAcciones.All(h => h.Id != entry.Id))
+            {
+                entity.HistorialAcciones.Add(entry);
+            }
+        }
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            record.ConcurrencyStamp = entity.ConcurrencyStamp;
+            record.UpdatedAt = entity.UpdatedAt;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new Application.Records.RecordConcurrencyConflictException(
+                "El registro fue modificado por otro usuario.");
+        }
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
-        var entity = await _db.NepRecords.FindAsync([id], ct);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var entity = await db.NepRecords.FindAsync([id], ct);
         if (entity is null)
         {
             return;
         }
 
-        _db.NepRecords.Remove(entity);
-        await _db.SaveChangesAsync(ct);
+        db.NepRecords.Remove(entity);
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task ClearAllAsync(CancellationToken ct = default)
     {
-        await _db.CorrectiveActions.ExecuteDeleteAsync(ct);
-        await _db.NepRecords.ExecuteDeleteAsync(ct);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.CorrectiveActions.ExecuteDeleteAsync(ct);
+        await db.NepRecords.ExecuteDeleteAsync(ct);
     }
 
-    public Task<int> CountAsync(CancellationToken ct = default) =>
-        _db.NepRecords.CountAsync(ct);
+    public async Task<int> CountAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.NepRecords.CountAsync(ct);
+    }
 }

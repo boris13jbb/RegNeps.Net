@@ -20,14 +20,14 @@ Desde otro PC: `http://IP-DEL-SERVIDOR:5080`
 
 ## Base de datos
 
-Por defecto SQLite en `App_Data/regneps_v2.db` (ruta absoluta bajo el ContentRoot).
+Por defecto (Development) SQLite en `App_Data/regneps_v2.db` (ruta absoluta bajo el ContentRoot).
 
-Para SQL Server en intranet, edite `appsettings.json` / `appsettings.Production.json`:
+Para SQL Server en intranet, edite `appsettings.Production.json` o use variables de entorno / User Secrets (no suba cadenas reales al repo):
 
 ```json
 {
   "ConnectionStrings": {
-    "RegNeps": "Server=SERVIDOR\\INSTANCIA;Database=RegNeps;Trusted_Connection=True;TrustServerCertificate=True"
+    "RegNeps": "Server=SERVIDOR\\INSTANCIA;Database=RegNeps;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=true"
   },
   "Database": {
     "UseSqlServer": true
@@ -35,6 +35,8 @@ Para SQL Server en intranet, edite `appsettings.json` / `appsettings.Production.
   "Urls": "http://0.0.0.0:5080"
 }
 ```
+
+Tras el primer arranque en Production, cambie la contraseña del usuario seed `admin` (si se creó) y no deje credenciales por defecto.
 
 ## Firewall
 

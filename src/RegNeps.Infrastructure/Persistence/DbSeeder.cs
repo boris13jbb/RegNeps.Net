@@ -41,28 +41,31 @@ public static class DbSeeder
             }
         }
 
-        // Asegura un admin local aunque ya existan usuarios migrados.
-        var admin = await db.Users.FirstOrDefaultAsync(u => u.Username == "admin");
-        if (admin is null)
+        // Solo crea admin seed si no existe ningún superadmin activo.
+        // No reactiva usuarios desactivados/eliminados (evita anular soft-delete).
+        var hasActiveSuper = await db.Users.AnyAsync(u =>
+            u.DeletedAt == null &&
+            u.IsActive &&
+            (u.IsSuperAdmin || u.Role == AppUserRole.SuperAdmin));
+
+        if (!hasActiveSuper)
         {
-            db.Users.Add(new AppUser
+            var admin = await db.Users.FirstOrDefaultAsync(u => u.Username == "admin");
+            if (admin is null)
             {
-                Username = "admin",
-                DisplayName = "Administrador",
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123!"),
-                Role = AppUserRole.SuperAdmin,
-                IsSuperAdmin = true,
-                IsActive = true,
-                CreatedAt = DateTime.UtcNow
-            });
-        }
-        else if (!admin.IsActive || admin.DeletedAt is not null)
-        {
-            admin.IsActive = true;
-            admin.DeletedAt = null;
-            admin.IsSuperAdmin = true;
-            admin.Role = AppUserRole.SuperAdmin;
-            admin.UpdatedAt = DateTime.UtcNow;
+                db.Users.Add(new AppUser
+                {
+                    Username = "admin",
+                    DisplayName = "Administrador",
+                    PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123!"),
+                    Role = AppUserRole.SuperAdmin,
+                    IsSuperAdmin = true,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+            // Si existe "admin" pero fue desactivado a propósito y no queda otro superadmin,
+            // no lo resucitamos automáticamente: el operador debe restaurarlo manualmente.
         }
 
         await db.SaveChangesAsync();

@@ -3,6 +3,7 @@ using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
+using RegNeps.Domain.Permissions;
 using RegNeps.Domain.Services;
 
 namespace RegNeps.Application.Records;
@@ -26,11 +27,48 @@ public sealed class NepRecordService
         _alertConfig = alertConfig;
     }
 
-    public async Task<NepRecord> CreateAsync(CreateNepRecordRequest request, CancellationToken ct = default)
+    public async Task<NepRecord> CreateAsync(
+        CreateNepRecordRequest request,
+        RecordActor actor,
+        CancellationToken ct = default)
     {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para capturar registros.");
+        }
+
         Validate(request);
+
+        var opId = string.IsNullOrWhiteSpace(request.ClientOperationId)
+            ? null
+            : request.ClientOperationId.Trim();
+
+        var sessionId = string.IsNullOrWhiteSpace(request.CaptureSessionId)
+            ? null
+            : request.CaptureSessionId.Trim();
+
+        if (opId is not null)
+        {
+            var existing = await _records.FindByClientOperationAsync(actor.UserId, opId, ct);
+            if (existing is not null)
+            {
+                // El reintento debe pertenecer a la misma sesión de captura del usuario.
+                if (sessionId is not null
+                    && !string.Equals(existing.CaptureSessionId, sessionId, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(existing.CaptureSessionId))
+                {
+                    throw new UnauthorizedRecordAccessException(
+                        "La operación no pertenece a la sesión de captura actual.");
+                }
+
+                return existing;
+            }
+        }
+
         var record = new NepRecord
         {
+            Id = Guid.NewGuid(),
             Telar = request.Telar.Trim(),
             Neps = request.Neps,
             Tela = request.Tela.Trim(),
@@ -42,22 +80,139 @@ public sealed class NepRecordService
             LineaProduccion = request.LineaProduccion.Trim(),
             Observacion = request.Observacion.Trim(),
             CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = request.CreatedByUserId,
-            CreatedByEmail = request.CreatedByEmail,
-            CreatedByRole = request.CreatedByRole
+            CreatedByUserId = actor.UserId,
+            CreatedByEmail = actor.Username,
+            CreatedByRole = actor.EffectiveRole.ToString(),
+            ClientOperationId = opId,
+            CaptureSessionId = sessionId,
+            ConcurrencyStamp = Guid.NewGuid().ToString("N")
         };
+
         return await _records.AddAsync(record, ct);
     }
 
-    public async Task<NepRecord> UpdateAsync(UpdateNepRecordRequest request, CancellationToken ct = default)
+    /// <summary>
+    /// Crea el registro y, si es posible, evalúa alertas sin confundir fallos posteriores con fallo de guardado.
+    /// </summary>
+    public async Task<RecordSaveResult> CreateWithOutcomeAsync(
+        CreateNepRecordRequest request,
+        RecordActor actor,
+        CancellationToken ct = default)
     {
+        try
+        {
+            EnsureAuthenticated(actor);
+            if (!actor.Has(AppPermission.CaptureRecords))
+            {
+                return new RecordSaveResult
+                {
+                    Status = RecordSaveStatus.Unauthorized,
+                    Error = "No tiene permiso para capturar registros."
+                };
+            }
+
+            Validate(request);
+        }
+        catch (UnauthorizedRecordAccessException ex)
+        {
+            return new RecordSaveResult { Status = RecordSaveStatus.Unauthorized, Error = ex.Message };
+        }
+        catch (ArgumentException ex)
+        {
+            return new RecordSaveResult { Status = RecordSaveStatus.ValidationFailed, Error = ex.Message };
+        }
+
+        var opId = string.IsNullOrWhiteSpace(request.ClientOperationId)
+            ? null
+            : request.ClientOperationId.Trim();
+        if (opId is not null)
+        {
+            var existing = await _records.FindByClientOperationAsync(actor.UserId, opId, ct);
+            if (existing is not null)
+            {
+                return await BuildSavedResultAsync(existing, alreadySaved: true, ct);
+            }
+        }
+
+        NepRecord saved;
+        try
+        {
+            saved = await CreateAsync(request, actor, ct);
+        }
+        catch (UnauthorizedRecordAccessException ex)
+        {
+            return new RecordSaveResult { Status = RecordSaveStatus.Unauthorized, Error = ex.Message };
+        }
+        catch (ArgumentException ex)
+        {
+            return new RecordSaveResult { Status = RecordSaveStatus.ValidationFailed, Error = ex.Message };
+        }
+        catch (Exception ex)
+        {
+            return new RecordSaveResult
+            {
+                Status = RecordSaveStatus.PersistenceFailed,
+                Error = ex.Message
+            };
+        }
+
+        // Tras insert: Saved. Idempotencia previa ya devolvió AlreadySaved.
+        return await BuildSavedResultAsync(saved, alreadySaved: false, ct);
+    }
+
+    private async Task<RecordSaveResult> BuildSavedResultAsync(
+        NepRecord saved,
+        bool alreadySaved,
+        CancellationToken ct)
+    {
+        AlertLevel? level = null;
+        var alertFailed = false;
+        try
+        {
+            var eval = await EvaluateAsync(saved.Neps, saved.Telar, ct);
+            level = eval.Level;
+        }
+        catch
+        {
+            alertFailed = true;
+        }
+
+        return new RecordSaveResult
+        {
+            Status = alreadySaved ? RecordSaveStatus.AlreadySaved : RecordSaveStatus.Saved,
+            Record = saved,
+            AlertLevel = level,
+            AlertEvaluationFailed = alertFailed
+        };
+    }
+
+    public async Task<NepRecord> UpdateAsync(
+        UpdateNepRecordRequest request,
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.EditRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para editar registros.");
+        }
+
         if (string.IsNullOrWhiteSpace(request.Telar))
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));
-        if (request.Neps < 0)
-            throw new ArgumentException("Los neps no pueden ser negativos.", nameof(request.Neps));
+        if (request.Neps <= 0)
+            throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
 
         var record = await _records.GetByIdAsync(request.Id, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
+
+        EnsureCanMutate(actor, record);
+
+        if (!string.IsNullOrWhiteSpace(request.ExpectedConcurrencyStamp)
+            && !string.Equals(record.ConcurrencyStamp, request.ExpectedConcurrencyStamp, StringComparison.Ordinal))
+        {
+            throw new RecordConcurrencyConflictException(
+                "Este registro fue modificado por otro usuario. Recargue y revise antes de guardar.");
+        }
 
         record.Telar = request.Telar.Trim();
         record.Neps = request.Neps;
@@ -71,13 +226,55 @@ public sealed class NepRecordService
         record.Observacion = request.Observacion.Trim();
         record.UpdatedAt = DateTime.UtcNow;
 
-        await _records.UpdateAsync(record, ct);
+        try
+        {
+            await _records.UpdateAsync(record, ct);
+        }
+        catch (RecordConcurrencyConflictException)
+        {
+            throw;
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("modificado por otro", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("concurrency", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new RecordConcurrencyConflictException(
+                "Este registro fue modificado por otro usuario. Recargue y revise antes de guardar.");
+        }
+
         return record;
     }
 
     public Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default) =>
         _records.GetRecentAsync(take, ct);
 
+    public Task<IReadOnlyList<NepRecord>> QueryAsync(
+        RecordFilters filters,
+        RecordActor actor,
+        RecordQueryScope scope = RecordQueryScope.Default,
+        int take = 500,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.ViewRecords) && !actor.Has(AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
+        }
+
+        var seesAll = scope == RecordQueryScope.PersonalOnly
+            ? false
+            : actor.SeesAllRecords;
+
+        if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "Se requiere un usuario autenticado con identificador válido.");
+        }
+
+        return _records.QueryAsync(filters, actor.UserId, seesAll, take, ct);
+    }
+
+    /// <summary>Compatibilidad interna/tests: consulta con parámetros explícitos (fail-closed en repo).</summary>
     public Task<IReadOnlyList<NepRecord>> QueryAsync(
         RecordFilters filters,
         string? viewerUserId,
@@ -103,8 +300,17 @@ public sealed class NepRecordService
         return (level, AlertEvaluator.GetRecommendations(level, reincidencia), reincidencia);
     }
 
-    public async Task ApplyCorrectiveAsync(CorrectiveActionRequest request, CancellationToken ct = default)
+    public async Task ApplyCorrectiveAsync(
+        CorrectiveActionRequest request,
+        RecordActor actor,
+        CancellationToken ct = default)
     {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.ApplyCorrectiveAction))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para acciones correctivas.");
+        }
+
         if (string.IsNullOrWhiteSpace(request.Accion))
         {
             throw new ArgumentException("La acción correctiva es obligatoria.");
@@ -112,6 +318,8 @@ public sealed class NepRecordService
 
         var record = await _records.GetByIdAsync(request.RecordId, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
+
+        EnsureCanMutate(actor, record, requireEditPermission: false);
 
         var entry = new CorrectiveActionEntry
         {
@@ -132,17 +340,42 @@ public sealed class NepRecordService
         await _records.UpdateAsync(record, ct);
     }
 
-    public Task DeleteAsync(Guid id, CancellationToken ct = default) => _records.DeleteAsync(id, ct);
-    public Task ClearAllAsync(CancellationToken ct = default) => _records.ClearAllAsync(ct);
+    public async Task DeleteAsync(Guid id, RecordActor actor, CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.DeleteRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para eliminar registros.");
+        }
+
+        var record = await _records.GetByIdAsync(id, ct)
+            ?? throw new InvalidOperationException("Registro no encontrado.");
+
+        EnsureCanMutate(actor, record, requireEditPermission: false);
+        await _records.DeleteAsync(id, ct);
+    }
+
+    public async Task ClearAllAsync(RecordActor actor, CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.ClearAllRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para vaciar registros.");
+        }
+
+        await _records.ClearAllAsync(ct);
+    }
+
+    public Task<int> CountAllAsync(CancellationToken ct = default) => _records.CountAsync(ct);
 
     public async Task<DashboardSummary> GetDashboardSummaryAsync(
-        string? viewerUserId,
-        bool viewerSeesAll,
+        RecordActor actor,
         int take = 100,
         CancellationToken ct = default)
     {
+        EnsureAuthenticated(actor);
         var config = await _alertConfig.GetAsync(ct);
-        var records = await _records.QueryAsync(new RecordFilters(), viewerUserId, viewerSeesAll, take, ct);
+        var records = await QueryAsync(new RecordFilters(), actor, RecordQueryScope.Default, take, ct);
         var total = records.Count;
         var sumNeps = records.Sum(r => r.Neps);
         var sumMts = records.Sum(r => r.MtsCalculados);
@@ -163,17 +396,74 @@ public sealed class NepRecordService
     }
 
     public async Task<IReadOnlyList<NepRecord>> GetAlertsAsync(
-        string? viewerUserId,
-        bool viewerSeesAll,
+        RecordActor actor,
         CancellationToken ct = default)
     {
+        EnsureAuthenticated(actor);
+        if (!actor.Has(AppPermission.ViewAlerts) && !actor.Has(AppPermission.ViewRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para ver alertas.");
+        }
+
         var config = await _alertConfig.GetAsync(ct);
-        var all = await _records.QueryAsync(new RecordFilters(), viewerUserId, viewerSeesAll, 1000, ct);
+        var all = await QueryAsync(new RecordFilters(), actor, RecordQueryScope.Default, 1000, ct);
         return all
             .Where(r => r.GetAlertLevel(config) != AlertLevel.Normal)
             .OrderByDescending(r => r.GetAlertLevel(config))
             .ThenByDescending(r => r.CreatedAt)
             .ToList();
+    }
+
+    public bool OwnsRecord(RecordActor actor, NepRecord record) =>
+        OwnsRecord(actor, record.CreatedByUserId);
+
+    public bool OwnsRecord(RecordActor actor, string? createdByUserId)
+    {
+        if (string.IsNullOrWhiteSpace(createdByUserId))
+        {
+            return false;
+        }
+
+        if (string.Equals(createdByUserId, actor.UserId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(actor.ExternalUserId)
+               && string.Equals(createdByUserId, actor.ExternalUserId, StringComparison.Ordinal);
+    }
+
+    private void EnsureCanMutate(
+        RecordActor actor,
+        NepRecord record,
+        bool requireEditPermission = true)
+    {
+        if (requireEditPermission && !actor.Has(AppPermission.EditRecords)
+            && !actor.Has(AppPermission.DeleteRecords)
+            && !actor.Has(AppPermission.ApplyCorrectiveAction))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso sobre este registro.");
+        }
+
+        if (actor.SeesAllRecords)
+        {
+            return;
+        }
+
+        if (!OwnsRecord(actor, record))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "No puede modificar registros de otro usuario.");
+        }
+    }
+
+    private static void EnsureAuthenticated(RecordActor actor)
+    {
+        if (string.IsNullOrWhiteSpace(actor.UserId))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "Se requiere un usuario autenticado con identificador válido.");
+        }
     }
 
     private static void Validate(CreateNepRecordRequest request)
@@ -183,9 +473,9 @@ public sealed class NepRecordService
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));
         }
 
-        if (request.Neps < 0)
+        if (request.Neps <= 0)
         {
-            throw new ArgumentException("Los neps no pueden ser negativos.", nameof(request.Neps));
+            throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
         }
     }
 }

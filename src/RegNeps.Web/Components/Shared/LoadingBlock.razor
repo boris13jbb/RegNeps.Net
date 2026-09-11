@@ -1,0 +1,9 @@
+<div class="rn-loading" role="status" aria-live="polite" aria-busy="true">
+    <span class="rn-spinner" aria-hidden="true"></span>
+    <span>@(string.IsNullOrWhiteSpace(Message) ? "Cargando…" : Message)</span>
+</div>
+
+@code {
+    [Parameter]
+    public string? Message { get; set; }
+}

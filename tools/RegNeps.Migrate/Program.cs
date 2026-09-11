@@ -36,6 +36,15 @@ var options = new DbContextOptionsBuilder<RegNepsDbContext>()
 
 await using var db = new RegNepsDbContext(options);
 await db.Database.EnsureCreatedAsync();
+try
+{
+    await db.Database.ExecuteSqlRawAsync(
+        """ALTER TABLE "SavedReports" ADD COLUMN "SnapshotJson" TEXT NULL""");
+}
+catch (Exception)
+{
+    // Columna ya existe en bases creadas con el esquema actual.
+}
 
 var migration = new HistoricalDataMigrationService(db);
 Console.WriteLine($"Importando {file} → {dbPath} ...");
@@ -43,6 +52,7 @@ var result = await migration.ImportFromFileAsync(file, tempPassword);
 
 Console.WriteLine(result.Success ? "OK" : "FALLÓ");
 Console.WriteLine($"Registros +{result.RecordsInserted} / act {result.RecordsUpdated} / omit {result.RecordsSkipped}");
+Console.WriteLine($"Snapshots → registros extra: {result.SnapshotRecordsMerged}");
 Console.WriteLine($"Usuarios  +{result.UsersInserted} / act {result.UsersUpdated} / omit {result.UsersSkipped}");
 Console.WriteLine($"Telas     +{result.FabricsInserted} / omit {result.FabricsSkipped}");
 Console.WriteLine($"Informes  +{result.ReportsInserted} / act {result.ReportsUpdated} / omit {result.ReportsSkipped}");

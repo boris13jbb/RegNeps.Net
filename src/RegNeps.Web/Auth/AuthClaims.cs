@@ -15,6 +15,7 @@ public static class AuthClaims
     public const string DisplayName = "display_name";
     public const string Role = ClaimTypes.Role;
     public const string IsSuperAdmin = "is_super_admin";
+    public const string ExternalUserId = "external_user_id";
 
     public static ClaimsPrincipal CreatePrincipal(AppUser user)
     {
@@ -27,6 +28,11 @@ public static class AuthClaims
             new(Role, role),
             new(IsSuperAdmin, user.IsSuperAdmin || user.Role == AppUserRole.SuperAdmin ? "true" : "false")
         };
+
+        if (!string.IsNullOrWhiteSpace(user.ExternalUserId))
+        {
+            claims.Add(new Claim(ExternalUserId, user.ExternalUserId));
+        }
 
         foreach (var permission in RolePermissions.ForRole(user.EffectiveRole))
         {
@@ -73,8 +79,9 @@ public sealed class CurrentUserService
         Enum.TryParse<AppUserRole>(roleRaw, out var role);
         var isSuper = string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase)
                       || role == AppUserRole.SuperAdmin;
+        var external = user.FindFirstValue(AuthClaims.ExternalUserId);
 
-        return new UserSession(id, username, display, role, isSuper);
+        return new UserSession(id, username, display, role, isSuper, external);
     }
 }
 
@@ -83,7 +90,8 @@ public sealed record UserSession(
     string Username,
     string DisplayName,
     AppUserRole Role,
-    bool IsSuperAdmin)
+    bool IsSuperAdmin,
+    string? ExternalUserId = null)
 {
     public AppUserRole EffectiveRole => IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
 
@@ -93,4 +101,8 @@ public sealed record UserSession(
     /// <summary>Operario solo ve sus registros; el resto ve el workspace.</summary>
     public bool SeesAllRecords =>
         EffectiveRole is not AppUserRole.Operario;
+
+    public Application.Records.RecordActor ToActor() =>
+        Application.Records.RecordActor.Create(
+            UserId, Username, DisplayName, Role, IsSuperAdmin, ExternalUserId);
 }

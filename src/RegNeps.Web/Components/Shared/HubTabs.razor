@@ -1,0 +1,31 @@
+@inject NavigationManager Nav
+
+<nav class="rn-hub-tabs" aria-label="@AriaLabel">
+    @foreach (var tab in Tabs)
+    {
+        var active = IsActive(tab.Href);
+        <a class="rn-hub-tab @(active ? "is-active" : null)"
+           href="@tab.Href"
+           aria-current="@(active ? "page" : null)">@tab.Label</a>
+    }
+</nav>
+
+@code {
+    [Parameter]
+    public string AriaLabel { get; set; } = "Secciones";
+
+    [Parameter]
+    public IReadOnlyList<(string Href, string Label)> Tabs { get; set; } = [];
+
+    private bool IsActive(string href)
+    {
+        var current = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].Trim('/');
+        if (current is "/" or "")
+        {
+            current = "/dashboard";
+        }
+
+        var tabPath = href.Split('?', '#')[0];
+        return string.Equals(current, tabPath, StringComparison.OrdinalIgnoreCase);
+    }
+}

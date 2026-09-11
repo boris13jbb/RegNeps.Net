@@ -2,10 +2,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using RegNeps.Application.Abstractions;
 using RegNeps.Application.Auth;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
+using RegNeps.Domain.Filters;
 using RegNeps.Infrastructure.Persistence;
 
 namespace RegNeps.Infrastructure.Migration;
@@ -13,13 +16,20 @@ namespace RegNeps.Infrastructure.Migration;
 /// <summary>
 /// Importa el JSON exportado por scripts/export_firestore_history.js hacia SQL/SQLite.
 /// Idempotente: reimportar actualiza por id de origen (Firestore).
+/// Incluye registros embebidos en snapshots de informes (históricos reales en Flutter).
 /// </summary>
-public sealed class HistoricalDataMigrationService
+public sealed class HistoricalDataMigrationService : IReportSnapshotService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         NumberHandling = JsonNumberHandling.AllowReadingFromString
+    };
+
+    private static readonly JsonSerializerOptions FiltersWriteOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
     private readonly RegNepsDbContext _db;
@@ -191,65 +201,20 @@ public sealed class HistoricalDataMigrationService
             }
         }
 
-        // 4) Registros
+        // 4) Registros: colección + snapshots de informes (ahí está el histórico real de Flutter)
+        var collectionCount = payload.Records?.Count ?? 0;
+        var mergedRecords = MergeRecordsWithReportSnapshots(payload);
+        result.SnapshotRecordsMerged = Math.Max(0, mergedRecords.Count - collectionCount);
+
         var existingIds = await _db.NepRecords.AsNoTracking().Select(r => r.Id).ToListAsync(ct);
         var existingSet = existingIds.ToHashSet();
+        var upsert = await UpsertRawRecordsAsync(mergedRecords, existingSet, ct);
+        result.RecordsInserted = upsert.Inserted;
+        result.RecordsUpdated = upsert.Updated;
+        result.RecordsSkipped = upsert.Skipped;
+        result.Warnings.AddRange(upsert.Warnings);
 
-        foreach (var raw in payload.Records ?? [])
-        {
-            try
-            {
-                var sourceId = raw.Id ?? Guid.NewGuid().ToString("N");
-                var id = ToDeterministicGuid(sourceId);
-                var entity = MapRecord(raw, id, sourceId);
-
-                if (existingSet.Contains(id))
-                {
-                    var tracked = await _db.NepRecords
-                        .Include(r => r.HistorialAcciones)
-                        .FirstAsync(r => r.Id == id, ct);
-                    tracked.Telar = entity.Telar;
-                    tracked.Neps = entity.Neps;
-                    tracked.Tela = entity.Tela;
-                    tracked.LoteTrama = entity.LoteTrama;
-                    tracked.CreatedAt = entity.CreatedAt;
-                    tracked.Turno = entity.Turno;
-                    tracked.Operario = entity.Operario;
-                    tracked.LineaProduccion = entity.LineaProduccion;
-                    tracked.Observacion = entity.Observacion;
-                    tracked.RevisadoPorSupervisor = entity.RevisadoPorSupervisor;
-                    tracked.AccionCorrectiva = entity.AccionCorrectiva;
-                    tracked.ResponsableRevision = entity.ResponsableRevision;
-                    tracked.FechaRevision = entity.FechaRevision;
-                    tracked.CreatedByUserId = entity.CreatedByUserId;
-                    tracked.CreatedByEmail = entity.CreatedByEmail;
-                    tracked.CreatedByRole = entity.CreatedByRole;
-                    tracked.UpdatedAt = DateTime.UtcNow;
-
-                    _db.CorrectiveActions.RemoveRange(tracked.HistorialAcciones);
-                    tracked.HistorialAcciones = entity.HistorialAcciones;
-                    foreach (var h in tracked.HistorialAcciones)
-                    {
-                        h.NepRecordId = tracked.Id;
-                    }
-
-                    result.RecordsUpdated++;
-                }
-                else
-                {
-                    _db.NepRecords.Add(entity);
-                    existingSet.Add(id);
-                    result.RecordsInserted++;
-                }
-            }
-            catch (Exception ex)
-            {
-                result.RecordsSkipped++;
-                result.Warnings.Add($"Registro omitido: {ex.Message}");
-            }
-        }
-
-        // 5) Informes guardados (metadatos; no rehidrata snapshot completo de registros)
+        // 5) Informes: metadatos + FiltersJson usable (Firestore suele traer appliedFilters null)
         var existingReports = await _db.SavedReports.ToListAsync(ct);
         foreach (var r in payload.Reports ?? [])
         {
@@ -258,10 +223,16 @@ public sealed class HistoricalDataMigrationService
                 var sourceId = r.Id ?? Guid.NewGuid().ToString("N");
                 var id = ToDeterministicGuid("report:" + sourceId);
                 var existing = existingReports.FirstOrDefault(x => x.Id == id);
-                var filtersJson = r.AppliedFilters.HasValue
-                    ? r.AppliedFilters.Value.GetRawText()
-                    : "{}";
+                var snapshotJson = r.Records is { Count: > 0 }
+                    ? JsonSerializer.Serialize(r.Records, JsonOptions)
+                    : null;
+                var filtersJson = BuildReportFiltersJson(r);
                 var count = r.Records?.Count ?? 0;
+                var periodLabel = DescribeReportPeriod(filtersJson, r);
+                var summary =
+                    $"Migrado desde Firestore: {count} registros" +
+                    (string.IsNullOrEmpty(periodLabel) ? "." : $" ({periodLabel}).");
+
                 if (existing is null)
                 {
                     _db.SavedReports.Add(new SavedReport
@@ -271,7 +242,8 @@ public sealed class HistoricalDataMigrationService
                         CreatedAt = ParseDate(r.CreatedAt) ?? DateTime.UtcNow,
                         FiltersJson = filtersJson,
                         RecordCount = count,
-                        SummaryText = $"Migrado desde Firestore ({count} registros en snapshot)."
+                        SummaryText = summary,
+                        SnapshotJson = snapshotJson
                     });
                     result.ReportsInserted++;
                 }
@@ -280,7 +252,11 @@ public sealed class HistoricalDataMigrationService
                     existing.Name = string.IsNullOrWhiteSpace(r.Name) ? existing.Name : r.Name!;
                     existing.FiltersJson = filtersJson;
                     existing.RecordCount = count;
-                    existing.SummaryText = $"Migrado desde Firestore ({count} registros en snapshot).";
+                    existing.SummaryText = summary;
+                    if (snapshotJson is not null)
+                    {
+                        existing.SnapshotJson = snapshotJson;
+                    }
                     result.ReportsUpdated++;
                 }
             }
@@ -351,6 +327,293 @@ public sealed class HistoricalDataMigrationService
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Une la colección <c>records</c> con los documentos embebidos en cada informe.
+    /// Prioriza la colección viva; el snapshot aporta históricos que ya no están en <c>records</c>.
+    /// </summary>
+    private static List<FirestoreRecordDto> MergeRecordsWithReportSnapshots(FirestoreExportPayload payload)
+    {
+        var byId = new Dictionary<string, FirestoreRecordDto>(StringComparer.Ordinal);
+        foreach (var raw in payload.Records ?? [])
+        {
+            var id = raw.Id;
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                id = Guid.NewGuid().ToString("N");
+                raw.Id = id;
+            }
+
+            byId[id] = raw;
+        }
+
+        foreach (var report in payload.Reports ?? [])
+        {
+            foreach (var raw in report.Records ?? [])
+            {
+                var id = raw.Id;
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    continue;
+                }
+
+                if (!byId.ContainsKey(id))
+                {
+                    byId[id] = raw;
+                }
+            }
+        }
+
+        return byId.Values.ToList();
+    }
+
+    /// <summary>
+    /// Restaura las filas guardadas en el informe y las devuelve para mostrarlas,
+    /// aunque la tabla viva se haya vaciado o el filtro de fechas no coincida.
+    /// </summary>
+    public async Task<IReadOnlyList<NepRecord>> LoadSnapshotRecordsAsync(
+        Guid reportId,
+        CancellationToken ct = default)
+    {
+        var report = await _db.SavedReports.AsNoTracking().FirstOrDefaultAsync(r => r.Id == reportId, ct);
+        if (report is null || string.IsNullOrWhiteSpace(report.SnapshotJson))
+        {
+            return [];
+        }
+
+        List<FirestoreRecordDto> rows;
+        try
+        {
+            rows = JsonSerializer.Deserialize<List<FirestoreRecordDto>>(report.SnapshotJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+
+        if (rows.Count == 0)
+        {
+            return [];
+        }
+
+        var existingIds = await _db.NepRecords.AsNoTracking().Select(r => r.Id).ToListAsync(ct);
+        await UpsertRawRecordsAsync(rows, existingIds.ToHashSet(), ct);
+        await _db.SaveChangesAsync(ct);
+        await RepairRecordOwnershipAsync(ct);
+
+        var ids = rows
+            .Select(r => r.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => ToDeterministicGuid(id!))
+            .ToList();
+
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        return await _db.NepRecords.AsNoTracking()
+            .Include(r => r.HistorialAcciones)
+            .Where(r => ids.Contains(r.Id))
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync(ct);
+    }
+
+    private async Task<(int Inserted, int Updated, int Skipped, List<string> Warnings)> UpsertRawRecordsAsync(
+        IReadOnlyList<FirestoreRecordDto> rawRecords,
+        HashSet<Guid> existingSet,
+        CancellationToken ct)
+    {
+        var inserted = 0;
+        var updated = 0;
+        var skipped = 0;
+        var warnings = new List<string>();
+
+        foreach (var raw in rawRecords)
+        {
+            try
+            {
+                var sourceId = raw.Id ?? Guid.NewGuid().ToString("N");
+                raw.Id ??= sourceId;
+                var id = ToDeterministicGuid(sourceId);
+                var entity = MapRecord(raw, id, sourceId);
+
+                if (existingSet.Contains(id))
+                {
+                    var tracked = await _db.NepRecords
+                        .Include(r => r.HistorialAcciones)
+                        .FirstAsync(r => r.Id == id, ct);
+                    tracked.Telar = entity.Telar;
+                    tracked.Neps = entity.Neps;
+                    tracked.Tela = entity.Tela;
+                    tracked.LoteTrama = entity.LoteTrama;
+                    tracked.CreatedAt = entity.CreatedAt;
+                    tracked.Turno = entity.Turno;
+                    tracked.Operario = entity.Operario;
+                    tracked.LineaProduccion = entity.LineaProduccion;
+                    tracked.Observacion = entity.Observacion;
+                    tracked.RevisadoPorSupervisor = entity.RevisadoPorSupervisor;
+                    tracked.AccionCorrectiva = entity.AccionCorrectiva;
+                    tracked.ResponsableRevision = entity.ResponsableRevision;
+                    tracked.FechaRevision = entity.FechaRevision;
+                    tracked.CreatedByUserId = entity.CreatedByUserId;
+                    tracked.CreatedByEmail = entity.CreatedByEmail;
+                    tracked.CreatedByRole = entity.CreatedByRole;
+                    tracked.UpdatedAt = DateTime.UtcNow;
+
+                    _db.CorrectiveActions.RemoveRange(tracked.HistorialAcciones);
+                    tracked.HistorialAcciones = entity.HistorialAcciones;
+                    foreach (var h in tracked.HistorialAcciones)
+                    {
+                        h.NepRecordId = tracked.Id;
+                    }
+
+                    updated++;
+                }
+                else
+                {
+                    _db.NepRecords.Add(entity);
+                    existingSet.Add(id);
+                    inserted++;
+                }
+            }
+            catch (Exception ex)
+            {
+                skipped++;
+                warnings.Add($"Registro omitido: {ex.Message}");
+            }
+        }
+
+        return (inserted, updated, skipped, warnings);
+    }
+
+    /// <summary>
+    /// Firestore suele guardar informes con <c>appliedFilters: null</c>.
+    /// Reconstruye un JSON de <see cref="RecordFilters"/> desde el snapshot o el nombre.
+    /// </summary>
+    private static string BuildReportFiltersJson(FirestoreReportDto report)
+    {
+        if (report.AppliedFilters is { ValueKind: JsonValueKind.Object } applied &&
+            HasUsableDateFilter(applied))
+        {
+            // Conserva el objeto original (ParseFilters del export lo entiende) y completa fechas si hace falta.
+            return applied.GetRawText();
+        }
+
+        var dates = (report.Records ?? [])
+            .Select(r => ParseDate(r.CreatedAt))
+            .Where(d => d.HasValue)
+            .Select(d => d!.Value)
+            .ToList();
+
+        if (dates.Count > 0)
+        {
+            var fromDay = dates.Min().ToLocalTime().Date;
+            var toDay = dates.Max().ToLocalTime().Date;
+            var filters = new RecordFilters();
+            ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
+            return JsonSerializer.Serialize(filters, FiltersWriteOptions);
+        }
+
+        if (TryParseStampDayFromName(report.Name, out var stampDay))
+        {
+            var filters = new RecordFilters();
+            ReportDateRange.FromLocalCalendarDates(stampDay, stampDay).ApplyTo(filters);
+            return JsonSerializer.Serialize(filters, FiltersWriteOptions);
+        }
+
+        var created = ParseDate(report.CreatedAt)?.ToLocalTime().Date;
+        if (created is not null)
+        {
+            var filters = new RecordFilters();
+            ReportDateRange.FromLocalCalendarDates(created.Value, created.Value).ApplyTo(filters);
+            return JsonSerializer.Serialize(filters, FiltersWriteOptions);
+        }
+
+        return "{}";
+    }
+
+    private static bool HasUsableDateFilter(JsonElement root)
+    {
+        string[] keys =
+        [
+            "fromUtc", "from", "start", "fechaInicio", "startDate", "desde",
+            "toUtc", "to", "end", "fechaFin", "endDate", "hasta", "toExclusiveUtc", "toExclusive"
+        ];
+        foreach (var key in keys)
+        {
+            if (!root.TryGetProperty(key, out var el))
+            {
+                continue;
+            }
+
+            if (el.ValueKind is JsonValueKind.String or JsonValueKind.Number)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string DescribeReportPeriod(string filtersJson, FirestoreReportDto report)
+    {
+        try
+        {
+            var filters = JsonSerializer.Deserialize<RecordFilters>(filtersJson, JsonOptions);
+            if (filters?.FromUtc is not null)
+            {
+                var from = filters.FromUtc.Value.ToLocalTime().ToString("dd/MM/yyyy");
+                var to = filters.ToExclusiveUtc is not null
+                    ? filters.ToExclusiveUtc.Value.ToLocalTime().AddTicks(-1).ToString("dd/MM/yyyy")
+                    : filters.ToUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? from;
+                return $"{from} – {to}";
+            }
+        }
+        catch (JsonException)
+        {
+            // ignore
+        }
+
+        if (TryParseStampDayFromName(report.Name, out var day))
+        {
+            return day.ToString("dd/MM/yyyy");
+        }
+
+        return "";
+    }
+
+    private static bool TryParseStampDayFromName(string? name, out DateTime localDay)
+    {
+        localDay = default;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var match = Regex.Match(name, @"(20\d{2})(\d{2})(\d{2})");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(match.Groups[1].Value, out var y) ||
+            !int.TryParse(match.Groups[2].Value, out var m) ||
+            !int.TryParse(match.Groups[3].Value, out var d))
+        {
+            return false;
+        }
+
+        try
+        {
+            localDay = new DateTime(y, m, d);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static NepRecord MapRecord(FirestoreRecordDto raw, Guid id, string sourceId)
@@ -562,6 +825,8 @@ public sealed class MigrationResult
     public int ReportsSkipped { get; set; }
     public bool AlertConfigUpdated { get; set; }
     public int RecordsOwnershipRepaired { get; set; }
+    /// <summary>Registros aportados solo por snapshots de informes (no estaban en la colección records).</summary>
+    public int SnapshotRecordsMerged { get; set; }
     public string? TempPasswordNote { get; set; }
     public List<string> Warnings { get; set; } = [];
 }

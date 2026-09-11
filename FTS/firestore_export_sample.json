@@ -1,0 +1,59 @@
+{
+  "exportedAt": "2026-01-01T00:00:00.000Z",
+  "projectId": "ejemplo-proyecto",
+  "workspaceId": "vicunha",
+  "records": [
+    {
+      "id": "sample-record-001",
+      "telar": "T-01",
+      "neps": 12,
+      "tela": "Tela ejemplo",
+      "loteTrama": "LT-100",
+      "createdAt": { "_seconds": 1704067200, "_nanoseconds": 0 },
+      "turno": "A",
+      "operario": "operario.demo",
+      "lineaProduccion": "L1",
+      "observacion": "Registro de ejemplo (sin datos reales)",
+      "revisadoPorSupervisor": false,
+      "accionCorrectiva": "",
+      "responsableRevision": "",
+      "fechaRevision": null,
+      "createdByUid": "firebase-uid-demo",
+      "createdByEmail": "operario@ejemplo.local",
+      "createdByRole": "operario",
+      "historialAcciones": []
+    }
+  ],
+  "users": [
+    {
+      "id": "firebase-uid-demo",
+      "uid": "firebase-uid-demo",
+      "username": "operario.demo",
+      "displayName": "Operario Demo",
+      "realEmail": "operario@ejemplo.local",
+      "internalEmail": null,
+      "role": "operario",
+      "isActive": true,
+      "isSuperAdmin": false,
+      "createdAt": { "_seconds": 1704067200, "_nanoseconds": 0 },
+      "deletedAt": null
+    }
+  ],
+  "reports": [
+    {
+      "id": "sample-report-001",
+      "name": "Informe ejemplo",
+      "createdAt": { "_seconds": 1704153600, "_nanoseconds": 0 },
+      "appliedFilters": { "turno": "A" },
+      "records": []
+    }
+  ],
+  "fabrics": ["Tela ejemplo"],
+  "alertConfig": {
+    "limiteNormalMax": 10,
+    "limiteAdvertenciaMax": 20,
+    "cantidadReincidenciasCriticas": 3,
+    "diasParaReincidencia": 7,
+    "alertasActivas": true
+  }
+}
