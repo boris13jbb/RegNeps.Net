@@ -1,4 +1,5 @@
 using RegNeps.Application.Abstractions;
+using RegNeps.Application.Permissions;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
@@ -20,12 +21,25 @@ public sealed class NepRecordService
 {
     private readonly INepRecordRepository _records;
     private readonly IAlertConfigRepository _alertConfig;
+    private readonly IPermissionService? _permissions;
 
-    public NepRecordService(INepRecordRepository records, IAlertConfigRepository alertConfig)
+    public NepRecordService(
+        INepRecordRepository records,
+        IAlertConfigRepository alertConfig,
+        IPermissionService? permissions = null)
     {
         _records = records;
         _alertConfig = alertConfig;
+        _permissions = permissions;
     }
+
+    /// <summary>
+    /// Usa la matriz persistida cuando el servicio está registrado. Sin él, las pruebas
+    /// siguen la matriz inicial para no exigir base de permisos en cada caso.
+    /// </summary>
+    private bool ActorHas(RecordActor actor, AppPermission permission) =>
+        _permissions?.HasPermission(actor.Role, actor.IsSuperAdmin, true, permission)
+        ?? actor.Has(permission);
 
     public async Task<NepRecord> CreateAsync(
         CreateNepRecordRequest request,
@@ -33,7 +47,7 @@ public sealed class NepRecordService
         CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.CaptureRecords))
+        if (!ActorHas(actor, AppPermission.CaptureRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para capturar registros.");
         }
@@ -102,7 +116,7 @@ public sealed class NepRecordService
         try
         {
             EnsureAuthenticated(actor);
-            if (!actor.Has(AppPermission.CaptureRecords))
+            if (!ActorHas(actor, AppPermission.CaptureRecords))
             {
                 return new RecordSaveResult
                 {
@@ -192,7 +206,7 @@ public sealed class NepRecordService
         CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.EditRecords))
+        if (!ActorHas(actor, AppPermission.EditRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para editar registros.");
         }
@@ -256,7 +270,7 @@ public sealed class NepRecordService
         CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.ViewRecords) && !actor.Has(AppPermission.CaptureRecords))
+        if (!ActorHas(actor, AppPermission.ViewRecords) && !ActorHas(actor, AppPermission.CaptureRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
         }
@@ -306,7 +320,7 @@ public sealed class NepRecordService
         CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.ApplyCorrectiveAction))
+        if (!ActorHas(actor, AppPermission.ApplyCorrectiveAction))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para acciones correctivas.");
         }
@@ -343,7 +357,7 @@ public sealed class NepRecordService
     public async Task DeleteAsync(Guid id, RecordActor actor, CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.DeleteRecords))
+        if (!ActorHas(actor, AppPermission.DeleteRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para eliminar registros.");
         }
@@ -358,7 +372,7 @@ public sealed class NepRecordService
     public async Task ClearAllAsync(RecordActor actor, CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.ClearAllRecords))
+        if (!ActorHas(actor, AppPermission.ClearAllRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para vaciar registros.");
         }
@@ -400,7 +414,7 @@ public sealed class NepRecordService
         CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
-        if (!actor.Has(AppPermission.ViewAlerts) && !actor.Has(AppPermission.ViewRecords))
+        if (!ActorHas(actor, AppPermission.ViewAlerts) && !ActorHas(actor, AppPermission.ViewRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para ver alertas.");
         }
@@ -438,9 +452,9 @@ public sealed class NepRecordService
         NepRecord record,
         bool requireEditPermission = true)
     {
-        if (requireEditPermission && !actor.Has(AppPermission.EditRecords)
-            && !actor.Has(AppPermission.DeleteRecords)
-            && !actor.Has(AppPermission.ApplyCorrectiveAction))
+        if (requireEditPermission && !ActorHas(actor, AppPermission.EditRecords)
+            && !ActorHas(actor, AppPermission.DeleteRecords)
+            && !ActorHas(actor, AppPermission.ApplyCorrectiveAction))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso sobre este registro.");
         }

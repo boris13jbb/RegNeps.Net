@@ -9,6 +9,7 @@
 @inject IReportSnapshotService Snapshots
 
 <PageTitle>Informes — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -287,16 +288,30 @@ else
         ("/exportar", "Exportar")
     ];
 
-    protected override async Task OnInitializedAsync()
+    private bool _exportReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.ExportReports) == true;
+        var allowed = _session?.Has(AppPermission.ExportReports) == true;
         _canSave = _session?.Has(AppPermission.ManageReports) == true;
-        ApplyQueryFilters();
-        if (_allowed)
+        if (!allowed)
         {
-            await RefreshCountAsync();
+            _allowed = false;
+            return;
         }
+
+        _allowed = true;
+        if (_exportReady)
+        {
+            return;
+        }
+
+        ApplyQueryFilters();
+        await RefreshCountAsync();
+        _exportReady = true;
     }
 
     /// <summary>Permite abrir Exportar desde Informes con ?from=&amp;to=&amp;telar=&amp;tela=.</summary>
@@ -518,8 +533,9 @@ else
 
     private async Task SaveReportAsync()
     {
-        if (_session is null || !_canSave)
+        if (_session is null || !await CurrentUser.HasAsync(AppPermission.ManageReports))
         {
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 

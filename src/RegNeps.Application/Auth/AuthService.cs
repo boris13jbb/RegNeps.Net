@@ -1,6 +1,8 @@
 using RegNeps.Application.Abstractions;
+using RegNeps.Application.Permissions;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
+using RegNeps.Domain.Permissions;
 
 namespace RegNeps.Application.Auth;
 
@@ -48,11 +50,20 @@ public sealed class AuthService
 public sealed class UserAdminService
 {
     private readonly IUserRepository _users;
+    private readonly IPermissionService _permissions;
 
-    public UserAdminService(IUserRepository users) => _users = users;
+    public UserAdminService(IUserRepository users, IPermissionService permissions)
+    {
+        _users = users;
+        _permissions = permissions;
+    }
 
-    public Task<IReadOnlyList<AppUser>> ListAsync(CancellationToken ct = default) =>
-        _users.ListAsync(ct: ct);
+    public async Task<IReadOnlyList<AppUser>> ListAsync(CallerContext actor, CancellationToken ct = default)
+    {
+        await _permissions.EnsureLoadedAsync(ct);
+        Ensure(actor, AppPermission.ManageUsers);
+        return await _users.ListAsync(ct: ct);
+    }
 
     public async Task<AppUser> CreateAsync(
         string username,
@@ -60,8 +71,11 @@ public sealed class UserAdminService
         AppUserRole role,
         string? displayName,
         string? email,
+        CallerContext actor,
         CancellationToken ct = default)
     {
+        await _permissions.EnsureLoadedAsync(ct);
+        Ensure(actor, AppPermission.ManageUsers);
         if (role == AppUserRole.SuperAdmin)
         {
             throw new InvalidOperationException("No se puede crear un super_admin desde el panel.");
@@ -92,8 +106,10 @@ public sealed class UserAdminService
         return await _users.AddAsync(user, ct);
     }
 
-    public async Task UpdateRoleAsync(Guid userId, AppUserRole role, CancellationToken ct = default)
+    public async Task UpdateRoleAsync(Guid userId, AppUserRole role, CallerContext actor, CancellationToken ct = default)
     {
+        await _permissions.EnsureLoadedAsync(ct);
+        Ensure(actor, AppPermission.ChangeRoles);
         if (role == AppUserRole.SuperAdmin)
         {
             throw new InvalidOperationException("No se puede promover a super_admin desde el panel.");
@@ -112,9 +128,11 @@ public sealed class UserAdminService
         await _users.UpdateAsync(user, ct);
     }
 
-    public async Task SetActiveAsync(Guid userId, bool active, Guid? actorUserId = null, CancellationToken ct = default)
+    public async Task SetActiveAsync(Guid userId, bool active, CallerContext actor, CancellationToken ct = default)
     {
-        if (actorUserId is not null && actorUserId == userId && !active)
+        await _permissions.EnsureLoadedAsync(ct);
+        Ensure(actor, AppPermission.ManageUsers);
+        if (actor.UserId is not null && actor.UserId == userId && !active)
         {
             throw new InvalidOperationException("No puede desactivar su propia cuenta.");
         }
@@ -136,8 +154,10 @@ public sealed class UserAdminService
         await _users.UpdateAsync(user, ct);
     }
 
-    public async Task ResetPasswordAsync(Guid userId, string newPassword, CancellationToken ct = default)
+    public async Task ResetPasswordAsync(Guid userId, string newPassword, CallerContext actor, CancellationToken ct = default)
     {
+        await _permissions.EnsureLoadedAsync(ct);
+        Ensure(actor, AppPermission.ManageUsers);
         ValidatePasswordStrength(newPassword);
 
         var user = await _users.GetByIdAsync(userId, ct)
@@ -147,9 +167,11 @@ public sealed class UserAdminService
         await _users.UpdateAsync(user, ct);
     }
 
-    public async Task SoftDeleteAsync(Guid userId, Guid? actorUserId = null, CancellationToken ct = default)
+    public async Task SoftDeleteAsync(Guid userId, CallerContext actor, CancellationToken ct = default)
     {
-        if (actorUserId is not null && actorUserId == userId)
+        await _permissions.EnsureLoadedAsync(ct);
+        Ensure(actor, AppPermission.DeleteUsers);
+        if (actor.UserId is not null && actor.UserId == userId)
         {
             throw new InvalidOperationException("No puede eliminar su propia cuenta.");
         }
@@ -170,6 +192,14 @@ public sealed class UserAdminService
         user.DeletedAt = DateTime.UtcNow;
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user, ct);
+    }
+
+    private void Ensure(CallerContext actor, AppPermission permission)
+    {
+        if (!_permissions.HasPermission(actor.Role, actor.IsSuperAdmin, actor.IsActive, permission))
+        {
+            throw new UnauthorizedAccessException("No tiene permiso para esta operación.");
+        }
     }
 
     private static void ValidatePasswordStrength(string password)

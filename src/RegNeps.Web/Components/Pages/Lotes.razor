@@ -4,6 +4,7 @@
 @inject CurrentUserService CurrentUser
 
 <PageTitle>Lotes de trama — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -121,14 +122,25 @@ else
         ("/lotes", "Lotes")
     ];
 
-    protected override async Task OnInitializedAsync()
+    private bool _catalogReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         var session = await CurrentUser.GetAsync();
-        // Mismo permiso que telas: catálogo de captura.
-        _allowed = session?.Has(AppPermission.ManageFabrics) == true;
-        if (_allowed)
+        var allowed = session?.Has(AppPermission.ManageFabrics) == true;
+        if (!allowed)
+        {
+            _allowed = false;
+            return;
+        }
+
+        _allowed = true;
+        if (!_catalogReady)
         {
             await LoadAsync();
+            _catalogReady = true;
         }
     }
 
@@ -161,6 +173,12 @@ else
         if (string.IsNullOrWhiteSpace(code))
         {
             _error = "El código es obligatorio.";
+            return;
+        }
+
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 
@@ -199,6 +217,12 @@ else
 
     private async Task DeleteAsync(Guid id)
     {
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
+
         try
         {
             await LoteRepo.DeleteAsync(id);

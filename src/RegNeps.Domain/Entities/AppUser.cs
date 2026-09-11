@@ -27,6 +27,10 @@ public sealed class AppUser
 
     public AppUserRole EffectiveRole => IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
 
+    /// <summary>
+    /// Consulta la matriz inicial, no la configuración persistida.
+    /// La autorización en runtime debe usar <c>IPermissionService</c>.
+    /// </summary>
     public bool HasPermission(AppPermission permission) =>
         RolePermissions.Has(Role, IsSuperAdmin, IsActive && DeletedAt is null, permission);
 }

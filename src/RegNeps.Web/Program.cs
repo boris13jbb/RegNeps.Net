@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Analytics;
 using RegNeps.Application.Auth;
+using RegNeps.Application.Permissions;
 using RegNeps.Application.Reports;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
@@ -80,6 +81,10 @@ builder.WebHost.UseUrls(urls);
 var app = builder.Build();
 
 await app.Services.EnsureDatabaseCreatedAsync();
+using (var permissionScope = app.Services.CreateScope())
+{
+    await permissionScope.ServiceProvider.GetRequiredService<IPermissionService>().EnsureLoadedAsync();
+}
 
 if (!app.Environment.IsDevelopment())
 {
@@ -145,6 +150,7 @@ app.MapGet("/api/logout", async (HttpContext http) =>
 app.MapGet("/api/export/{format}", async (
     string format,
     HttpContext http,
+    IPermissionService permissions,
     ReportExportAppService export,
     [FromQuery] string? telar,
     [FromQuery] string? tela,
@@ -157,7 +163,7 @@ app.MapGet("/api/export/{format}", async (
         return Results.Unauthorized();
     }
 
-    if (!HasPermission(http.User, AppPermission.ExportReports))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.ExportReports))
     {
         return Results.Forbid();
     }
@@ -195,6 +201,7 @@ app.MapGet("/api/export/saved/{id:guid}/{format}", async (
     Guid id,
     string format,
     HttpContext http,
+    IPermissionService permissions,
     ReportExportAppService export) =>
 {
     if (http.User.Identity?.IsAuthenticated != true)
@@ -202,8 +209,8 @@ app.MapGet("/api/export/saved/{id:guid}/{format}", async (
         return Results.Unauthorized();
     }
 
-    if (!HasPermission(http.User, AppPermission.ManageReports)
-        && !HasPermission(http.User, AppPermission.ExportReports))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.ManageReports)
+        && !await HasPermissionAsync(http, permissions, AppPermission.ExportReports))
     {
         return Results.Forbid();
     }
@@ -227,6 +234,7 @@ app.MapGet("/api/export/saved/{id:guid}/{format}", async (
 app.MapGet("/api/export/analytics/{format}", async (
     string format,
     HttpContext http,
+    IPermissionService permissions,
     AnalyticsService analytics,
     IExportFileService files,
     [FromQuery] int? days,
@@ -245,7 +253,7 @@ app.MapGet("/api/export/analytics/{format}", async (
         return Results.Unauthorized();
     }
 
-    if (!HasPermission(http.User, AppPermission.ViewDashboard))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.ViewDashboard))
     {
         return Results.Forbid();
     }
@@ -313,9 +321,10 @@ app.MapGet("/api/export/analytics/{format}", async (
     };
 }).RequireAuthorization();
 
-app.MapGet("/api/export/temp/{id:guid}", (
+app.MapGet("/api/export/temp/{id:guid}", async (
     Guid id,
     HttpContext http,
+    IPermissionService permissions,
     RegNeps.Web.Export.TempExportStore store) =>
 {
     if (http.User.Identity?.IsAuthenticated != true)
@@ -323,9 +332,9 @@ app.MapGet("/api/export/temp/{id:guid}", (
         return Results.Unauthorized();
     }
 
-    if (!HasPermission(http.User, AppPermission.ExportReports) &&
-        !HasPermission(http.User, AppPermission.ManageReports) &&
-        !HasPermission(http.User, AppPermission.ViewDashboard))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.ExportReports) &&
+        !await HasPermissionAsync(http, permissions, AppPermission.ManageReports) &&
+        !await HasPermissionAsync(http, permissions, AppPermission.ViewDashboard))
     {
         return Results.Forbid();
     }
@@ -345,10 +354,11 @@ app.MapGet("/api/export/temp/{id:guid}", (
 app.MapGet("/api/export/fabrics/{format}", async (
     string format,
     HttpContext http,
+    IPermissionService permissions,
     IFabricRepository fabrics,
     IExportFileService files) =>
 {
-    if (!HasPermission(http.User, AppPermission.ManageFabrics))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.ManageFabrics))
     {
         return Results.Forbid();
     }
@@ -369,10 +379,11 @@ app.MapGet("/api/export/fabrics/{format}", async (
 app.MapGet("/api/export/lotes/{format}", async (
     string format,
     HttpContext http,
+    IPermissionService permissions,
     ILoteTramaRepository lotes,
     IExportFileService files) =>
 {
-    if (!HasPermission(http.User, AppPermission.ManageFabrics))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.ManageFabrics))
     {
         return Results.Forbid();
     }
@@ -390,11 +401,12 @@ app.MapGet("/api/export/lotes/{format}", async (
         "lotes_trama.xlsx");
 }).RequireAuthorization();
 
-app.MapGet("/api/import/template", (
+app.MapGet("/api/import/template", async (
     HttpContext http,
+    IPermissionService permissions,
     IExportFileService files) =>
 {
-    if (!HasPermission(http.User, AppPermission.EditRecords))
+    if (!await HasPermissionAsync(http, permissions, AppPermission.EditRecords))
     {
         return Results.Forbid();
     }
@@ -449,19 +461,16 @@ app.MapRazorComponents<App>()
 
 app.Run();
 
-static bool HasPermission(ClaimsPrincipal user, AppPermission permission)
+static async Task<bool> HasPermissionAsync(HttpContext http, IPermissionService permissions, AppPermission permission)
 {
+    var user = http.User;
     if (user.Identity?.IsAuthenticated != true)
     {
         return false;
     }
 
-    if (IsSuperAdminUser(user))
-    {
-        return true;
-    }
-
-    return user.HasClaim("permission", permission.ToString());
+    Enum.TryParse<AppUserRole>(user.FindFirstValue(AuthClaims.Role), out var role);
+    return await permissions.HasPermissionAsync(role, IsSuperAdminUser(user), true, permission);
 }
 
 static bool IsSuperAdminUser(ClaimsPrincipal user) =>

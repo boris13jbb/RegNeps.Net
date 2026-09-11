@@ -4,6 +4,7 @@
 @inject CurrentUserService CurrentUser
 
 <PageTitle>Configuración — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_canView)
 {
@@ -104,24 +105,34 @@ else
     private string? _error;
     private string? _message;
 
-    protected override async Task OnInitializedAsync()
+    private bool _configReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         var session = await CurrentUser.GetAsync();
         _canView = session?.Has(AppPermission.ViewSettings) == true
                    || session?.Has(AppPermission.EditAlertConfig) == true;
         _canEdit = session?.Has(AppPermission.EditAlertConfig) == true;
         _canMigrate = session?.Has(AppPermission.ManageUsers) == true;
+        if (!_canView)
+        {
+            return;
+        }
 
-        if (_canView)
+        if (!_configReady || _config is null)
         {
             _config = await AlertConfig.GetAsync();
+            _configReady = true;
         }
     }
 
     private async Task SaveAsync()
     {
-        if (!_canEdit || _config is null)
+        if (_config is null || !await CurrentUser.HasAsync(AppPermission.EditAlertConfig))
         {
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 

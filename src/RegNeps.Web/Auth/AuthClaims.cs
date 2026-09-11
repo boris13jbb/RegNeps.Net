@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
+using RegNeps.Application.Permissions;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
@@ -34,11 +35,8 @@ public static class AuthClaims
             claims.Add(new Claim(ExternalUserId, user.ExternalUserId));
         }
 
-        foreach (var permission in RolePermissions.ForRole(user.EffectiveRole))
-        {
-            claims.Add(new Claim("permission", permission.ToString()));
-        }
-
+        // El rol viaja en la cookie. Los permisos no: se resuelven en cada comprobación
+        // para que un cambio del Super Administrador no quede congelado hasta el logout.
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         return new ClaimsPrincipal(identity);
     }
@@ -60,8 +58,13 @@ public static class AuthClaims
 public sealed class CurrentUserService
 {
     private readonly AuthenticationStateProvider _authState;
+    private readonly IPermissionService _permissions;
 
-    public CurrentUserService(AuthenticationStateProvider authState) => _authState = authState;
+    public CurrentUserService(AuthenticationStateProvider authState, IPermissionService permissions)
+    {
+        _authState = authState;
+        _permissions = permissions;
+    }
 
     public async Task<UserSession?> GetAsync()
     {
@@ -80,8 +83,16 @@ public sealed class CurrentUserService
         var isSuper = string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase)
                       || role == AppUserRole.SuperAdmin;
         var external = user.FindFirstValue(AuthClaims.ExternalUserId);
+        await _permissions.EnsureLoadedAsync();
 
-        return new UserSession(id, username, display, role, isSuper, external);
+        return new UserSession(id, username, display, role, isSuper, external, _permissions);
+    }
+
+    /// <summary>Vuelve a leer la matriz vigente. No basta con el permiso que había al abrir la página.</summary>
+    public async Task<bool> HasAsync(AppPermission permission)
+    {
+        var session = await GetAsync();
+        return session?.Has(permission) == true;
     }
 }
 
@@ -91,12 +102,20 @@ public sealed record UserSession(
     string DisplayName,
     AppUserRole Role,
     bool IsSuperAdmin,
-    string? ExternalUserId = null)
+    string? ExternalUserId = null,
+    IPermissionService? Permissions = null)
 {
     public AppUserRole EffectiveRole => IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
 
     public bool Has(AppPermission permission) =>
-        RolePermissions.Has(Role, IsSuperAdmin, true, permission);
+        Permissions?.HasPermission(Role, IsSuperAdmin, true, permission)
+        ?? RolePermissions.Has(Role, IsSuperAdmin, true, permission);
+
+    public CallerContext ToCaller()
+    {
+        Guid? id = Guid.TryParse(UserId, out var parsed) ? parsed : null;
+        return new CallerContext(id, Role, IsSuperAdmin);
+    }
 
     /// <summary>Operario solo ve sus registros; el resto ve el workspace.</summary>
     public bool SeesAllRecords =>

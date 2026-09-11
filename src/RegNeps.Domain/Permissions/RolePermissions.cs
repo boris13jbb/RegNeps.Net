@@ -2,7 +2,10 @@ using RegNeps.Domain.Enums;
 
 namespace RegNeps.Domain.Permissions;
 
-/// <summary>Matriz rol → permisos (paridad con role_permissions.dart).</summary>
+/// <summary>
+/// Matriz inicial rol → permisos. Solo se usa para sembrar la base de datos y como
+/// respaldo de pruebas que no cargan la matriz persistida. No es la autorización en runtime.
+/// </summary>
 public static class RolePermissions
 {
     private static readonly IReadOnlyDictionary<AppUserRole, HashSet<AppPermission>> Matrix =
@@ -15,7 +18,7 @@ public static class RolePermissions
                 AppPermission.ViewAlerts, AppPermission.ApplyCorrectiveAction, AppPermission.ManageFabrics,
                 AppPermission.ManageReports, AppPermission.ExportReports, AppPermission.EditAlertConfig,
                 AppPermission.ManageUsers, AppPermission.DeleteUsers, AppPermission.ChangeRoles,
-                AppPermission.ViewSettings, AppPermission.ManageSettings
+                AppPermission.ViewSettings, AppPermission.ManageRoles
             ],
             [AppUserRole.Admin] =
             [
@@ -23,7 +26,7 @@ public static class RolePermissions
                 AppPermission.EditRecords, AppPermission.DeleteRecords, AppPermission.ClearAllRecords,
                 AppPermission.ViewAlerts, AppPermission.ApplyCorrectiveAction, AppPermission.ManageFabrics,
                 AppPermission.ManageReports, AppPermission.ExportReports, AppPermission.EditAlertConfig,
-                AppPermission.ViewSettings, AppPermission.ManageSettings
+                AppPermission.ViewSettings
             ],
             [AppUserRole.Supervisor] =
             [

@@ -7,6 +7,7 @@
 @inject IJSRuntime Js
 
 <PageTitle>Captura — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -529,16 +530,26 @@ else
         || _useManualTela
         || _useManualLote;
 
-    protected override async Task OnInitializedAsync()
+    private bool _captureReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.CaptureRecords) == true;
         _canEdit = _session?.Has(AppPermission.EditRecords) == true;
         _canDelete = _session?.Has(AppPermission.DeleteRecords) == true;
         _canManageCatalog = _session?.Has(AppPermission.ManageFabrics) == true;
-        if (!_allowed || _session is null || string.IsNullOrWhiteSpace(_session.UserId))
+        var allowed = _session?.Has(AppPermission.CaptureRecords) == true
+                      && !string.IsNullOrWhiteSpace(_session.UserId);
+        if (!allowed || _session is null)
         {
             _allowed = false;
+            if (!_canEdit)
+            {
+                _editingRecord = null;
+            }
+
             return;
         }
 
@@ -549,6 +560,12 @@ else
         catch (UnauthorizedRecordAccessException)
         {
             _allowed = false;
+            return;
+        }
+
+        if (_captureReady)
+        {
+            _allowed = true;
             return;
         }
 
@@ -572,6 +589,8 @@ else
 
         await EnsureCaptureSessionAsync(forceNew: false);
         await ReloadSessionAsync();
+        _captureReady = true;
+        _allowed = true;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -828,6 +847,13 @@ else
             return null;
         }
 
+        if (!await CurrentUser.HasAsync(AppPermission.CaptureRecords))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para capturar registros.";
+            return null;
+        }
+
         _error = null;
         _success = null;
         ClearFieldErrors();
@@ -1069,6 +1095,13 @@ else
             return;
         }
 
+        if (!await CurrentUser.HasAsync(AppPermission.EditRecords))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para editar registros.";
+            return;
+        }
+
         _saving = true;
         _error = null;
         try
@@ -1106,8 +1139,15 @@ else
 
     private async Task DeleteRecordAsync(Guid id)
     {
-        if (!_canDelete || _actor is null || _saving)
+        if (_actor is null || _saving)
         {
+            return;
+        }
+
+        if (!await CurrentUser.HasAsync(AppPermission.DeleteRecords))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para eliminar registros.";
             return;
         }
 

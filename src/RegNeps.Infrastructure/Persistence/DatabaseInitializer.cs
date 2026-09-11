@@ -108,6 +108,38 @@ public static class DatabaseInitializer
                 ON "Fabrics" ("Name" COLLATE NOCASE)
                 """);
         }
+
+        await TryExecuteAsync(db,
+            """
+            CREATE TABLE IF NOT EXISTS "RolePermissions" (
+                "Role" INTEGER NOT NULL,
+                "Permission" INTEGER NOT NULL,
+                "IsEnabled" INTEGER NOT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                "UpdatedAt" TEXT NOT NULL,
+                "UpdatedByUserId" TEXT NULL,
+                CONSTRAINT "PK_RolePermissions" PRIMARY KEY ("Role", "Permission")
+            )
+            """);
+
+        await TryExecuteAsync(db,
+            """
+            CREATE TABLE IF NOT EXISTS "RolePermissionAudits" (
+                "Id" TEXT NOT NULL CONSTRAINT "PK_RolePermissionAudits" PRIMARY KEY,
+                "Role" INTEGER NOT NULL,
+                "Permission" INTEGER NOT NULL,
+                "PreviousValue" INTEGER NOT NULL,
+                "NewValue" INTEGER NOT NULL,
+                "ModifiedByUserId" TEXT NULL,
+                "ChangedAt" TEXT NOT NULL
+            )
+            """);
+
+        await TryExecuteAsync(db,
+            """
+            CREATE INDEX IF NOT EXISTS "IX_RolePermissionAudits_ChangedAt"
+            ON "RolePermissionAudits" ("ChangedAt")
+            """);
     }
 
     private static async Task ApplySqlServerPatchesAsync(RegNepsDbContext db)
@@ -174,6 +206,39 @@ public static class DatabaseInitializer
                 ON [Fabrics] ([Name])
                 """);
         }
+
+        await TryExecuteAsync(db,
+            """
+            IF OBJECT_ID(N'[RolePermissions]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [RolePermissions] (
+                    [Role] int NOT NULL,
+                    [Permission] int NOT NULL,
+                    [IsEnabled] bit NOT NULL,
+                    [CreatedAt] datetime2 NOT NULL,
+                    [UpdatedAt] datetime2 NOT NULL,
+                    [UpdatedByUserId] uniqueidentifier NULL,
+                    CONSTRAINT [PK_RolePermissions] PRIMARY KEY ([Role], [Permission])
+                );
+            END
+            """);
+
+        await TryExecuteAsync(db,
+            """
+            IF OBJECT_ID(N'[RolePermissionAudits]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [RolePermissionAudits] (
+                    [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_RolePermissionAudits] PRIMARY KEY,
+                    [Role] int NOT NULL,
+                    [Permission] int NOT NULL,
+                    [PreviousValue] bit NOT NULL,
+                    [NewValue] bit NOT NULL,
+                    [ModifiedByUserId] uniqueidentifier NULL,
+                    [ChangedAt] datetime2 NOT NULL
+                );
+                CREATE INDEX [IX_RolePermissionAudits_ChangedAt] ON [RolePermissionAudits] ([ChangedAt]);
+            END
+            """);
     }
 
     private static async Task TryExecuteAsync(RegNepsDbContext db, string sql)

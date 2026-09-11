@@ -8,6 +8,7 @@
 @inject IJSRuntime Js
 
 <PageTitle>Análisis — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -442,13 +443,25 @@ else
         "Top telas (volumen)"
     ];
 
-    protected override async Task OnInitializedAsync()
+    private bool _chartsReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.ViewDashboard) == true;
-        if (_allowed)
+        var allowed = _session?.Has(AppPermission.ViewDashboard) == true;
+        if (!allowed)
+        {
+            _allowed = false;
+            return;
+        }
+
+        _allowed = true;
+        if (!_chartsReady)
         {
             await LoadAsync();
+            _chartsReady = true;
         }
     }
 

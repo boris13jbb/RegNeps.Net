@@ -18,6 +18,10 @@ public sealed record RecordActor(
     public AppUserRole EffectiveRole =>
         IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
 
+    /// <summary>
+    /// Consulta la matriz inicial. Los servicios de aplicación deben validar con
+    /// <c>IPermissionService</c> para respetar la configuración persistida.
+    /// </summary>
     public bool Has(AppPermission permission) =>
         RolePermissions.Has(Role, IsSuperAdmin, true, permission);
 

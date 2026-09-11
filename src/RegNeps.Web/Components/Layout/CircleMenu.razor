@@ -1,4 +1,6 @@
 @inject CurrentUserService CurrentUser
+@inject IPermissionMatrix Permissions
+@implements IDisposable
 
 @if (_items.Count > 0)
 {
@@ -51,9 +53,20 @@
 
     protected override async Task OnInitializedAsync()
     {
+        Permissions.Changed += OnPermissionsChanged;
+        await RefreshAsync();
+    }
+
+    private void OnPermissionsChanged() => _ = InvokeAsync(RefreshAsync);
+
+    private async Task RefreshAsync()
+    {
         var session = await CurrentUser.GetAsync();
         _items = BuildItems(session);
+        StateHasChanged();
     }
+
+    public void Dispose() => Permissions.Changed -= OnPermissionsChanged;
 
     private static List<CircleItem> BuildItems(UserSession? session)
     {

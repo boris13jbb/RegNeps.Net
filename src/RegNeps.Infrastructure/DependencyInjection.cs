@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Analytics;
 using RegNeps.Application.Auth;
+using RegNeps.Application.Permissions;
 using RegNeps.Application.Records;
 using RegNeps.Application.Reports;
 using RegNeps.Infrastructure.Export;
@@ -49,6 +50,9 @@ public static class DependencyInjection
         services.AddScoped<IAlertConfigRepository, AlertConfigRepository>();
         services.AddScoped<IFabricRepository, FabricRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRolePermissionRepository, RolePermissionRepository>();
+        services.AddSingleton<IPermissionMatrix, PermissionMatrix>();
+        services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<ISavedReportRepository, SavedReportRepository>();
         services.AddScoped<ILoteTramaRepository, LoteTramaRepository>();
         services.AddScoped<IExportFileService, ExportFileService>();

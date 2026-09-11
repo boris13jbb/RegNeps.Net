@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using RegNeps.Application.Abstractions;
+using RegNeps.Domain.Enums;
 
 namespace RegNeps.Web.Auth;
 
@@ -42,7 +43,13 @@ public sealed class RegNepsRevalidatingAuthStateProvider : RevalidatingServerAut
         await using var scope = _scopeFactory.CreateAsyncScope();
         var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
         var dbUser = await users.GetByIdAsync(userId, cancellationToken);
-        var valid = dbUser is not null && dbUser.IsActive && dbUser.DeletedAt is null;
+        var claimRole = user.FindFirstValue(AuthClaims.Role);
+        Enum.TryParse<AppUserRole>(claimRole, out var parsedRole);
+        var claimSuper = string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase);
+        var roleMatches = dbUser is not null
+            && dbUser.EffectiveRole == (claimSuper ? AppUserRole.SuperAdmin : parsedRole)
+            && (dbUser.IsSuperAdmin || dbUser.Role == AppUserRole.SuperAdmin) == claimSuper;
+        var valid = dbUser is not null && dbUser.IsActive && dbUser.DeletedAt is null && roleMatches;
         // #region agent log
         DebugSessionLog.Write("H5", "RegNepsRevalidatingAuthStateProvider.cs", "revalidate", new
         {
