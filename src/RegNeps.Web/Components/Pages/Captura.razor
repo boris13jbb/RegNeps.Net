@@ -39,7 +39,18 @@ else
 
         @if (!string.IsNullOrEmpty(_success))
         {
-            <div class="alert alert-success py-2" role="status">@_success</div>
+            <div class="alert alert-success py-2 capture-success-banner" role="status">
+                <span>@_success</span>
+                @if (_lastSavedRecordId is Guid lastId)
+                {
+                    <button type="button"
+                            class="capture-share-inline"
+                            @onclick="() => ShareRecordAsync(lastId)"
+                            disabled="@(_saving || _sharing)">
+                        Compartir este registro
+                    </button>
+                }
+            </div>
         }
         @if (!string.IsNullOrEmpty(_error))
         {
@@ -255,8 +266,19 @@ else
 
         <section class="capture-card capture-session-card" aria-labelledby="capture-session-title">
             <div class="capture-session-header">
-                <h2 id="capture-session-title" class="capture-card-title mb-0">Registros de la sesión</h2>
-                <span class="capture-session-meta">@_sessionRecords.Count · Neps @_totalNeps.ToString("0.##") · Mts @_totalMts.ToString("0")</span>
+                <div class="capture-session-heading">
+                    <h2 id="capture-session-title" class="capture-card-title mb-0">Registros de la sesión</h2>
+                    <span class="capture-session-meta">@_sessionRecords.Count · Neps @_totalNeps.ToString("0.##") · Mts @_totalMts.ToString("0")</span>
+                </div>
+                @if (_sessionRecords.Count > 0)
+                {
+                    <button type="button"
+                            class="capture-action-btn capture-action-btn--primary"
+                            @onclick="ShareSelectedAsync"
+                            disabled="@(_saving || _sharing || _selectedRecordIds.Count == 0)">
+                        Compartir seleccionados (@_selectedRecordIds.Count)
+                    </button>
+                }
             </div>
 
             @if (_sessionRecords.Count == 0)
@@ -278,6 +300,9 @@ else
                     <table class="table capture-table mb-0">
                         <thead>
                             <tr>
+                                <th scope="col" class="capture-col-select">
+                                    <span class="visually-hidden">Seleccionar</span>
+                                </th>
                                 <th scope="col">Hora</th>
                                 <th scope="col">Telar</th>
                                 <th scope="col">Neps</th>
@@ -289,33 +314,45 @@ else
                         <tbody>
                             @foreach (var r in _sessionRecords)
                             {
-                                <tr>
+                                <tr class="@(_selectedRecordIds.Contains(r.Id) ? "capture-row-selected" : null)">
+                                    <td>
+                                        <input type="checkbox"
+                                               class="form-check-input capture-select-check"
+                                               checked="@_selectedRecordIds.Contains(r.Id)"
+                                               @onchange="e => ToggleSelection(r.Id, e.Value)"
+                                               aria-label="Seleccionar registro telar @r.Telar"
+                                               disabled="@(_saving || _sharing)" />
+                                    </td>
                                     <td>@r.CreatedAt.ToLocalTime().ToString("HH:mm")</td>
                                     <td>@r.Telar</td>
                                     <td>@r.Neps.ToString("0.##")</td>
                                     <td>@r.MtsCalculados.ToString("0")</td>
                                     <td class="capture-lote-cell font-monospace">@r.LoteTrama</td>
-                                    <td class="text-nowrap">
-                                        @if (_canEdit || _canDelete)
+                                    <td class="text-nowrap capture-row-actions">
+                                        <button type="button" class="rn-icon-btn capture-touch-btn" @onclick="() => ShareRecordAsync(r.Id)"
+                                                aria-label="Compartir registro telar @r.Telar" title="Compartir" disabled="@(_saving || _sharing)">
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+                                                <path d="M8.59 13.51 15.42 17.49" /><path d="M15.41 6.51 8.59 10.49" />
+                                            </svg>
+                                        </button>
+                                        @if (_canEdit)
                                         {
-                                            @if (_canEdit)
-                                            {
-                                                <button type="button" class="rn-icon-btn capture-touch-btn" @onclick="() => StartEditRecord(r)"
-                                                        aria-label="Editar registro telar @r.Telar" title="Editar" disabled="@_saving">
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                                        <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                                                    </svg>
-                                                </button>
-                                            }
-                                            @if (_canDelete)
-                                            {
-                                                <button type="button" class="rn-icon-btn rn-icon-btn--danger capture-touch-btn" @onclick="() => DeleteRecordAsync(r.Id)"
-                                                        aria-label="Eliminar registro telar @r.Telar" title="Eliminar" disabled="@_saving">
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                                        <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                                                    </svg>
-                                                </button>
-                                            }
+                                            <button type="button" class="rn-icon-btn capture-touch-btn" @onclick="() => StartEditRecord(r)"
+                                                    aria-label="Editar registro telar @r.Telar" title="Editar" disabled="@(_saving || _sharing)">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                    <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                                </svg>
+                                            </button>
+                                        }
+                                        @if (_canDelete)
+                                        {
+                                            <button type="button" class="rn-icon-btn rn-icon-btn--danger capture-touch-btn" @onclick="() => DeleteRecordAsync(r.Id)"
+                                                    aria-label="Eliminar registro telar @r.Telar" title="Eliminar" disabled="@(_saving || _sharing)">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                    <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                                </svg>
+                                            </button>
                                         }
                                     </td>
                                 </tr>
@@ -327,9 +364,17 @@ else
                 <ul class="capture-cards d-md-none" aria-label="Registros de la sesión">
                     @foreach (var r in _sessionRecords)
                     {
-                        <li class="capture-record-card">
+                        <li class="capture-record-card @(_selectedRecordIds.Contains(r.Id) ? "capture-record-card--selected" : null)">
                             <div class="capture-record-top">
-                                <span class="capture-record-telar">Telar @r.Telar</span>
+                                <label class="capture-select-label">
+                                    <input type="checkbox"
+                                           class="form-check-input capture-select-check"
+                                           checked="@_selectedRecordIds.Contains(r.Id)"
+                                           @onchange="e => ToggleSelection(r.Id, e.Value)"
+                                           aria-label="Seleccionar registro telar @r.Telar"
+                                           disabled="@(_saving || _sharing)" />
+                                    <span class="capture-record-telar">Telar @r.Telar</span>
+                                </label>
                                 <span class="capture-record-time">@r.CreatedAt.ToLocalTime().ToString("HH:mm")</span>
                             </div>
                             <dl class="capture-record-grid">
@@ -346,19 +391,17 @@ else
                                     <dd class="font-monospace">@r.LoteTrama</dd>
                                 </div>
                             </dl>
-                            @if (_canEdit || _canDelete)
-                            {
-                                <div class="capture-record-actions">
-                                    @if (_canEdit)
-                                    {
-                                        <button type="button" class="capture-record-action" @onclick="() => StartEditRecord(r)" disabled="@_saving">Editar</button>
-                                    }
-                                    @if (_canDelete)
-                                    {
-                                        <button type="button" class="capture-record-action capture-record-action--danger" @onclick="() => DeleteRecordAsync(r.Id)" disabled="@_saving">Eliminar</button>
-                                    }
-                                </div>
-                            }
+                            <div class="capture-record-actions">
+                                <button type="button" class="capture-record-action" @onclick="() => ShareRecordAsync(r.Id)" disabled="@(_saving || _sharing)">Compartir</button>
+                                @if (_canEdit)
+                                {
+                                    <button type="button" class="capture-record-action" @onclick="() => StartEditRecord(r)" disabled="@(_saving || _sharing)">Editar</button>
+                                }
+                                @if (_canDelete)
+                                {
+                                    <button type="button" class="capture-record-action capture-record-action--danger" @onclick="() => DeleteRecordAsync(r.Id)" disabled="@(_saving || _sharing)">Eliminar</button>
+                                }
+                            </div>
                         </li>
                     }
                 </ul>
@@ -472,6 +515,8 @@ else
     private IReadOnlyList<Fabric> _fabrics = [];
     private IReadOnlyList<LoteTramaItem> _lotes = [];
     private IReadOnlyList<NepRecord> _sessionRecords = [];
+    private readonly HashSet<Guid> _selectedRecordIds = new();
+    private Guid? _lastSavedRecordId;
     private AlertLevel? _previewLevel;
     private string? _success;
     private string? _error;
@@ -480,6 +525,7 @@ else
     private string? _errTela;
     private string? _errLote;
     private bool _saving;
+    private bool _sharing;
     private bool _allowed;
     private bool _canEdit;
     private bool _canDelete;
@@ -649,6 +695,7 @@ else
         if (_actor is null || string.IsNullOrWhiteSpace(_captureSessionId))
         {
             _sessionRecords = [];
+            _selectedRecordIds.Clear();
             _totalNeps = 0;
             _totalMts = 0;
             _loomCount = 0;
@@ -663,6 +710,14 @@ else
             _totalNeps = _sessionRecords.Sum(r => r.Neps);
             _totalMts = _sessionRecords.Sum(r => r.MtsCalculados);
             _loomCount = _sessionRecords.Select(r => r.Telar).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+
+            // Conservar selección explícita solo para IDs que siguen visibles; no agregar por sesión.
+            var visible = _sessionRecords.Select(r => r.Id).ToHashSet();
+            _selectedRecordIds.RemoveWhere(id => !visible.Contains(id));
+            if (_lastSavedRecordId is Guid last && !visible.Contains(last))
+            {
+                _lastSavedRecordId = null;
+            }
         }
         catch (Exception ex)
         {
@@ -714,6 +769,8 @@ else
         ResetFormComplete();
         _confirmNewRecord = false;
         _confirmNewSession = false;
+        _selectedRecordIds.Clear();
+        _lastSavedRecordId = null;
         _error = null;
         _success = "Nueva sesión iniciada. La tabla solo muestra mediciones de esta captura.";
         _focusTelarPending = true;
@@ -982,6 +1039,8 @@ else
 
             var saved = outcome.Record!;
             _previewLevel = outcome.AlertLevel;
+            _lastSavedRecordId = saved.Id;
+            // No auto-seleccionar registros anteriores ni el nuevo: compartir usa ID explícito.
 
             if (outcome.AlertEvaluationFailed)
             {
@@ -1154,12 +1213,101 @@ else
         try
         {
             await RecordService.DeleteAsync(id, _actor);
+            _selectedRecordIds.Remove(id);
+            if (_lastSavedRecordId == id)
+            {
+                _lastSavedRecordId = null;
+            }
+
             _success = "Registro eliminado.";
             await ReloadSessionAsync();
         }
         catch (Exception ex)
         {
             _error = ex.Message;
+        }
+    }
+
+    private void ToggleSelection(Guid recordId, object? value)
+    {
+        var selected = value is bool b
+            ? b
+            : value is string s && bool.TryParse(s, out var parsed) && parsed;
+        if (selected)
+        {
+            _selectedRecordIds.Add(recordId);
+        }
+        else
+        {
+            _selectedRecordIds.Remove(recordId);
+        }
+    }
+
+    /// <summary>Comparte únicamente el registro del Id indicado (nunca toda la sesión).</summary>
+    private async Task ShareRecordAsync(Guid recordId)
+    {
+        await ShareIdsAsync([recordId], clearSelectionOnSuccess: false);
+    }
+
+    /// <summary>Comparte exactamente los Ids de la selección manual.</summary>
+    private async Task ShareSelectedAsync()
+    {
+        if (_selectedRecordIds.Count == 0)
+        {
+            _error = "Seleccione al menos un registro para compartir.";
+            return;
+        }
+
+        await ShareIdsAsync(_selectedRecordIds.ToArray(), clearSelectionOnSuccess: true);
+    }
+
+    private async Task ShareIdsAsync(IReadOnlyList<Guid> ids, bool clearSelectionOnSuccess)
+    {
+        if (_actor is null || _sharing || ids.Count == 0)
+        {
+            return;
+        }
+
+        _sharing = true;
+        _error = null;
+        try
+        {
+            // Solo los Ids solicitados: el servicio no usa CaptureSessionId ni _sessionRecords.
+            var text = await RecordService.BuildShareTextForIdsAsync(ids, _actor);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _error = "No se encontraron registros accesibles para compartir.";
+                return;
+            }
+
+            var shared = await Js.InvokeAsync<bool>("regnepsUi.shareText", text, "RegNeps — registros");
+            if (shared)
+            {
+                _success = ids.Count == 1
+                    ? "Registro listo para compartir (o copiado al portapapeles)."
+                    : $"{ids.Count} registros listos para compartir (o copiados al portapapeles).";
+                if (clearSelectionOnSuccess)
+                {
+                    _selectedRecordIds.Clear();
+                }
+            }
+            else
+            {
+                // Cancelación del sheet nativo: conservar selección.
+                _success = null;
+            }
+        }
+        catch (JSException)
+        {
+            _error = "No se pudo abrir el compartir. Intente de nuevo.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _sharing = false;
         }
     }
 
