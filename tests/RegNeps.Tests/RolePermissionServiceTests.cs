@@ -201,13 +201,28 @@ public class RolePermissionServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Catalog_Covers_Every_Permission()
+    public async Task Catalog_Covers_Every_Assignable_Permission()
     {
         var catalog = PermissionCatalog.All.Select(x => x.Permission).ToHashSet();
         foreach (var permission in Enum.GetValues<AppPermission>())
         {
+            if (permission == AppPermission.ManageSettings)
+            {
+                continue;
+            }
+
             Assert.Contains(permission, catalog);
         }
+    }
+
+    [Fact]
+    public void ManageSettings_Is_Not_Offered_Because_Config_Only_Edits_Alerts()
+    {
+        Assert.DoesNotContain(PermissionCatalog.All, x => x.Permission == AppPermission.ManageSettings);
+        Assert.True(RolePermissions.Has(AppUserRole.Admin, AppPermission.ViewSettings));
+        Assert.True(RolePermissions.Has(AppUserRole.Admin, AppPermission.EditAlertConfig));
+        Assert.False(RolePermissions.Has(AppUserRole.Admin, AppPermission.ManageSettings));
+        Assert.False(RolePermissions.Has(AppUserRole.SuperAdmin, AppPermission.ManageSettings));
     }
 
     [Fact]

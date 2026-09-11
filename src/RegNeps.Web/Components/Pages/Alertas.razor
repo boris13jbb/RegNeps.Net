@@ -5,6 +5,7 @@
 @inject CurrentUserService CurrentUser
 
 <PageTitle>Alertas — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -105,17 +106,32 @@ else
     private string _responsable = "";
     private bool _saving;
 
-    protected override async Task OnInitializedAsync()
+    private bool _alertsReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.ViewAlerts) == true;
+        var allowed = _session?.Has(AppPermission.ViewAlerts) == true;
         _canCorrect = _session?.Has(AppPermission.ApplyCorrectiveAction) == true;
-        if (!_allowed)
+        if (!allowed)
         {
+            _allowed = false;
+            if (!_canCorrect)
+            {
+                _correctiveTarget = null;
+            }
+
             return;
         }
 
-        await LoadAsync();
+        _allowed = true;
+        if (!_alertsReady)
+        {
+            await LoadAsync();
+            _alertsReady = true;
+        }
     }
 
     private async Task LoadAsync()
@@ -150,6 +166,13 @@ else
     {
         if (_correctiveTarget is null)
         {
+            return;
+        }
+
+        if (!await CurrentUser.HasAsync(AppPermission.ApplyCorrectiveAction))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para acciones correctivas.";
             return;
         }
 

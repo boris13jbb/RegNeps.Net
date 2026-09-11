@@ -8,6 +8,7 @@
 @inject IJSRuntime Js
 
 <PageTitle>Dashboard — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -290,16 +291,26 @@ else
     private IReadOnlyList<NepRecord> PagedUltimos =>
         _ultimos.Skip((_currentPage - 1) * PageSize).Take(PageSize).ToList();
 
-    protected override async Task OnInitializedAsync()
+    private bool _dashboardReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.ViewDashboard) == true;
-        if (!_allowed)
+        var allowed = _session?.Has(AppPermission.ViewDashboard) == true;
+        if (!allowed)
         {
+            _allowed = false;
             return;
         }
 
-        await LoadAsync();
+        _allowed = true;
+        if (!_dashboardReady)
+        {
+            await LoadAsync();
+            _dashboardReady = true;
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

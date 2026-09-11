@@ -1,0 +1,27 @@
+@inject IPermissionMatrix Matrix
+@implements IDisposable
+
+@code {
+    /// <summary>
+    /// Reevalúa la vista cuando la matriz en memoria cambia.
+    /// No consulta la base en cada render ni hace polling.
+    /// </summary>
+    [Parameter, EditorRequired]
+    public EventCallback OnChanged { get; set; }
+
+    protected override void OnInitialized() => Matrix.Changed += HandleChanged;
+
+    private void HandleChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await OnChanged.InvokeAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        });
+
+    public void Dispose() => Matrix.Changed -= HandleChanged;
+}

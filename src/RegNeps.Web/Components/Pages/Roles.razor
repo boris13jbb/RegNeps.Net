@@ -4,6 +4,7 @@
 @inject CurrentUserService CurrentUser
 
 <PageTitle>Roles y permisos — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (_loading)
 {
@@ -139,19 +140,33 @@ else
     private Dictionary<AppPermission, bool> _saved = [];
     private List<string> _sensitiveRemovals = [];
 
-    protected override async Task OnInitializedAsync()
+    private bool _rolesReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session is not null &&
-                   _session.IsSuperAdmin &&
-                   Permissions.CanAdministerRoles(_session.Role, _session.IsSuperAdmin, true);
-        if (!_allowed)
+        var allowed = _session is not null &&
+                      _session.IsSuperAdmin &&
+                      Permissions.CanAdministerRoles(_session.Role, _session.IsSuperAdmin, true);
+        if (!allowed)
+        {
+            _allowed = false;
+            _loading = false;
+            _dirty = false;
+            return;
+        }
+
+        _allowed = true;
+        if (_rolesReady)
         {
             _loading = false;
             return;
         }
 
         await LoadRoleAsync(_selectedRole);
+        _rolesReady = true;
         _loading = false;
     }
 

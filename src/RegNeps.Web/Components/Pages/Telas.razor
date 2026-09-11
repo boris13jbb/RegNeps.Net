@@ -5,6 +5,7 @@
 @inject CurrentUserService CurrentUser
 
 <PageTitle>Telas — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -151,13 +152,25 @@ else
         ("/lotes", "Lotes")
     ];
 
-    protected override async Task OnInitializedAsync()
+    private bool _catalogReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         var session = await CurrentUser.GetAsync();
-        _allowed = session?.Has(AppPermission.ManageFabrics) == true;
-        if (_allowed)
+        var allowed = session?.Has(AppPermission.ManageFabrics) == true;
+        if (!allowed)
+        {
+            _allowed = false;
+            return;
+        }
+
+        _allowed = true;
+        if (!_catalogReady)
         {
             await LoadAsync();
+            _catalogReady = true;
         }
     }
 

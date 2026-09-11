@@ -18,7 +18,7 @@ public static class RolePermissions
                 AppPermission.ViewAlerts, AppPermission.ApplyCorrectiveAction, AppPermission.ManageFabrics,
                 AppPermission.ManageReports, AppPermission.ExportReports, AppPermission.EditAlertConfig,
                 AppPermission.ManageUsers, AppPermission.DeleteUsers, AppPermission.ChangeRoles,
-                AppPermission.ViewSettings, AppPermission.ManageSettings, AppPermission.ManageRoles
+                AppPermission.ViewSettings, AppPermission.ManageRoles
             ],
             [AppUserRole.Admin] =
             [
@@ -26,7 +26,7 @@ public static class RolePermissions
                 AppPermission.EditRecords, AppPermission.DeleteRecords, AppPermission.ClearAllRecords,
                 AppPermission.ViewAlerts, AppPermission.ApplyCorrectiveAction, AppPermission.ManageFabrics,
                 AppPermission.ManageReports, AppPermission.ExportReports, AppPermission.EditAlertConfig,
-                AppPermission.ViewSettings, AppPermission.ManageSettings
+                AppPermission.ViewSettings
             ],
             [AppUserRole.Supervisor] =
             [

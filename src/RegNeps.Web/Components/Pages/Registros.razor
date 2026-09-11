@@ -9,6 +9,7 @@
 @implements IDisposable
 
 <PageTitle>Registros — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
 
 @if (!_allowed)
 {
@@ -324,15 +325,36 @@ else
     private bool _marcarRevisado = true;
     private bool _savingCorrective;
 
-    protected override async Task OnInitializedAsync()
+    private bool _recordsReady;
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.ViewRecords) == true;
+        var allowed = _session?.Has(AppPermission.ViewRecords) == true;
         _canEdit = _session?.Has(AppPermission.EditRecords) == true;
         _canDelete = _session?.Has(AppPermission.DeleteRecords) == true;
         _canClearAll = _session?.Has(AppPermission.ClearAllRecords) == true;
         _canCorrect = _session?.Has(AppPermission.ApplyCorrectiveAction) == true;
-        if (!_allowed || _session is null)
+        if (!allowed || _session is null)
+        {
+            _allowed = false;
+            if (!_canEdit)
+            {
+                _editTarget = null;
+            }
+
+            if (!_canCorrect)
+            {
+                _correctiveTarget = null;
+            }
+
+            return;
+        }
+
+        _allowed = true;
+        if (_recordsReady)
         {
             return;
         }
@@ -341,6 +363,7 @@ else
         ApplyQueryFilters();
         _totalInDb = await RecordService.CountAllAsync();
         await LoadAsync();
+        _recordsReady = true;
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
@@ -573,8 +596,10 @@ else
 
     private async Task OnImportAsync(InputFileChangeEventArgs e)
     {
-        if (_session is null || !_canEdit)
+        if (_session is null || !await CurrentUser.HasAsync(AppPermission.EditRecords))
         {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 
@@ -616,8 +641,10 @@ else
 
     private async Task SaveEditAsync()
     {
-        if (_editTarget is null || !_canEdit)
+        if (_editTarget is null || !await CurrentUser.HasAsync(AppPermission.EditRecords))
         {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para editar registros.";
             return;
         }
 
@@ -671,6 +698,13 @@ else
             return;
         }
 
+        if (!await CurrentUser.HasAsync(AppPermission.ApplyCorrectiveAction))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para acciones correctivas.";
+            return;
+        }
+
         _savingCorrective = true;
         _error = null;
         try
@@ -697,8 +731,10 @@ else
 
     private async Task ClearAllAsync()
     {
-        if (!_canClearAll)
+        if (!await CurrentUser.HasAsync(AppPermission.ClearAllRecords))
         {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para vaciar registros.";
             return;
         }
 
@@ -721,8 +757,10 @@ else
 
     private async Task DeleteAsync(Guid id)
     {
-        if (!_canDelete)
+        if (!await CurrentUser.HasAsync(AppPermission.DeleteRecords))
         {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para eliminar registros.";
             return;
         }
 

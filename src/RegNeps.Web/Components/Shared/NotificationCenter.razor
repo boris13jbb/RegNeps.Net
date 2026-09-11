@@ -5,6 +5,8 @@
 @inject IJSRuntime Js
 @implements IAsyncDisposable
 
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
+
 @if (_allowed)
 {
     <div class="rn-notif">
@@ -246,14 +248,25 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await RefreshAccessAsync();
+    }
+
+    private async Task RefreshAccessAsync()
+    {
         _session = await CurrentUser.GetAsync();
-        _allowed = _session?.Has(AppPermission.ViewAlerts) == true;
-        if (!_allowed)
+        var allowed = _session?.Has(AppPermission.ViewAlerts) == true;
+        if (!allowed)
         {
+            _allowed = false;
             return;
         }
 
-        await RefreshAlertsAsync();
+        var gained = !_allowed;
+        _allowed = true;
+        if (gained)
+        {
+            await RefreshAlertsAsync();
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

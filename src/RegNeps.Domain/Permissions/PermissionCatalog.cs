@@ -67,9 +67,7 @@ public static class PermissionCatalog
             Sensitive: true, ExclusiveToSuperAdmin: true),
 
         new(AppPermission.ViewSettings, PermissionCategory.Settings, "Ver configuración",
-            "Permite consultar la configuración del sistema."),
-        new(AppPermission.ManageSettings, PermissionCategory.Settings, "Administrar configuración",
-            "Permite modificar la configuración general del sistema.", Sensitive: true)
+            "Permite consultar la configuración del sistema.")
     ];
 
     public static IReadOnlyList<PermissionCategory> Categories { get; } =
