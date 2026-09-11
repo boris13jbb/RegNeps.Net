@@ -111,6 +111,30 @@ window.regnepsUi = (function () {
                 document.body.removeChild(ta);
             }
         },
+
+        /**
+         * Comparte texto vía Web Share API; si se cancela, retorna false.
+         * Si no hay share nativo, copia al portapapeles y retorna true.
+         */
+        shareText: async function (text, title) {
+            var payload = text || '';
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: title || 'RegNeps',
+                        text: payload
+                    });
+                    return true;
+                } catch (err) {
+                    if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
+                        return false;
+                    }
+                    // Fallback a clipboard si share falla por otro motivo.
+                }
+            }
+
+            return await window.regnepsUi.copyText(payload);
+        },
         scrollIntoView: function (el, options) {
             if (!el || typeof el.scrollIntoView !== 'function') {
                 return;

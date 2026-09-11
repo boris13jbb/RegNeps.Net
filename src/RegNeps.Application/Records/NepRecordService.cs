@@ -428,6 +428,69 @@ public sealed class NepRecordService
             .ToList();
     }
 
+    /// <summary>
+    /// Resuelve registros para compartir exclusivamente por ID.
+    /// No expandirá por CaptureSessionId, fecha, telar, lote ni listado de sesión.
+    /// </summary>
+    public async Task<IReadOnlyList<NepRecord>> GetAccessibleByIdsAsync(
+        IEnumerable<Guid> recordIds,
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!ActorHas(actor, AppPermission.ViewRecords) && !ActorHas(actor, AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
+        }
+
+        var orderedUnique = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var id in recordIds ?? Array.Empty<Guid>())
+        {
+            if (id == Guid.Empty || !seen.Add(id))
+            {
+                continue;
+            }
+
+            orderedUnique.Add(id);
+        }
+
+        if (orderedUnique.Count == 0)
+        {
+            return Array.Empty<NepRecord>();
+        }
+
+        var result = new List<NepRecord>(orderedUnique.Count);
+        foreach (var id in orderedUnique)
+        {
+            var record = await _records.GetByIdAsync(id, ct);
+            if (record is null)
+            {
+                continue;
+            }
+
+            // Solo acceso explícito por Id: nunca expandir por CaptureSessionId u otros filtros.
+            if (!actor.SeesAllRecords && !OwnsRecord(actor, record))
+            {
+                continue;
+            }
+
+            result.Add(record);
+        }
+
+        return result;
+    }
+
+    /// <summary>Construye el texto de compartir solo para los IDs solicitados y accesibles.</summary>
+    public async Task<string> BuildShareTextForIdsAsync(
+        IEnumerable<Guid> recordIds,
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        var records = await GetAccessibleByIdsAsync(recordIds, actor, ct);
+        return RecordShareFormatter.Format(records);
+    }
+
     public bool OwnsRecord(RecordActor actor, NepRecord record) =>
         OwnsRecord(actor, record.CreatedByUserId);
 
