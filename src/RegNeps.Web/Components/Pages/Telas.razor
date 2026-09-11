@@ -185,6 +185,11 @@ else
     {
         _error = null;
         _message = null;
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
         var file = e.File;
         if (file is null || file.Size == 0)
         {
@@ -253,6 +258,12 @@ else
             return;
         }
 
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
+
         _saving = true;
         try
         {
@@ -293,6 +304,12 @@ else
 
     private async Task DeleteAsync(Guid id)
     {
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
+
         try
         {
             await Fabrics.DeleteAsync(id);

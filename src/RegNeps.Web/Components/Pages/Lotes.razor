@@ -164,6 +164,12 @@ else
             return;
         }
 
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
+
         _saving = true;
         try
         {
@@ -199,6 +205,12 @@ else
 
     private async Task DeleteAsync(Guid id)
     {
+        if (!await CurrentUser.HasAsync(AppPermission.ManageFabrics))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
+
         try
         {
             await LoteRepo.DeleteAsync(id);

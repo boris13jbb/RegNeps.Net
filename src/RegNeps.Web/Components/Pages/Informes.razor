@@ -338,8 +338,9 @@ else
 
     private async Task SaveAsync()
     {
-        if (_session is null)
+        if (_session is null || !await CurrentUser.HasAsync(AppPermission.ManageReports))
         {
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 
@@ -390,6 +391,12 @@ else
 
     private async Task DeleteAsync(Guid id)
     {
+        if (!await CurrentUser.HasAsync(AppPermission.ManageReports))
+        {
+            _error = "No tiene permiso para esta operación.";
+            return;
+        }
+
         try
         {
             await Reports.DeleteSavedAsync(id);

@@ -163,7 +163,10 @@ else
         }
     }
 
-    private async Task LoadAsync() => _list = await Users.ListAsync();
+    private CallerContext RequireCaller() =>
+        _session?.ToCaller() ?? throw new UnauthorizedAccessException("No tiene permiso para gestionar usuarios.");
+
+    private async Task LoadAsync() => _list = await Users.ListAsync(RequireCaller());
 
     private async Task CreateAsync()
     {
@@ -172,7 +175,7 @@ else
         _saving = true;
         try
         {
-            await Users.CreateAsync(_newUsername, _newPassword, _newRole, null, null);
+            await Users.CreateAsync(_newUsername, _newPassword, _newRole, null, null, RequireCaller());
             _message = "Usuario creado.";
             _newUsername = "";
             _newPassword = "";
@@ -203,7 +206,7 @@ else
 
         try
         {
-            await Users.UpdateRoleAsync(user.Id, role);
+            await Users.UpdateRoleAsync(user.Id, role, RequireCaller());
             _message = $"Rol de {user.Username} actualizado a {role.ToDisplayLabel()}.";
             _error = null;
             await LoadAsync();
@@ -219,8 +222,7 @@ else
     {
         try
         {
-            Guid? actorId = Guid.TryParse(_session?.UserId, out var id) ? id : null;
-            await Users.SetActiveAsync(user.Id, !user.IsActive, actorId);
+            await Users.SetActiveAsync(user.Id, !user.IsActive, RequireCaller());
             await LoadAsync();
         }
         catch (Exception ex)
@@ -244,7 +246,7 @@ else
 
         try
         {
-            await Users.ResetPasswordAsync(_resetTarget.Id, _resetPassword);
+            await Users.ResetPasswordAsync(_resetTarget.Id, _resetPassword, RequireCaller());
             _message = "Contraseña actualizada.";
             CloseReset();
         }
@@ -258,8 +260,7 @@ else
     {
         try
         {
-            Guid? actorId = Guid.TryParse(_session?.UserId, out var actor) ? actor : null;
-            await Users.SoftDeleteAsync(id, actorId);
+            await Users.SoftDeleteAsync(id, RequireCaller());
             await LoadAsync();
         }
         catch (Exception ex)

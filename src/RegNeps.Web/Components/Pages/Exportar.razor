@@ -518,8 +518,9 @@ else
 
     private async Task SaveReportAsync()
     {
-        if (_session is null || !_canSave)
+        if (_session is null || !await CurrentUser.HasAsync(AppPermission.ManageReports))
         {
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 

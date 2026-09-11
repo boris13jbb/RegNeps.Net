@@ -120,8 +120,9 @@ else
 
     private async Task SaveAsync()
     {
-        if (!_canEdit || _config is null)
+        if (_config is null || !await CurrentUser.HasAsync(AppPermission.EditAlertConfig))
         {
+            _error = "No tiene permiso para esta operación.";
             return;
         }
 

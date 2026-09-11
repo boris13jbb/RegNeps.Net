@@ -19,5 +19,7 @@ public enum AppPermission
     DeleteUsers,
     ChangeRoles,
     ViewSettings,
-    ManageSettings
+    ManageSettings,
+    /// <summary>Administrar la matriz de roles y permisos. Reservado al Super Administrador.</summary>
+    ManageRoles
 }

@@ -36,6 +36,17 @@ public interface IFabricRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
+public interface IRolePermissionRepository
+{
+    Task<IReadOnlyList<RolePermission>> ListAsync(CancellationToken ct = default);
+
+    /// <summary>Inserta o actualiza asignaciones y deja la auditoría en la misma transacción.</summary>
+    Task SaveChangesAsync(
+        IReadOnlyList<RolePermission> upserts,
+        IReadOnlyList<RolePermissionAudit> audits,
+        CancellationToken ct = default);
+}
+
 public interface IUserRepository
 {
     Task<AppUser?> FindByUsernameAsync(string username, CancellationToken ct = default);

@@ -1,0 +1,287 @@
+@page "/roles"
+@rendermode InteractiveServer
+@inject IPermissionService Permissions
+@inject CurrentUserService CurrentUser
+
+<PageTitle>Roles y permisos — RegNeps</PageTitle>
+
+@if (_loading)
+{
+    <LoadingBlock />
+}
+else if (!_allowed)
+{
+    <div class="alert alert-warning" role="alert">No tiene permiso para administrar roles y permisos</div>
+}
+else
+{
+    <PageHeader Title="Roles y permisos"
+                Subtitle="Active o desactive las capacidades de cada rol. El Super Administrador conserva acceso total." />
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger" role="alert">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <div class="alert alert-success" role="status">@_message</div>
+    }
+
+    <div class="roles-shell">
+        <div class="roles-tabs" role="tablist" aria-label="Roles">
+            @foreach (var role in _roles)
+            {
+                var selected = role == _selectedRole;
+                <button type="button"
+                        class="roles-tab @(selected ? "is-active" : null)"
+                        role="tab"
+                        aria-selected="@selected"
+                        @onclick="() => SelectRole(role)">
+                    @role.ToDisplayLabel()
+                </button>
+            }
+        </div>
+
+        <section class="roles-panel" role="tabpanel" aria-label="@_selectedRole.ToDisplayLabel()">
+            @if (_selectedRole == AppUserRole.SuperAdmin)
+            {
+                <div class="alert alert-info" role="note">
+                    El Super Administrador tiene acceso total al sistema y sus permisos no pueden modificarse.
+                </div>
+            }
+            else if (_dirty)
+            {
+                <div class="roles-dirty" role="status">Cambios sin guardar</div>
+            }
+
+            @foreach (var category in PermissionCatalog.Categories)
+            {
+                <section class="roles-group">
+                    <h2 class="roles-group-title">@PermissionCatalog.CategoryLabel(category)</h2>
+                    <ul class="roles-list">
+                        @foreach (var definition in PermissionCatalog.All.Where(x => x.Category == category))
+                        {
+                            var locked = IsLocked(definition);
+                            var enabled = IsEnabled(definition);
+                            var inputId = $"perm-{_selectedRole}-{definition.Permission}";
+                            <li class="roles-item @(locked ? "is-locked" : null)" @key="@inputId">
+                                <div class="form-check form-switch roles-switch">
+                                    <input id="@inputId"
+                                           class="form-check-input"
+                                           type="checkbox"
+                                           role="switch"
+                                           checked="@enabled"
+                                           disabled="@locked"
+                                           @onchange="e => Toggle(definition, e)" />
+                                    <label class="form-check-label" for="@inputId">@definition.Label</label>
+                                </div>
+                                <p class="roles-desc">@definition.Description</p>
+                            </li>
+                        }
+                    </ul>
+                </section>
+            }
+
+            @if (_selectedRole != AppUserRole.SuperAdmin)
+            {
+                <div class="roles-actions">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="Cancel" disabled="@(!_dirty || _saving)">
+                        Cancelar
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="RequestSaveAsync" disabled="@(!_dirty || _saving)" aria-busy="@_saving">
+                        @(_saving ? "Guardando…" : "Guardar cambios")
+                    </button>
+                </div>
+            }
+        </section>
+    </div>
+
+    @if (_confirmOpen)
+    {
+        <AppModal Title="Confirmar cambios sensibles" OnClose="CloseConfirm">
+            <ChildContent>
+                <p>Se retirarán permisos críticos del rol <strong>@_selectedRole.ToDisplayLabel()</strong>:</p>
+                <ul class="mb-0">
+                    @foreach (var label in _sensitiveRemovals)
+                    {
+                        <li>@label</li>
+                    }
+                </ul>
+            </ChildContent>
+            <Footer>
+                <button type="button" class="btn btn-outline-secondary" @onclick="CloseConfirm">Volver</button>
+                <button type="button" class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">Confirmar y guardar</button>
+            </Footer>
+        </AppModal>
+    }
+}
+
+@code {
+    private static readonly AppUserRole[] _roles =
+    [
+        AppUserRole.Operario,
+        AppUserRole.Supervisor,
+        AppUserRole.Admin,
+        AppUserRole.Gerencia,
+        AppUserRole.SuperAdmin
+    ];
+
+    private UserSession? _session;
+    private bool _loading = true;
+    private bool _allowed;
+    private bool _dirty;
+    private bool _saving;
+    private bool _confirmOpen;
+    private AppUserRole _selectedRole = AppUserRole.Supervisor;
+    private string? _error;
+    private string? _message;
+    private Dictionary<AppPermission, bool> _draft = [];
+    private Dictionary<AppPermission, bool> _saved = [];
+    private List<string> _sensitiveRemovals = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _allowed = _session is not null &&
+                   _session.IsSuperAdmin &&
+                   Permissions.CanAdministerRoles(_session.Role, _session.IsSuperAdmin, true);
+        if (!_allowed)
+        {
+            _loading = false;
+            return;
+        }
+
+        await LoadRoleAsync(_selectedRole);
+        _loading = false;
+    }
+
+    private async Task SelectRole(AppUserRole role)
+    {
+        if (role == _selectedRole)
+        {
+            return;
+        }
+
+        if (_dirty)
+        {
+            _error = "Hay cambios sin guardar. Guarde o cancele antes de cambiar de rol.";
+            return;
+        }
+
+        _error = null;
+        _message = null;
+        _selectedRole = role;
+        await LoadRoleAsync(role);
+    }
+
+    private async Task LoadRoleAsync(AppUserRole role)
+    {
+        var enabled = await Permissions.GetPermissionsForRoleAsync(role);
+        _saved = PermissionCatalog.All.ToDictionary(x => x.Permission, x => enabled.Contains(x.Permission));
+        _draft = new Dictionary<AppPermission, bool>(_saved);
+        _dirty = false;
+    }
+
+    private bool IsLocked(PermissionDefinition definition) =>
+        _selectedRole == AppUserRole.SuperAdmin || definition.ExclusiveToSuperAdmin;
+
+    private bool IsEnabled(PermissionDefinition definition)
+    {
+        if (_selectedRole == AppUserRole.SuperAdmin)
+        {
+            return true;
+        }
+
+        if (definition.ExclusiveToSuperAdmin)
+        {
+            return false;
+        }
+
+        return _draft.TryGetValue(definition.Permission, out var enabled) && enabled;
+    }
+
+    private void Toggle(PermissionDefinition definition, ChangeEventArgs e)
+    {
+        if (IsLocked(definition))
+        {
+            return;
+        }
+
+        var next = e.Value is bool on && on;
+        _draft[definition.Permission] = next;
+        _dirty = _draft.Any(pair => _saved.TryGetValue(pair.Key, out var saved) && saved != pair.Value);
+        _message = null;
+        _error = null;
+    }
+
+    private void Cancel()
+    {
+        _draft = new Dictionary<AppPermission, bool>(_saved);
+        _dirty = false;
+        _error = null;
+        _message = null;
+        _confirmOpen = false;
+    }
+
+    private async Task RequestSaveAsync()
+    {
+        if (!_dirty || _selectedRole == AppUserRole.SuperAdmin)
+        {
+            return;
+        }
+
+        _sensitiveRemovals = PermissionCatalog.All
+            .Where(x => x.Sensitive)
+            .Where(x => _saved.GetValueOrDefault(x.Permission) && !_draft.GetValueOrDefault(x.Permission))
+            .Select(x => x.Label)
+            .ToList();
+
+        if (_sensitiveRemovals.Count > 0)
+        {
+            _confirmOpen = true;
+            return;
+        }
+
+        await SaveAsync();
+    }
+
+    private void CloseConfirm() => _confirmOpen = false;
+
+    private async Task SaveAsync()
+    {
+        if (_session is null || !_allowed || _selectedRole == AppUserRole.SuperAdmin)
+        {
+            _error = "No tiene permiso para administrar roles y permisos";
+            _confirmOpen = false;
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+        _message = null;
+        try
+        {
+            var desired = PermissionCatalog.All.ToDictionary(
+                x => x.Permission,
+                x => !x.ExclusiveToSuperAdmin && _draft.GetValueOrDefault(x.Permission));
+            var changed = await Permissions.UpdateRolePermissionsAsync(
+                _selectedRole,
+                desired,
+                _session.ToCaller());
+            await LoadRoleAsync(_selectedRole);
+            _message = changed == 0
+                ? "No había cambios que guardar."
+                : $"Permisos del rol {_selectedRole.ToDisplayLabel()} actualizados correctamente.";
+            _confirmOpen = false;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _confirmOpen = false;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

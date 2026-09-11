@@ -16,6 +16,8 @@ public sealed class RegNepsDbContext : DbContext
     public DbSet<AlertConfig> AlertConfigs => Set<AlertConfig>();
     public DbSet<SavedReport> SavedReports => Set<SavedReport>();
     public DbSet<LoteTramaItem> LoteTramaItems => Set<LoteTramaItem>();
+    public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+    public DbSet<RolePermissionAudit> RolePermissionAudits => Set<RolePermissionAudit>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -118,6 +120,21 @@ public sealed class RegNepsDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.Code).HasMaxLength(64).IsRequired();
             e.HasIndex(x => x.Code).IsUnique();
+        });
+
+        modelBuilder.Entity<RolePermission>(e =>
+        {
+            e.HasKey(x => new { x.Role, x.Permission });
+            e.Property(x => x.Role).HasConversion<int>();
+            e.Property(x => x.Permission).HasConversion<int>();
+        });
+
+        modelBuilder.Entity<RolePermissionAudit>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Role).HasConversion<int>();
+            e.Property(x => x.Permission).HasConversion<int>();
+            e.HasIndex(x => x.ChangedAt);
         });
     }
 }
