@@ -50,15 +50,6 @@ public sealed class RegNepsRevalidatingAuthStateProvider : RevalidatingServerAut
             && dbUser.EffectiveRole == (claimSuper ? AppUserRole.SuperAdmin : parsedRole)
             && (dbUser.IsSuperAdmin || dbUser.Role == AppUserRole.SuperAdmin) == claimSuper;
         var valid = dbUser is not null && dbUser.IsActive && dbUser.DeletedAt is null && roleMatches;
-        // #region agent log
-        DebugSessionLog.Write("H5", "RegNepsRevalidatingAuthStateProvider.cs", "revalidate", new
-        {
-            userId = userId.ToString("N")[..8],
-            valid,
-            active = dbUser?.IsActive,
-            deleted = dbUser?.DeletedAt is not null
-        });
-        // #endregion
         return valid;
     }
 }
