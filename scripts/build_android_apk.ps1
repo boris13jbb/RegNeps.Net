@@ -47,8 +47,15 @@ Invoke-DotNet -Step 'La restauración de workloads' -Arguments @('workload', 're
 Write-Host 'Restaurando dependencias...'
 Invoke-DotNet -Step 'La restauración de dependencias' -Arguments @('restore', $Project)
 
-Write-Host 'Compilando APK Debug instalable...'
-Invoke-DotNet -Step 'La compilación Android' -Arguments @('build', $Project, '-f', $TargetFramework, '-c', 'Debug', '-p:AndroidPackageFormat=apk')
+# EmbedAssembliesIntoApk evita Fast Deployment: la APK Debug QA queda autónoma para adb install.
+Write-Host 'Compilando APK Debug instalable (assemblies embebidos)...'
+Invoke-DotNet -Step 'La compilación Android' -Arguments @(
+    'build', $Project,
+    '-f', $TargetFramework,
+    '-c', 'Debug',
+    '-p:AndroidPackageFormat=apk',
+    '-p:EmbedAssembliesIntoApk=true'
+)
 
 $Apks = Get-ChildItem -Path $Output -Filter '*.apk' -Recurse -ErrorAction SilentlyContinue
 if (-not $Apks) {

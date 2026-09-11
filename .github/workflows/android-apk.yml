@@ -37,7 +37,8 @@ jobs:
 
       - name: Build installable QA APK
         shell: pwsh
-        run: dotnet build src/RegNeps.Mobile/RegNeps.Mobile.csproj -f net10.0-android -c Debug -p:AndroidPackageFormat=apk
+        # EmbedAssembliesIntoApk=true: APK Debug autónoma (sin Fast Deployment).
+        run: dotnet build src/RegNeps.Mobile/RegNeps.Mobile.csproj -f net10.0-android -c Debug -p:AndroidPackageFormat=apk -p:EmbedAssembliesIntoApk=true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
