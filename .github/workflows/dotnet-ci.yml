@@ -1,0 +1,33 @@
+name: .NET CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # La solución RegNeps.sln (Domain/Application/Infrastructure/Web/Tests/Migrate) usa net8.0.
+          # RegNeps.Mobile (net10.0-android) queda fuera de esta CI y se valida en Android APK QA.
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore RegNeps.sln
+
+      - name: Build
+        run: dotnet build RegNeps.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test RegNeps.sln --no-build --configuration Release --verbosity normal
