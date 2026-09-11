@@ -570,6 +570,45 @@
     color: var(--cap-muted);
 }
 
+.capture-session-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+}
+
+@media (min-width: 768px) {
+    .capture-session-toolbar {
+        width: auto;
+        justify-content: flex-end;
+        flex: 1 1 auto;
+    }
+}
+
+.capture-session-toolbar .capture-action-btn {
+    min-height: 44px;
+    flex: 1 1 auto;
+}
+
+@media (min-width: 768px) {
+    .capture-session-toolbar .capture-action-btn {
+        flex: 0 1 auto;
+    }
+}
+
+.capture-share-format-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.65rem;
+}
+
+@media (min-width: 480px) {
+    .capture-share-format-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
 .capture-success-banner {
     display: flex;
     flex-wrap: wrap;

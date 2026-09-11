@@ -199,10 +199,62 @@ window.regnepsDownload = (function () {
     }, 120000);
   }
 
+  /**
+   * Intenta Web Share con el archivo temporal; si cancela o no está disponible, descarga.
+   * Consume la URL una sola vez (TempExportStore es de un solo uso).
+   * @returns {'shared'|'downloaded'|'cancelled'}
+   */
+  async function shareOrDownload(url, fileName) {
+    if (!url) {
+      return "downloaded";
+    }
+
+    let blob;
+    try {
+      const response = await fetch(url, { credentials: "same-origin" });
+      if (!response.ok) {
+        throw new Error("No se pudo obtener el archivo temporal.");
+      }
+      blob = await response.blob();
+    } catch (_) {
+      downloadUrl(url);
+      return "downloaded";
+    }
+
+    const name = fileName || "regneps-export";
+    try {
+      if (navigator.share && navigator.canShare) {
+        const file = new File([blob], name, {
+          type: blob.type || "application/octet-stream"
+        });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: name
+          });
+          return "shared";
+        }
+      }
+    } catch (err) {
+      if (err && (err.name === "AbortError" || err.name === "NotAllowedError")) {
+        return "cancelled";
+      }
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      triggerDownload(objectUrl, name);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+    return "downloaded";
+  }
+
   return {
     fileFromBase64,
     fileFromDataUrl,
     openUrl,
-    downloadUrl
+    downloadUrl,
+    shareOrDownload
   };
 })();
