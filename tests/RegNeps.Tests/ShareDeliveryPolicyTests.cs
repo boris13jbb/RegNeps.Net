@@ -58,6 +58,7 @@ public sealed class ShareDeliveryPolicyTests
     [InlineData("cancelled", ShareDeliveryResult.Cancelled)]
     [InlineData("unsupported", ShareDeliveryResult.Unsupported)]
     [InlineData("failed", ShareDeliveryResult.Failed)]
+    [InlineData("downloaded", ShareDeliveryResult.Downloaded)]
     [InlineData("SHARED", ShareDeliveryResult.Shared)]
     public void Parse_Maps_Known_Tokens(string token, ShareDeliveryResult expected)
     {
@@ -78,15 +79,24 @@ public sealed class ShareDeliveryPolicyTests
         var shared = ShareDeliveryPolicy.UserMessage(ShareDeliveryResult.Shared, 2);
         var copied = ShareDeliveryPolicy.UserMessage(ShareDeliveryResult.Copied, 2);
         var native = ShareDeliveryPolicy.UserMessage(ShareDeliveryResult.NativeRequested, 2);
+        var downloaded = ShareDeliveryPolicy.UserMessage(ShareDeliveryResult.Downloaded, 2);
 
-        Assert.Contains("compart", shared!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Archivo compartido", shared!, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("portapapeles", shared!, StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains("portapapeles", copied!, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("compartidos", copied!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Archivo compartido", copied!, StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains("menú", native!, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("portapapeles", native!, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains("descarg", downloaded!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Downloaded_Does_Not_Clear_Selection()
+    {
+        Assert.False(ShareDeliveryPolicy.ShouldClearSelection(ShareDeliveryResult.Downloaded, clearOnSharedSuccess: true));
     }
 
     [Fact]

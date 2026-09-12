@@ -1,5 +1,8 @@
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
+#if ANDROID
+using Android.Webkit;
+#endif
 
 namespace RegNeps.Mobile;
 
@@ -9,13 +12,13 @@ public partial class MainPage : ContentPage
     private const string DefaultServerUrl = "http://192.168.100.140:5080";
 
     /// <summary>
-    /// Límite del deep-link regneps-share:// (URL completa). Por encima se rechaza
-    /// sin crashear; el JS hace fallback a clipboard.
+    /// Límite del deep-link regneps-share:// (URL completa). Solo metadatos (id/nombre), no bytes.
     /// </summary>
     private const int NativeShareUrlMaxLength = 3500;
 
     private const string NativeShareScheme = "regneps-share";
-    private const string NativeShareHost = "share";
+    private const string NativeShareHostText = "share";
+    private const string NativeShareHostFile = "file";
 
     public MainPage()
     {
@@ -96,14 +99,13 @@ public partial class MainPage : ContentPage
             LoadingIndicator.IsRunning = false;
             RetryButton.IsVisible = false;
 
-            // Solo el WebView de la APK debe usar el esquema regneps-share://.
             try
             {
                 await Browser.EvaluateJavaScriptAsync("window.regnepsNativeShareAvailable = true;");
             }
             catch
             {
-                /* WebView aún no listo; el siguiente Navigated lo reintentará */
+                /* WebView aún no listo */
             }
 
             return;
@@ -113,17 +115,13 @@ public partial class MainPage : ContentPage
     }
 
     /// <summary>
-    /// Acepta únicamente regneps-share://share?title=&amp;text=.
-    /// No abre URLs externas ni ejecuta scripts.
+    /// Acepta únicamente:
+    /// - regneps-share://share?title=&amp;text= (legado texto)
+    /// - regneps-share://file?id=&amp;name= (archivo vía TempExport autenticado)
     /// </summary>
     private bool TryBeginNativeShare(string? rawUrl)
     {
-        if (string.IsNullOrWhiteSpace(rawUrl))
-        {
-            return false;
-        }
-
-        if (rawUrl.Length > NativeShareUrlMaxLength)
+        if (string.IsNullOrWhiteSpace(rawUrl) || rawUrl.Length > NativeShareUrlMaxLength)
         {
             return false;
         }
@@ -138,18 +136,37 @@ public partial class MainPage : ContentPage
             return false;
         }
 
-        // Host o path: regneps-share://share?...
         var action = string.IsNullOrEmpty(uri.Host) ? uri.AbsolutePath.Trim('/') : uri.Host;
-        if (!string.Equals(action, NativeShareHost, StringComparison.OrdinalIgnoreCase))
+
+        if (string.Equals(action, NativeShareHostFile, StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            var idRaw = Uri.UnescapeDataString(GetQueryValue(uri, "id") ?? string.Empty);
+            var fileName = Uri.UnescapeDataString(GetQueryValue(uri, "name") ?? "regneps-export");
+            if (!Guid.TryParse(idRaw, out var exportId))
+            {
+                return true; // esquema reconocido pero inválido: cancelar navegación sin crashear
+            }
+
+            _ = RequestNativeFileShareAsync(exportId, SanitizeFileName(fileName));
+            return true;
         }
 
-        var title = Uri.UnescapeDataString(GetQueryValue(uri, "title") ?? "RegNeps");
-        var text = Uri.UnescapeDataString(GetQueryValue(uri, "text") ?? string.Empty);
+        if (string.Equals(action, NativeShareHostText, StringComparison.OrdinalIgnoreCase))
+        {
+            var title = Uri.UnescapeDataString(GetQueryValue(uri, "title") ?? "RegNeps");
+            var text = Uri.UnescapeDataString(GetQueryValue(uri, "text") ?? string.Empty);
+            _ = RequestNativeTextShareAsync(title, text);
+            return true;
+        }
 
-        _ = RequestNativeShareAsync(title, text);
-        return true;
+        return false;
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        return string.IsNullOrWhiteSpace(cleaned) ? "regneps-export" : cleaned;
     }
 
     private static string? GetQueryValue(Uri uri, string key)
@@ -175,7 +192,7 @@ public partial class MainPage : ContentPage
         return null;
     }
 
-    private static async Task RequestNativeShareAsync(string title, string text)
+    private static async Task RequestNativeTextShareAsync(string title, string text)
     {
         try
         {
@@ -188,8 +205,82 @@ public partial class MainPage : ContentPage
         }
         catch
         {
-            // No tumbar la app si el sheet nativo falla; el usuario puede reintentar.
+            /* no tumbar la app */
         }
+    }
+
+    private async Task RequestNativeFileShareAsync(Guid exportId, string fileName)
+    {
+        try
+        {
+            var baseUrl = NormalizeServerUrl(ServerEntry.Text ?? string.Empty);
+            if (baseUrl is null)
+            {
+                return;
+            }
+
+            var downloadUrl = $"{baseUrl}/api/export/temp/{exportId:D}";
+            using var client = new HttpClient();
+            AttachWebViewCookies(client, baseUrl);
+
+            using var response = await client.GetAsync(downloadUrl);
+            if (!response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            var bytes = await response.Content.ReadAsByteArrayAsync();
+            if (bytes.Length == 0)
+            {
+                return;
+            }
+
+            var contentType = response.Content.Headers.ContentType?.MediaType
+                              ?? GuessContentType(fileName);
+
+            var localPath = Path.Combine(FileSystem.CacheDirectory, fileName);
+            await File.WriteAllBytesAsync(localPath, bytes);
+
+            await Share.Default.RequestAsync(new ShareFileRequest
+            {
+                Title = fileName,
+                File = new ShareFile(localPath, contentType)
+            });
+        }
+        catch
+        {
+            /* no tumbar la app */
+        }
+    }
+
+    private static string GuessContentType(string fileName)
+    {
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".csv" => "text/csv",
+            _ => "application/octet-stream"
+        };
+    }
+
+    private static void AttachWebViewCookies(HttpClient client, string baseUrl)
+    {
+#if ANDROID
+        try
+        {
+            var cookie = CookieManager.Instance?.GetCookie(baseUrl);
+            if (!string.IsNullOrWhiteSpace(cookie))
+            {
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Cookie", cookie);
+            }
+        }
+        catch
+        {
+            /* sin cookies: el endpoint devolverá 401/404 */
+        }
+#endif
     }
 
     private void ShowLoading(string message)

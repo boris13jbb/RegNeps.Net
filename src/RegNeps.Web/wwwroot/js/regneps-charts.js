@@ -206,7 +206,39 @@ window.regnepsDownload = (function () {
    */
   async function shareOrDownload(url, fileName) {
     if (!url) {
-      return "downloaded";
+      return "failed";
+    }
+
+    const name = fileName || "regneps-export";
+
+    // APK MAUI: no consumir el temp aquí; el puente nativo lo descarga con la cookie del WebView.
+    if (window.regnepsNativeShareAvailable === true) {
+      try {
+        const match = String(url).match(/\/api\/export\/temp\/([^/?#]+)/i);
+        if (match && match[1]) {
+          const nativeUrl =
+            "regneps-share://file?id=" + encodeURIComponent(match[1]) +
+            "&name=" + encodeURIComponent(name);
+          if (nativeUrl.length > 3500) {
+            return "failed";
+          }
+          const iframe = document.createElement("iframe");
+          iframe.setAttribute("aria-hidden", "true");
+          iframe.style.cssText = "display:none;width:0;height:0;border:0;position:absolute";
+          iframe.src = nativeUrl;
+          document.body.appendChild(iframe);
+          setTimeout(function () {
+            try {
+              document.body.removeChild(iframe);
+            } catch (_) {
+              /* ignore */
+            }
+          }, 1500);
+          return "native-requested";
+        }
+      } catch (_) {
+        return "failed";
+      }
     }
 
     let blob;
@@ -221,7 +253,6 @@ window.regnepsDownload = (function () {
       return "downloaded";
     }
 
-    const name = fileName || "regneps-export";
     try {
       if (navigator.share && navigator.canShare) {
         const file = new File([blob], name, {

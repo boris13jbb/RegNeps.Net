@@ -54,6 +54,86 @@ public sealed class ReportExportAppService
         return await BuildExportFileAsync(format, records, filters, style, ct, columns);
     }
 
+    /// <summary>
+    /// Exporta exclusivamente los Ids indicados (deduplicados), con el mismo aislamiento que QueryAsync.
+    /// No usa CaptureSessionId, fechas ni otros filtros de expansión.
+    /// </summary>
+    public async Task<(byte[] Bytes, string FileName, string ContentType)> ExportByIdsAsync(
+        string format,
+        IReadOnlyCollection<Guid> ids,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        string style = "completo",
+        IReadOnlyList<string>? columns = null,
+        CancellationToken ct = default)
+    {
+        var unique = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var id in ids ?? Array.Empty<Guid>())
+        {
+            if (id == Guid.Empty || !seen.Add(id))
+            {
+                continue;
+            }
+
+            unique.Add(id);
+        }
+
+        if (unique.Count == 0)
+        {
+            throw new ArgumentException("Indique al menos un registro para exportar.");
+        }
+
+        var records = await _records.GetByIdsAsync(unique, viewerUserId, viewerSeesAll, ct);
+        if (records.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No hay registros accesibles para exportar con los Ids indicados.");
+        }
+
+        // Conservar el orden de solicitud (ya deduplicado).
+        var byId = records.ToDictionary(r => r.Id);
+        var ordered = unique
+            .Where(id => byId.ContainsKey(id))
+            .Select(id => byId[id])
+            .ToList();
+
+        var filters = new RecordFilters();
+        var file = await BuildExportFileAsync(format, ordered, filters, style, ct, columns);
+
+        // Nombres más claros para compartir desde Captura.
+        var stamp = Stamp();
+        var baseName = ordered.Count == 1
+            ? $"regneps_registro_{SanitizeFilePart(ordered[0].Telar)}_{stamp}"
+            : $"regneps_seleccion_{ordered.Count}_{stamp}";
+
+        var ext = Path.GetExtension(file.FileName);
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            ext = format.Trim().ToLowerInvariant() switch
+            {
+                "pdf" => ".pdf",
+                "xlsx" or "excel" => ".xlsx",
+                _ => ".csv"
+            };
+        }
+
+        return (file.Bytes, baseName + ext, file.ContentType);
+    }
+
+    private static string SanitizeFilePart(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "registro";
+        }
+
+        var chars = value.Trim().Select(ch =>
+            char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_').ToArray();
+        var cleaned = new string(chars);
+        return string.IsNullOrWhiteSpace(cleaned) ? "registro" : cleaned;
+    }
+
     private async Task<(byte[] Bytes, string FileName, string ContentType)> BuildExportFileAsync(
         string format,
         IReadOnlyList<NepRecord> records,

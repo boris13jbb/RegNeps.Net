@@ -1,8 +1,7 @@
 namespace RegNeps.Application.Records;
 
 /// <summary>
-/// Resultado explícito de intentar entregar texto para compartir.
-/// No confundir "copied" (clipboard) con "shared" (menú nativo completado).
+/// Resultado explícito de intentar entregar un archivo o texto para compartir.
 /// </summary>
 public enum ShareDeliveryResult
 {
@@ -11,7 +10,8 @@ public enum ShareDeliveryResult
     Copied = 2,
     Cancelled = 3,
     Unsupported = 4,
-    Failed = 5
+    Failed = 5,
+    Downloaded = 6
 }
 
 /// <summary>
@@ -22,7 +22,6 @@ public static class ShareDeliveryPolicy
     /// <summary>
     /// Solo un "shared" real podría limpiar, y únicamente si la UI lo pide.
     /// Captura usa clearOnSharedSuccess=false para conservar la selección del usuario.
-    /// Clipboard, cancelación, bridge nativo y errores nunca limpian.
     /// </summary>
     public static bool ShouldClearSelection(ShareDeliveryResult result, bool clearOnSharedSuccess) =>
         clearOnSharedSuccess && result == ShareDeliveryResult.Shared;
@@ -42,24 +41,25 @@ public static class ShareDeliveryPolicy
             "cancelled" => ShareDeliveryResult.Cancelled,
             "unsupported" => ShareDeliveryResult.Unsupported,
             "failed" => ShareDeliveryResult.Failed,
+            "downloaded" => ShareDeliveryResult.Downloaded,
             _ => ShareDeliveryResult.Failed
         };
     }
 
     public static string? UserMessage(ShareDeliveryResult result, int recordCount)
     {
-        var plural = recordCount == 1 ? "Registro compartido." : "Registros compartidos.";
         return result switch
         {
-            ShareDeliveryResult.Shared => plural,
+            ShareDeliveryResult.Shared => "Archivo compartido.",
             ShareDeliveryResult.NativeRequested => "Se abrió el menú para compartir.",
+            ShareDeliveryResult.Downloaded => "El archivo se descargó.",
             ShareDeliveryResult.Copied =>
                 "No se pudo abrir el menú de compartir. El contenido fue copiado al portapapeles.",
             ShareDeliveryResult.Cancelled => null,
             ShareDeliveryResult.Unsupported =>
                 "No se pudo abrir el menú de compartir en este dispositivo.",
-            ShareDeliveryResult.Failed => "No se pudo compartir. Intente nuevamente.",
-            _ => "No se pudo compartir. Intente nuevamente."
+            ShareDeliveryResult.Failed => "No se pudo compartir el archivo.",
+            _ => "No se pudo compartir el archivo."
         };
     }
 

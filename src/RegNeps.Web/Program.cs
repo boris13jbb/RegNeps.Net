@@ -317,9 +317,13 @@ app.MapGet("/api/export/temp/{id:guid}", async (
         return Results.Unauthorized();
     }
 
+    // Seguridad: autenticado + dueño del temp (TryTake).
+    // Permisos: export/manage/dashboard O captura/consulta (para compartir archivos desde Captura).
     if (!await HasPermissionAsync(http, permissions, AppPermission.ExportReports) &&
         !await HasPermissionAsync(http, permissions, AppPermission.ManageReports) &&
-        !await HasPermissionAsync(http, permissions, AppPermission.ViewDashboard))
+        !await HasPermissionAsync(http, permissions, AppPermission.ViewDashboard) &&
+        !await HasPermissionAsync(http, permissions, AppPermission.CaptureRecords) &&
+        !await HasPermissionAsync(http, permissions, AppPermission.ViewRecords))
     {
         return Results.Forbid();
     }
