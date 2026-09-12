@@ -95,10 +95,21 @@ public sealed class ExportFileService : IExportFileService
         if (IsClassic(style))
             return BuildClassicPdf(records, config, title, filtersDescription, columns);
 
+        return ComposeCompletePdfDocument(records, config, title, filtersDescription, columns);
+    }
+
+    private byte[] ComposeCompletePdfDocument(
+        IReadOnlyList<NepRecord> records,
+        AlertConfig config,
+        string title,
+        string? filtersDescription,
+        IReadOnlyList<string>? columns)
+    {
         var sorted = SortForReport(records);
         var cols = ReportColumnIds.Normalize(columns);
         var summary = Summarize(sorted);
         var critical = sorted.Where(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Critico).ToList();
+        var warnings = sorted.Where(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Advertencia).ToList();
         var byTelar = GroupBy(sorted, r => r.Telar, "(sin telar)", config);
         var topTelars = byTelar.OrderByDescending(g => g.TotalNeps).Take(10).ToList();
         var bestTelars = byTelar
@@ -108,10 +119,6 @@ public sealed class ExportFileService : IExportFileService
             .ToList();
         var porTela = GroupBy(sorted, r => r.Tela, "(sin tela)", config).Take(10).ToList();
         var porLote = GroupBy(sorted, r => r.LoteTrama, "(sin lote)", config).Take(10).ToList();
-        var worstTela = porTela.OrderByDescending(g => g.AverageNeps).FirstOrDefault();
-        var worstLote = porLote.OrderByDescending(g => g.AverageNeps).FirstOrDefault();
-        var criticalTelars = byTelar.Count(g => g.CriticalCount > 0);
-        var bestTelar = bestTelars.FirstOrDefault();
 
         var recommendations = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in critical.Take(15))
@@ -121,75 +128,73 @@ public sealed class ExportFileService : IExportFileService
         }
 
         var generatedAt = DateTime.Now;
-        var navy = Color.FromHex("#1F2A2E");
-        var tableHeader = Color.FromHex("#1F4E79");
-        var mainHeader = Color.FromHex("#1F2A2E");
-        var muted = Color.FromHex("#CFD8C5");
-        var execBox = Color.FromHex("#EBDFC3");
-        var zebra = Color.FromHex("#F7F5F0");
+        var palette = PdfCompletePalette.Create();
+        var tableHeader = palette.NavyMid;
+        var zebra = palette.Surface;
 
         var document = Document.Create(container =>
         {
             container.Page(page =>
             {
                 page.Size(PageSizes.A4);
-                page.Margin(28);
-                page.DefaultTextStyle(x => x.FontSize(9));
+                page.Margin(24);
+                page.DefaultTextStyle(x => x.FontSize(9).FontColor(palette.Ink));
 
                 page.Content().Column(col =>
                 {
-                    col.Spacing(10);
+                    col.Spacing(12);
 
-                    // Encabezado (solo flujo de contenido, como el reporte de referencia)
-                    col.Item().Background(navy).Padding(14).Column(h =>
-                    {
-                        h.Item().Text("VICUNHA — Sistema de Control de Calidad Textil")
-                            .FontColor(Colors.White).SemiBold().FontSize(15);
-                        h.Item().PaddingTop(2).Text(title).FontColor(muted).FontSize(10);
-                        h.Item().PaddingTop(4).Text($"Generado: {FormatDate(generatedAt)}")
-                            .FontColor(muted).FontSize(9);
-                    });
-
-                    col.Item().Text($"Fórmula utilizada: Mts calculados = Neps / {NepsConstants.TestLengthM.ToString(Inv)}")
-                        .SemiBold().FontSize(11);
+                    ComposePdfHeader(col, title, generatedAt, palette);
+                    ComposePdfSummaryCards(
+                        col,
+                        sorted.Count,
+                        summary.TotalNeps,
+                        summary.AverageNeps,
+                        critical.Count,
+                        warnings.Count,
+                        palette);
+                    ComposePdfFormulaBlock(col, palette);
 
                     if (!string.IsNullOrWhiteSpace(filtersDescription))
                     {
-                        col.Item().Text($"Filtros aplicados: {filtersDescription}").FontSize(9);
+                        col.Item().Text($"Filtros aplicados: {filtersDescription}")
+                            .FontSize(8)
+                            .FontColor(Colors.Grey.Darken2);
                     }
 
-                    // Resumen ejecutivo (caja beige)
-                    col.Item().Background(execBox).Padding(12).Column(box =>
+                    col.Item().Text("Detalle de mediciones").SemiBold().FontSize(12).FontColor(palette.Navy);
+                    if (sorted.Count == 0)
                     {
-                        box.Item().Text("Resumen ejecutivo").SemiBold().FontSize(12);
-                        box.Item().PaddingTop(4).Text($"Total registros: {sorted.Count}");
-                        box.Item().Text($"Total neps: {FormatDecimal(summary.TotalNeps)}");
-                        box.Item().Text($"Promedio neps: {FormatMts(summary.AverageNeps)}");
-                        box.Item().Text($"Telares críticos: {criticalTelars}");
-                        if (worstTela is not null)
-                            box.Item().Text($"Tela más problemática: {worstTela.Key}");
-                        if (worstLote is not null)
-                            box.Item().Text($"Lote/trama más crítico: {worstLote.Key}");
-                        if (bestTelar is not null)
-                        {
-                            var nepsM2 = bestTelar.AverageNeps / NepsConstants.TestLengthM;
-                            box.Item().Text(
-                                $"Mejor telar (menor neps/m²): {bestTelar.Key} — {FormatMts(nepsM2)} neps/m² ({bestTelar.RecordCount} registros)");
-                        }
-                    });
+                        col.Item().Background(palette.Surface).Border(1).BorderColor(palette.Gold)
+                            .Padding(14)
+                            .Text("No hay registros para mostrar en este informe. Totales en cero.")
+                            .FontSize(10);
+                    }
+                    else
+                    {
+                        col.Item().Element(c => ComposePdfRecordsTable(c, sorted, config, cols, palette));
+                    }
 
-                    col.Item().Text("Tabla principal de registros").SemiBold().FontSize(12);
-                    col.Item().Element(c => WritePdfRecordsTable(c, sorted, config, cols, mainHeader, zebra));
+                    ComposePdfTotalsAndConclusion(
+                        col,
+                        sorted.Count,
+                        summary.TotalNeps,
+                        summary.AverageNeps,
+                        critical.Count,
+                        warnings.Count,
+                        palette);
+                    ComposePdfGeneralObservations(col, filtersDescription, critical.Count, warnings.Count, palette);
 
+                    // Apéndice analítico (Exportar / Informes): se conserva tras el bloque corporativo.
                     if (critical.Count > 0)
                     {
-                        col.Item().Text("Alertas críticas").SemiBold().FontSize(12);
-                        col.Item().Element(c => WritePdfAlertTable(c, critical, config, mainHeader, zebra));
+                        col.Item().PaddingTop(6).Text("Alertas críticas").SemiBold().FontSize(12).FontColor(palette.Navy);
+                        col.Item().Element(c => WritePdfAlertTable(c, critical, config, tableHeader, zebra));
                     }
 
                     if (topTelars.Count > 0)
                     {
-                        col.Item().Text("Top 10 telares con más neps").SemiBold().FontSize(12);
+                        col.Item().Text("Top 10 telares con más neps").SemiBold().FontSize(12).FontColor(palette.Navy);
                         col.Item().Element(c => WritePdfGroupTable(
                             c,
                             ["Telar", "Total neps", "Promedio por m²", "Registros"],
@@ -206,7 +211,7 @@ public sealed class ExportFileService : IExportFileService
 
                     if (bestTelars.Count > 0)
                     {
-                        col.Item().Text("Mejores telares (menor neps/m²)").SemiBold().FontSize(12);
+                        col.Item().Text("Mejores telares (menor neps/m²)").SemiBold().FontSize(12).FontColor(palette.Navy);
                         col.Item().Element(c => WritePdfGroupTable(
                             c,
                             ["Telar", "Total neps", "Promedio por m²", "Registros"],
@@ -223,7 +228,7 @@ public sealed class ExportFileService : IExportFileService
 
                     if (porTela.Count > 0)
                     {
-                        col.Item().Text("Resumen por tela").SemiBold().FontSize(12);
+                        col.Item().Text("Resumen por tela").SemiBold().FontSize(12).FontColor(palette.Navy);
                         col.Item().Element(c => WritePdfGroupTable(
                             c,
                             ["Tela", "Total neps", "Promedio", "Registros"],
@@ -240,7 +245,7 @@ public sealed class ExportFileService : IExportFileService
 
                     if (porLote.Count > 0)
                     {
-                        col.Item().Text("Resumen por lote/trama").SemiBold().FontSize(12);
+                        col.Item().Text("Resumen por lote/trama").SemiBold().FontSize(12).FontColor(palette.Navy);
                         col.Item().Element(c => WritePdfGroupTable(
                             c,
                             ["Lote/trama", "Total neps", "Promedio", "Registros"],
@@ -257,36 +262,362 @@ public sealed class ExportFileService : IExportFileService
 
                     if (recommendations.Count > 0)
                     {
-                        col.Item().Text("Recomendaciones automáticas").SemiBold().FontSize(12);
+                        col.Item().Text("Recomendaciones automáticas").SemiBold().FontSize(12).FontColor(palette.Navy);
                         foreach (var tip in recommendations)
                             col.Item().Text($"• {tip}").FontSize(9);
                     }
 
-                    // Bloque de firma (última sección del reporte, como el diseño de referencia)
-                    col.Item().PaddingTop(28).Row(r =>
-                    {
-                        r.RelativeItem().Column(sig =>
-                        {
-                            sig.Item().Width(170).BorderBottom(1).BorderColor(Colors.Black).Height(18);
-                            sig.Item().PaddingTop(3).Text("Firma del supervisor").FontSize(8);
-                        });
-                        r.RelativeItem().AlignRight().AlignBottom()
-                            .Text("VICUNHA — Control de calidad textil")
-                            .FontSize(8).FontColor(Colors.Grey.Darken1);
-                    });
+                    ComposePdfSignatureFooter(col, palette);
                 });
 
-                page.Footer().AlignCenter().Text(t =>
-                {
-                    t.Span("Página ").FontSize(8).FontColor(Colors.Grey.Darken1);
-                    t.CurrentPageNumber().FontSize(8).FontColor(Colors.Grey.Darken1);
-                    t.Span(" / ").FontSize(8).FontColor(Colors.Grey.Darken1);
-                    t.TotalPages().FontSize(8).FontColor(Colors.Grey.Darken1);
-                });
+                ComposePdfPageFooter(page, title, palette);
             });
         });
 
         return document.GeneratePdf();
+    }
+
+    private static void ComposePdfHeader(
+        ColumnDescriptor col,
+        string title,
+        DateTime generatedAt,
+        PdfCompletePalette palette)
+    {
+        col.Item().Background(palette.Navy).Padding(16).Column(h =>
+        {
+            h.Item().Row(r =>
+            {
+                r.RelativeItem().Column(brand =>
+                {
+                    brand.Item().Text("VICUNHA").FontColor(Colors.White).SemiBold().FontSize(18);
+                    brand.Item().Text("jeansidentity").FontColor(palette.Gold).FontSize(10);
+                });
+                r.ConstantItem(120).AlignRight().AlignMiddle()
+                    .Text("CONTROL DE\nCALIDAD")
+                    .FontColor(palette.Sky)
+                    .FontSize(9)
+                    .SemiBold()
+                    .AlignRight();
+            });
+            h.Item().PaddingTop(10).LineHorizontal(1).LineColor(palette.Gold);
+            h.Item().PaddingTop(8).Text(title).FontColor(palette.Sky).FontSize(11).SemiBold();
+            h.Item().PaddingTop(2).Text($"Generado: {FormatDate(generatedAt)}")
+                .FontColor(Colors.White)
+                .FontSize(8);
+        });
+    }
+
+    private static void ComposePdfSummaryCards(
+        ColumnDescriptor col,
+        int recordCount,
+        double totalNeps,
+        double averageNeps,
+        int criticalCount,
+        int warningCount,
+        PdfCompletePalette palette)
+    {
+        col.Item().Row(row =>
+        {
+            row.Spacing(8);
+            ComposeKpiCard(row, "Registros", recordCount.ToString(Inv), palette);
+            ComposeKpiCard(row, "Total neps", FormatDecimal(totalNeps), palette);
+            ComposeKpiCard(row, "Promedio neps", FormatMts(averageNeps), palette);
+            ComposeKpiCard(
+                row,
+                "Alertas",
+                $"{criticalCount} crít. / {warningCount} adv.",
+                palette,
+                accent: criticalCount > 0 ? Color.FromHex("#B71C1C") : warningCount > 0 ? Color.FromHex("#E65100") : palette.Navy);
+        });
+    }
+
+    private static void ComposeKpiCard(
+        RowDescriptor row,
+        string label,
+        string value,
+        PdfCompletePalette palette,
+        Color? accent = null)
+    {
+        var valueColor = accent ?? palette.Navy;
+        row.RelativeItem().Background(palette.Sky).Border(1).BorderColor(palette.Gold)
+            .Padding(10).Column(card =>
+            {
+                card.Item().Text(label).FontSize(7).FontColor(Colors.Grey.Darken2).SemiBold();
+                card.Item().PaddingTop(4).Text(value).FontSize(12).SemiBold().FontColor(valueColor);
+            });
+    }
+
+    private static void ComposePdfFormulaBlock(ColumnDescriptor col, PdfCompletePalette palette)
+    {
+        col.Item().Background(palette.Surface).BorderLeft(3).BorderColor(palette.Gold)
+            .PaddingVertical(8).PaddingHorizontal(12)
+            .Text($"Fórmula utilizada: Mts calculados = Neps / {NepsConstants.TestLengthM.ToString(Inv)}")
+            .SemiBold()
+            .FontSize(10)
+            .FontColor(palette.Navy);
+    }
+
+    private static void ComposePdfRecordsTable(
+        IContainer container,
+        IReadOnlyList<NepRecord> records,
+        AlertConfig config,
+        IReadOnlyList<string> columns,
+        PdfCompletePalette palette)
+    {
+        var cols = columns.Count == 0 ? ReportColumnIds.All : columns;
+
+        container.Table(table =>
+        {
+            table.ColumnsDefinition(c =>
+            {
+                foreach (var id in cols)
+                {
+                    if (id == ReportColumnIds.Nro)
+                        c.ConstantColumn(22);
+                    else if (id == ReportColumnIds.Fecha)
+                        c.RelativeColumn(1.15f);
+                    else if (id is ReportColumnIds.Neps or ReportColumnIds.Telar)
+                        c.RelativeColumn(0.55f);
+                    else if (id == ReportColumnIds.Mts)
+                        c.RelativeColumn(0.7f);
+                    else if (id == ReportColumnIds.Estado)
+                        c.RelativeColumn(0.95f);
+                    else if (id == ReportColumnIds.Recomendacion)
+                        c.RelativeColumn(1.55f);
+                    else if (id == ReportColumnIds.Observacion)
+                        c.RelativeColumn(1.2f);
+                    else
+                        c.RelativeColumn(1f);
+                }
+            });
+
+            table.Header(h =>
+            {
+                foreach (var id in cols)
+                    h.Cell().Element(c => CompleteHeaderCell(c, palette)).Text(ReportColumnIds.Labels[id]);
+            });
+
+            for (var i = 0; i < records.Count; i++)
+            {
+                var r = records[i];
+                var level = AlertEvaluator.GetLevel(r.Neps, config);
+                var rowBg = i % 2 == 1 ? palette.Surface : Colors.White;
+
+                foreach (var id in cols)
+                {
+                    if (id == ReportColumnIds.Estado)
+                    {
+                        table.Cell().Element(c => CompleteBodyCell(c, rowBg))
+                            .Element(cell => ComposePdfAlertBadge(cell, level));
+                    }
+                    else if (id == ReportColumnIds.Recomendacion)
+                    {
+                        table.Cell().Element(c => CompleteBodyCell(c, rowBg))
+                            .Element(cell => ComposePdfRecommendationBullets(cell, level));
+                    }
+                    else
+                    {
+                        table.Cell().Element(c => CompleteBodyCell(c, rowBg))
+                            .Text(GetColumnValue(id, i + 1, r, level));
+                    }
+                }
+            }
+        });
+    }
+
+    private static void ComposePdfAlertBadge(IContainer container, AlertLevel level)
+    {
+        var (bg, fg, label) = level switch
+        {
+            AlertLevel.Critico => (Color.FromHex("#FFCDD2"), Color.FromHex("#B71C1C"), "Crítico"),
+            AlertLevel.Advertencia => (Color.FromHex("#FFE0B2"), Color.FromHex("#E65100"), "Advertencia"),
+            _ => (Color.FromHex("#C8E6C9"), Color.FromHex("#1B5E20"), "Normal")
+        };
+
+        container.AlignMiddle().AlignCenter()
+            .Background(bg)
+            .PaddingHorizontal(5)
+            .PaddingVertical(2)
+            .Text(label)
+            .FontSize(6.5f)
+            .SemiBold()
+            .FontColor(fg);
+    }
+
+    private static void ComposePdfRecommendationBullets(IContainer container, AlertLevel level)
+    {
+        var tips = AlertEvaluator.GetRecommendations(level);
+        container.Column(col =>
+        {
+            col.Spacing(1);
+            foreach (var tip in tips)
+            {
+                col.Item().Row(r =>
+                {
+                    r.ConstantItem(8).AlignTop().Text("•").FontSize(6.5f).FontColor(Color.FromHex("#123B59"));
+                    r.RelativeItem().Text(tip).FontSize(6.5f);
+                });
+            }
+        });
+    }
+
+    private static void ComposePdfTotalsAndConclusion(
+        ColumnDescriptor col,
+        int recordCount,
+        double totalNeps,
+        double averageNeps,
+        int criticalCount,
+        int warningCount,
+        PdfCompletePalette palette)
+    {
+        col.Item().PaddingTop(4).Text("Totales del informe").SemiBold().FontSize(11).FontColor(palette.Navy);
+        col.Item().Row(row =>
+        {
+            row.Spacing(8);
+            ComposeKpiCard(row, "Total registros", recordCount.ToString(Inv), palette);
+            ComposeKpiCard(row, "Total neps", FormatDecimal(totalNeps), palette);
+            ComposeKpiCard(row, "Promedio neps", FormatMts(averageNeps), palette);
+        });
+
+        col.Item().Background(palette.Sky).Border(1).BorderColor(palette.NavyMid)
+            .Padding(12).Column(box =>
+            {
+                box.Item().Text("Conclusión").SemiBold().FontSize(10).FontColor(palette.Navy);
+                box.Item().PaddingTop(4).Text(BuildConclusionText(criticalCount, warningCount, recordCount))
+                    .FontSize(9);
+            });
+    }
+
+    private static string BuildConclusionText(int criticalCount, int warningCount, int recordCount)
+    {
+        if (recordCount == 0)
+            return "Sin mediciones en el periodo seleccionado. No hay hallazgos que reportar.";
+
+        if (criticalCount == 0 && warningCount == 0)
+            return "Todas las mediciones se encuentran dentro del rango normal. Continuar con el monitoreo rutinario.";
+
+        var parts = new List<string>();
+        if (criticalCount > 0)
+        {
+            parts.Add(criticalCount == 1
+                ? "Se detectó 1 alerta crítica que requiere acción inmediata."
+                : $"Se detectaron {criticalCount} alertas críticas que requieren acción inmediata.");
+        }
+
+        if (warningCount > 0)
+        {
+            parts.Add(warningCount == 1
+                ? "Hay 1 advertencia pendiente de seguimiento."
+                : $"Hay {warningCount} advertencias pendientes de seguimiento.");
+        }
+
+        return string.Join(' ', parts);
+    }
+
+    private static void ComposePdfGeneralObservations(
+        ColumnDescriptor col,
+        string? filtersDescription,
+        int criticalCount,
+        int warningCount,
+        PdfCompletePalette palette)
+    {
+        col.Item().Text("Observaciones generales").SemiBold().FontSize(11).FontColor(palette.Navy);
+        col.Item().Background(palette.Surface).Border(1).BorderColor(Colors.Grey.Lighten1)
+            .Padding(12).Column(box =>
+            {
+                if (!string.IsNullOrWhiteSpace(filtersDescription))
+                {
+                    box.Item().Text($"Contexto de filtros: {filtersDescription}").FontSize(8);
+                }
+
+                if (criticalCount > 0 || warningCount > 0)
+                {
+                    box.Item().PaddingTop(2).Text(
+                            "Se observan desviaciones respecto a los límites configurados; revisar telares y lotes señalados en el detalle y en el apéndice analítico.")
+                        .FontSize(9);
+                }
+                else
+                {
+                    box.Item().PaddingTop(2).Text(
+                            "Control de calidad vigente: no se registran advertencias ni alertas críticas en este conjunto de mediciones.")
+                        .FontSize(9);
+                }
+            });
+    }
+
+    private static void ComposePdfSignatureFooter(ColumnDescriptor col, PdfCompletePalette palette)
+    {
+        col.Item().PaddingTop(20).Row(r =>
+        {
+            r.RelativeItem().Column(sig =>
+            {
+                sig.Item().Width(180).BorderBottom(1).BorderColor(palette.Ink).Height(18);
+                sig.Item().PaddingTop(4).Text("Firma del supervisor").FontSize(8).FontColor(Colors.Grey.Darken2);
+            });
+            r.RelativeItem().Column(sig =>
+            {
+                sig.Item().AlignRight().Width(180).BorderBottom(1).BorderColor(palette.Ink).Height(18);
+                sig.Item().AlignRight().PaddingTop(4).Text("Firma de calidad").FontSize(8).FontColor(Colors.Grey.Darken2);
+            });
+        });
+    }
+
+    private static void ComposePdfPageFooter(PageDescriptor page, string title, PdfCompletePalette palette)
+    {
+        page.Footer().PaddingTop(8).Row(r =>
+        {
+            r.RelativeItem().AlignMiddle()
+                .Text("VICUNHA — Control de calidad textil")
+                .FontSize(7)
+                .FontColor(palette.NavyMid);
+            r.RelativeItem().AlignCenter().AlignMiddle().Text(t =>
+            {
+                t.Span(title.Length > 42 ? title[..42] + "…" : title)
+                    .FontSize(7)
+                    .FontColor(Colors.Grey.Darken1);
+            });
+            r.RelativeItem().AlignRight().AlignMiddle().Text(t =>
+            {
+                t.Span("Página ").FontSize(7).FontColor(Colors.Grey.Darken1);
+                t.CurrentPageNumber().FontSize(7).FontColor(Colors.Grey.Darken1);
+                t.Span(" / ").FontSize(7).FontColor(Colors.Grey.Darken1);
+                t.TotalPages().FontSize(7).FontColor(Colors.Grey.Darken1);
+            });
+        });
+    }
+
+    private static IContainer CompleteHeaderCell(IContainer container, PdfCompletePalette palette) =>
+        container.DefaultTextStyle(x => x.SemiBold().FontSize(7).FontColor(Colors.White))
+            .PaddingVertical(5)
+            .PaddingHorizontal(3)
+            .Background(palette.Navy)
+            .BorderBottom(1)
+            .BorderColor(palette.Gold);
+
+    private static IContainer CompleteBodyCell(IContainer container, Color background) =>
+        container.DefaultTextStyle(x => x.FontSize(7))
+            .PaddingVertical(4)
+            .PaddingHorizontal(3)
+            .Background(background)
+            .BorderBottom(0.5f)
+            .BorderColor(Colors.Grey.Lighten2)
+            .AlignMiddle();
+
+    private sealed record PdfCompletePalette(
+        Color Navy,
+        Color NavyMid,
+        Color Sky,
+        Color Gold,
+        Color Surface,
+        Color Ink)
+    {
+        public static PdfCompletePalette Create() => new(
+            Color.FromHex("#0D2B45"),
+            Color.FromHex("#123B59"),
+            Color.FromHex("#EAF4FC"),
+            Color.FromHex("#C7A86B"),
+            Color.FromHex("#F5F7F9"),
+            Color.FromHex("#172A3A"));
     }
 
     public byte[] BuildFabricsCsv(IReadOnlyList<Fabric> fabrics)
