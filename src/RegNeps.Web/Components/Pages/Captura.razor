@@ -1320,7 +1320,8 @@ else
     /// <summary>Comparte únicamente el registro del Id indicado (nunca toda la sesión).</summary>
     private async Task ShareRecordAsync(Guid recordId)
     {
-        await ShareIdsAsync([recordId], clearSelectionOnSuccess: false);
+        // La selección la controla el usuario: nunca se limpia al compartir.
+        await ShareIdsAsync([recordId]);
     }
 
     /// <summary>Comparte exactamente los Ids de la selección manual.</summary>
@@ -1332,7 +1333,8 @@ else
             return;
         }
 
-        await ShareIdsAsync(_selectedRecordIds.ToArray(), clearSelectionOnSuccess: true);
+        // Conservar selección tras share/cancel/clipboard para poder volver a compartir.
+        await ShareIdsAsync(_selectedRecordIds.ToArray());
     }
 
     private void OpenSaveSessionModal()
@@ -1517,7 +1519,7 @@ else
         }
     }
 
-    private async Task ShareIdsAsync(IReadOnlyList<Guid> ids, bool clearSelectionOnSuccess)
+    private async Task ShareIdsAsync(IReadOnlyList<Guid> ids)
     {
         if (_actor is null || _sharing || ids.Count == 0)
         {
@@ -1536,26 +1538,30 @@ else
                 return;
             }
 
-            var shared = await Js.InvokeAsync<bool>("regnepsUi.shareText", text, "RegNeps — registros");
-            if (shared)
+            var raw = await Js.InvokeAsync<string>("regnepsUi.shareText", text, "RegNeps — registros");
+            var delivery = ShareDeliveryPolicy.Parse(raw);
+
+            // Preferencia UX: nunca limpiar selección automáticamente (ni tras Shared).
+            if (ShareDeliveryPolicy.ShouldClearSelection(delivery, clearOnSharedSuccess: false))
             {
-                _success = ids.Count == 1
-                    ? "Registro listo para compartir (o copiado al portapapeles)."
-                    : $"{ids.Count} registros listos para compartir (o copiados al portapapeles).";
-                if (clearSelectionOnSuccess)
-                {
-                    _selectedRecordIds.Clear();
-                }
+                _selectedRecordIds.Clear();
+            }
+
+            var message = ShareDeliveryPolicy.UserMessage(delivery, ids.Count);
+            if (ShareDeliveryPolicy.IsError(delivery))
+            {
+                _error = message;
+                _success = null;
             }
             else
             {
-                // Cancelación del sheet nativo: conservar selección.
-                _success = null;
+                _success = message;
+                _error = null;
             }
         }
         catch (JSException)
         {
-            _error = "No se pudo abrir el compartir. Intente de nuevo.";
+            _error = "No se pudo compartir. Intente nuevamente.";
         }
         catch (Exception ex)
         {
