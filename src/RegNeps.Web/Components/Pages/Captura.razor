@@ -3,6 +3,8 @@
 @inject NepRecordService RecordService
 @inject IFabricRepository FabricRepository
 @inject ILoteTramaRepository LoteTramaRepository
+@inject ReportExportAppService ExportService
+@inject TempExportStore TempExports
 @inject CurrentUserService CurrentUser
 @inject IJSRuntime Js
 
@@ -272,12 +274,26 @@ else
                 </div>
                 @if (_sessionRecords.Count > 0)
                 {
-                    <button type="button"
-                            class="capture-action-btn capture-action-btn--primary"
-                            @onclick="ShareSelectedAsync"
-                            disabled="@(_saving || _sharing || _selectedRecordIds.Count == 0)">
-                        Compartir seleccionados (@_selectedRecordIds.Count)
-                    </button>
+                    <div class="capture-session-toolbar">
+                        <button type="button"
+                                class="capture-action-btn capture-action-btn--primary"
+                                @onclick="OpenSaveSessionModal"
+                                disabled="@(_saving || _sharing || _sessionReportBusy)">
+                            Guardar informe
+                        </button>
+                        <button type="button"
+                                class="capture-action-btn"
+                                @onclick="OpenShareSessionModal"
+                                disabled="@(_saving || _sharing || _sessionReportBusy)">
+                            Compartir sesión
+                        </button>
+                        <button type="button"
+                                class="capture-action-btn"
+                                @onclick="ShareSelectedAsync"
+                                disabled="@(_saving || _sharing || _sessionReportBusy || _selectedRecordIds.Count == 0)">
+                            Compartir seleccionados (@_selectedRecordIds.Count)
+                        </button>
+                    </div>
                 }
             </div>
 
@@ -408,6 +424,92 @@ else
             }
         </section>
 
+        @if (_showSaveSessionModal)
+        {
+            <AppModal Title="Guardar informe de sesión" OnClose="CloseSaveSessionModal" CloseOnBackdrop="true">
+                <ChildContent>
+                    <label class="capture-label" for="cap-session-report-name">Nombre del informe</label>
+                    <input id="cap-session-report-name"
+                           class="form-control capture-input"
+                           @bind="_sessionReportName"
+                           maxlength="120"
+                           disabled="@_sessionReportBusy" />
+                    <p class="capture-hint mb-0 mt-2">Se guardará solo la sesión de captura actual (@_sessionRecords.Count registros).</p>
+                </ChildContent>
+                <Footer>
+                    <button type="button" class="capture-action-btn" @onclick="CloseSaveSessionModal" disabled="@_sessionReportBusy">
+                        Cancelar
+                    </button>
+                    <button type="button" class="capture-submit capture-submit--modal" @onclick="SaveSessionReportAsync" disabled="@_sessionReportBusy">
+                        @if (_sessionReportBusy)
+                        {
+                            <span class="capture-submit-spinner" aria-hidden="true"></span>
+                            <span>Guardando…</span>
+                        }
+                        else
+                        {
+                            <span>Guardar informe</span>
+                        }
+                    </button>
+                </Footer>
+            </AppModal>
+        }
+
+        @if (_showShareSessionModal)
+        {
+            <AppModal Title="Compartir sesión" OnClose="CloseShareSessionModal" CloseOnBackdrop="true">
+                <ChildContent>
+                    <p class="mb-3">Exporte los registros de esta sesión de captura (@_sessionRecords.Count).</p>
+                    <div class="capture-share-format-grid">
+                        <button type="button" class="capture-record-action" @onclick='() => ShareSessionExportAsync("csv")' disabled="@_sessionReportBusy">CSV</button>
+                        <button type="button" class="capture-record-action" @onclick='() => ShareSessionExportAsync("excel")' disabled="@_sessionReportBusy">Excel</button>
+                        <button type="button" class="capture-record-action" @onclick='() => ShareSessionExportAsync("pdf")' disabled="@_sessionReportBusy">PDF</button>
+                    </div>
+                    @if (_sessionReportBusy)
+                    {
+                        <p class="capture-hint mb-0 mt-2">Preparando archivo…</p>
+                    }
+                </ChildContent>
+                <Footer>
+                    <button type="button" class="capture-action-btn" @onclick="CloseShareSessionModal" disabled="@_sessionReportBusy">
+                        Cerrar
+                    </button>
+                </Footer>
+            </AppModal>
+        }
+
+        @if (_showShareExportModal)
+        {
+            <AppModal Title="@_shareExportTitle" OnClose="CloseShareExportModal" CloseOnBackdrop="true">
+                <ChildContent>
+                    <p class="mb-3">
+                        @if (_shareExportIds.Count == 1)
+                        {
+                            <span>Elija el formato del archivo. Se incluirá solo este registro.</span>
+                        }
+                        else
+                        {
+                            <span>Elija el formato del archivo. Se incluirán exactamente @_shareExportIds.Count registros seleccionados.</span>
+                        }
+                    </p>
+                    <div class="capture-share-format-grid">
+                        <button type="button" class="capture-record-action" @onclick='() => ShareExportByIdsAsync("pdf")' disabled="@_sharing">PDF</button>
+                        <button type="button" class="capture-record-action" @onclick='() => ShareExportByIdsAsync("excel")' disabled="@_sharing">Excel</button>
+                        <button type="button" class="capture-record-action" @onclick='() => ShareExportByIdsAsync("csv")' disabled="@_sharing">CSV</button>
+                    </div>
+                    @if (_sharing)
+                    {
+                        <p class="capture-hint mb-0 mt-2">Preparando archivo…</p>
+                    }
+                </ChildContent>
+                <Footer>
+                    <button type="button" class="capture-action-btn" @onclick="CloseShareExportModal" disabled="@_sharing">
+                        Cerrar
+                    </button>
+                </Footer>
+            </AppModal>
+        }
+
         @if (_confirmNewRecord)
         {
             <AppModal Title="¿Desea guardar el registro actual?" OnClose="CancelConfirmNewRecord" CloseOnBackdrop="true">
@@ -526,6 +628,13 @@ else
     private string? _errLote;
     private bool _saving;
     private bool _sharing;
+    private bool _sessionReportBusy;
+    private bool _showSaveSessionModal;
+    private bool _showShareSessionModal;
+    private bool _showShareExportModal;
+    private IReadOnlyList<Guid> _shareExportIds = Array.Empty<Guid>();
+    private string _shareExportTitle = "Compartir registro";
+    private string _sessionReportName = "";
     private bool _allowed;
     private bool _canEdit;
     private bool _canDelete;
@@ -1243,27 +1352,61 @@ else
         }
     }
 
-    /// <summary>Comparte únicamente el registro del Id indicado (nunca toda la sesión).</summary>
-    private async Task ShareRecordAsync(Guid recordId)
+    /// <summary>Abre el modal de formato para un único registro (por Id).</summary>
+    private Task ShareRecordAsync(Guid recordId)
     {
-        await ShareIdsAsync([recordId], clearSelectionOnSuccess: false);
+        if (_sharing || recordId == Guid.Empty)
+        {
+            return Task.CompletedTask;
+        }
+
+        _error = null;
+        _shareExportIds = [recordId];
+        _shareExportTitle = "Compartir registro";
+        _showShareExportModal = true;
+        return Task.CompletedTask;
     }
 
-    /// <summary>Comparte exactamente los Ids de la selección manual.</summary>
-    private async Task ShareSelectedAsync()
+    /// <summary>Abre el modal de formato para los Ids seleccionados manualmente.</summary>
+    private Task ShareSelectedAsync()
     {
+        if (_sharing)
+        {
+            return Task.CompletedTask;
+        }
+
         if (_selectedRecordIds.Count == 0)
         {
             _error = "Seleccione al menos un registro para compartir.";
+            return Task.CompletedTask;
+        }
+
+        _error = null;
+        _shareExportIds = _selectedRecordIds.ToArray();
+        _shareExportTitle = _shareExportIds.Count == 1
+            ? "Compartir registro"
+            : $"Compartir {_shareExportIds.Count} registros";
+        _showShareExportModal = true;
+        return Task.CompletedTask;
+    }
+
+    private void CloseShareExportModal()
+    {
+        if (_sharing)
+        {
             return;
         }
 
-        await ShareIdsAsync(_selectedRecordIds.ToArray(), clearSelectionOnSuccess: true);
+        _showShareExportModal = false;
     }
 
-    private async Task ShareIdsAsync(IReadOnlyList<Guid> ids, bool clearSelectionOnSuccess)
+    /// <summary>
+    /// Genera PDF/Excel/CSV solo con los Ids del modal y abre share/descarga de archivo.
+    /// No limpia la selección. No usa shareText.
+    /// </summary>
+    private async Task ShareExportByIdsAsync(string format)
     {
-        if (_actor is null || _sharing || ids.Count == 0)
+        if (_session is null || _sharing || _shareExportIds.Count == 0)
         {
             return;
         }
@@ -1272,34 +1415,43 @@ else
         _error = null;
         try
         {
-            // Solo los Ids solicitados: el servicio no usa CaptureSessionId ni _sessionRecords.
-            var text = await RecordService.BuildShareTextForIdsAsync(ids, _actor);
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                _error = "No se encontraron registros accesibles para compartir.";
-                return;
-            }
+            // Captura: aislamiento personal (viewerSeesAll=false). Solo Ids exactos.
+            var file = await ExportService.ExportByIdsAsync(
+                format,
+                _shareExportIds,
+                _session.UserId,
+                viewerSeesAll: false,
+                style: "completo");
 
-            var shared = await Js.InvokeAsync<bool>("regnepsUi.shareText", text, "RegNeps — registros");
-            if (shared)
+            var id = TempExports.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
+            var url = $"/api/export/temp/{id}";
+            var raw = await Js.InvokeAsync<string>("regnepsDownload.shareOrDownload", url, file.FileName);
+            var delivery = ShareDeliveryPolicy.Parse(raw);
+
+            // Nunca limpiar selección automáticamente.
+            _ = ShareDeliveryPolicy.ShouldClearSelection(delivery, clearOnSharedSuccess: false);
+
+            var message = ShareDeliveryPolicy.UserMessage(delivery, _shareExportIds.Count);
+            if (ShareDeliveryPolicy.IsError(delivery))
             {
-                _success = ids.Count == 1
-                    ? "Registro listo para compartir (o copiado al portapapeles)."
-                    : $"{ids.Count} registros listos para compartir (o copiados al portapapeles).";
-                if (clearSelectionOnSuccess)
-                {
-                    _selectedRecordIds.Clear();
-                }
+                _error = message;
+                _success = null;
             }
             else
             {
-                // Cancelación del sheet nativo: conservar selección.
-                _success = null;
+                _success = message;
+                _error = null;
+                if (delivery is ShareDeliveryResult.Shared
+                    or ShareDeliveryResult.NativeRequested
+                    or ShareDeliveryResult.Downloaded)
+                {
+                    _showShareExportModal = false;
+                }
             }
         }
         catch (JSException)
         {
-            _error = "No se pudo abrir el compartir. Intente de nuevo.";
+            _error = "No se pudo compartir el archivo.";
         }
         catch (Exception ex)
         {
@@ -1308,6 +1460,199 @@ else
         finally
         {
             _sharing = false;
+        }
+    }
+
+    private void OpenSaveSessionModal()
+    {
+        if (_sessionRecords.Count == 0)
+        {
+            return;
+        }
+
+        _error = null;
+        _sessionReportName = $"Informe {DateTime.Now:yyyyMMdd_HHmmss}";
+        _showSaveSessionModal = true;
+    }
+
+    private void CloseSaveSessionModal()
+    {
+        if (_sessionReportBusy)
+        {
+            return;
+        }
+
+        _showSaveSessionModal = false;
+    }
+
+    private void OpenShareSessionModal()
+    {
+        if (_sessionRecords.Count == 0)
+        {
+            return;
+        }
+
+        _error = null;
+        _showShareSessionModal = true;
+    }
+
+    private void CloseShareSessionModal()
+    {
+        if (_sessionReportBusy)
+        {
+            return;
+        }
+
+        _showShareSessionModal = false;
+    }
+
+    /// <summary>
+    /// Filtros explícitos de la sesión de captura (informe/exportación de sesión).
+    /// Distinto del compartir por Id de registros individuales.
+    /// </summary>
+    private RecordFilters? BuildSessionFilters()
+    {
+        if (string.IsNullOrWhiteSpace(_captureSessionId) || _sessionRecords.Count == 0)
+        {
+            return null;
+        }
+
+        var minUtc = _sessionRecords.Min(r => r.CreatedAt);
+        var maxUtc = _sessionRecords.Max(r => r.CreatedAt);
+        // Margen de 1s para incluir el último registro del borde superior exclusivo.
+        var toExclusive = maxUtc.AddSeconds(1);
+
+        return new RecordFilters
+        {
+            CaptureSessionId = _captureSessionId,
+            FromUtc = minUtc,
+            ToExclusiveUtc = toExclusive,
+            ToUtc = maxUtc
+        };
+    }
+
+    private async Task SaveSessionReportAsync()
+    {
+        if (_session is null || _sessionReportBusy)
+        {
+            return;
+        }
+
+        if (!await CurrentUser.HasAsync(AppPermission.ManageReports))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para guardar informes (ManageReports).";
+            _showSaveSessionModal = false;
+            return;
+        }
+
+        var filters = BuildSessionFilters();
+        if (filters is null)
+        {
+            _error = "No hay registros de sesión para guardar.";
+            _showSaveSessionModal = false;
+            return;
+        }
+
+        _sessionReportBusy = true;
+        _error = null;
+        try
+        {
+            var name = string.IsNullOrWhiteSpace(_sessionReportName)
+                ? $"Informe {DateTime.Now:yyyyMMdd_HHmmss}"
+                : _sessionReportName.Trim();
+
+            await ExportService.SaveReportAsync(
+                name,
+                filters,
+                _session.UserId,
+                _session.DisplayName,
+                viewerSeesAll: false);
+
+            _success = $"Informe «{name}» guardado. Puede abrirlo en Informes.";
+            _showSaveSessionModal = false;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _sessionReportBusy = false;
+        }
+    }
+
+    private async Task ShareSessionExportAsync(string format)
+    {
+        if (_session is null || _sessionReportBusy)
+        {
+            return;
+        }
+
+        if (!await CurrentUser.HasAsync(AppPermission.ExportReports))
+        {
+            await RefreshAccessAsync();
+            _error = "No tiene permiso para exportar/compartir informes (ExportReports).";
+            _showShareSessionModal = false;
+            return;
+        }
+
+        var filters = BuildSessionFilters();
+        if (filters is null)
+        {
+            _error = "No hay registros de sesión para compartir.";
+            _showShareSessionModal = false;
+            return;
+        }
+
+        _sessionReportBusy = true;
+        _error = null;
+        try
+        {
+            var file = await ExportService.ExportAsync(
+                format,
+                filters,
+                _session.UserId,
+                viewerSeesAll: false,
+                style: "completo");
+
+            var id = TempExports.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
+            var url = $"/api/export/temp/{id}";
+            var result = await Js.InvokeAsync<string>("regnepsDownload.shareOrDownload", url, file.FileName);
+            var delivery = ShareDeliveryPolicy.Parse(result);
+
+            if (delivery == ShareDeliveryResult.Cancelled)
+            {
+                _success = null;
+            }
+            else if (delivery == ShareDeliveryResult.Shared)
+            {
+                _success = "Archivo compartido.";
+                _showShareSessionModal = false;
+            }
+            else if (delivery == ShareDeliveryResult.NativeRequested)
+            {
+                _success = "Se abrió el menú para compartir.";
+                _showShareSessionModal = false;
+            }
+            else if (ShareDeliveryPolicy.IsError(delivery))
+            {
+                _error = ShareDeliveryPolicy.UserMessage(delivery, _sessionRecords.Count);
+                _success = null;
+            }
+            else
+            {
+                _success = "El archivo se descargó.";
+                _showShareSessionModal = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _sessionReportBusy = false;
         }
     }
 

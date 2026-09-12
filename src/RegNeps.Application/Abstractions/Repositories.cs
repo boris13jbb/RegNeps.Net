@@ -9,6 +9,15 @@ public interface INepRecordRepository
 {
     Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default);
     Task<IReadOnlyList<NepRecord>> QueryAsync(RecordFilters filters, string? viewerUserId, bool viewerSeesAll, int take = 500, CancellationToken ct = default);
+    /// <summary>
+    /// Carga por conjunto de Ids con el mismo aislamiento que <see cref="QueryAsync"/>.
+    /// No expande por sesión, fecha ni otros filtros.
+    /// </summary>
+    Task<IReadOnlyList<NepRecord>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> ids,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        CancellationToken ct = default);
     Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<NepRecord?> FindByClientOperationAsync(string userId, string clientOperationId, CancellationToken ct = default);
     Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default);
