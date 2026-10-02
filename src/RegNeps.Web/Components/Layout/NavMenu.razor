@@ -1,6 +1,7 @@
 ﻿@inject CurrentUserService CurrentUser
 @inject IPermissionMatrix Permissions
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 @implements IDisposable
 
 <input type="checkbox" id="nav-mobile-toggle" class="mobile-toggle-input" />
@@ -111,9 +112,7 @@
                     <span class="user-avatar" aria-hidden="true">@Initials(_session.DisplayName)</span>
                     <span class="user-name">@_session.DisplayName</span>
                 </span>
-                <form method="post" action="/api/logout" class="d-inline">
-                    <button type="submit" class="btn-ghost">Salir</button>
-                </form>
+                <button type="button" class="btn-ghost" @onclick="LogoutAsync">Salir</button>
             }
         </div>
     </div>
@@ -182,6 +181,25 @@
     }
 
     private void ToggleCollapsed() => _collapsed = !_collapsed;
+
+    /// <summary>
+    /// Logout: limpia LocalSession en MAUI (conserva Outbox) y cierra cookie en servidor.
+    /// </summary>
+    private async Task LogoutAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsOfflineBridge.clearSessionAndLogout");
+        }
+        catch (JSException)
+        {
+            Nav.NavigateTo("/api/logout", forceLoad: true);
+        }
+        catch (JSDisconnectedException)
+        {
+            Nav.NavigateTo("/api/logout", forceLoad: true);
+        }
+    }
 
     /// <summary>Mantiene Informes activo también en Exportar (misma sección, sin duplicar menú).</summary>
     private bool IsSectionActive(string href)

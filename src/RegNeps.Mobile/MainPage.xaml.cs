@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
 using RegNeps.Mobile.Local;
+using RegNeps.OfflineStore.Bridge;
 #if ANDROID
 using Android.Webkit;
 #endif
@@ -22,6 +23,8 @@ public partial class MainPage : ContentPage
     private const string NativeShareHostText = "share";
     private const string NativeShareHostFile = "file";
 
+    private OfflineBridgeProcessor? _bridgeProcessor;
+
     public MainPage()
     {
         InitializeComponent();
@@ -29,6 +32,23 @@ public partial class MainPage : ContentPage
         var savedUrl = Preferences.Default.Get(ServerUrlPreferenceKey, DefaultServerUrl);
         ServerEntry.Text = savedUrl;
         _ = ProbeAndNavigateAsync(savedUrl, persist: false);
+    }
+
+    private OfflineBridgeProcessor GetBridgeProcessor()
+    {
+        if (_bridgeProcessor is not null)
+        {
+            return _bridgeProcessor;
+        }
+
+        var services = Handler?.MauiContext?.Services
+                       ?? Microsoft.Maui.Controls.Application.Current?.Handler?.MauiContext?.Services
+                       ?? throw new InvalidOperationException("DI de MAUI no disponible.");
+
+        var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
+        var handlers = new MauiOfflineBridgeHandlers(scopeFactory, OpenOfflineCaptureAsync);
+        _bridgeProcessor = new OfflineBridgeProcessor(handlers);
+        return _bridgeProcessor;
     }
 
     private void OnConnectClicked(object? sender, EventArgs e) =>
@@ -40,7 +60,10 @@ public partial class MainPage : ContentPage
         _ = ProbeAndNavigateAsync(currentUrl, persist: false);
     }
 
-    private async void OnOfflineClicked(object? sender, EventArgs e)
+    private async void OnOfflineClicked(object? sender, EventArgs e) =>
+        await OpenOfflineCaptureAsync();
+
+    private async Task OpenOfflineCaptureAsync()
     {
         var services = Handler?.MauiContext?.Services
                        ?? Microsoft.Maui.Controls.Application.Current?.Handler?.MauiContext?.Services;
@@ -49,8 +72,14 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        // Evitar apilar múltiples OfflineCapturePage.
+        if (Navigation.NavigationStack.LastOrDefault() is OfflineCapturePage)
+        {
+            return;
+        }
+
         var page = services.GetRequiredService<OfflineCapturePage>();
-        await Navigation.PushAsync(page);
+        await MainThread.InvokeOnMainThreadAsync(() => Navigation.PushAsync(page));
     }
 
     private async Task ProbeAndNavigateAsync(string rawUrl, bool persist)
@@ -104,6 +133,12 @@ public partial class MainPage : ContentPage
 
     private void OnBrowserNavigating(object? sender, WebNavigatingEventArgs e)
     {
+        if (TryBeginOfflineBridge(e.Url))
+        {
+            e.Cancel = true;
+            return;
+        }
+
         if (TryBeginNativeShare(e.Url))
         {
             e.Cancel = true;
@@ -124,7 +159,12 @@ public partial class MainPage : ContentPage
 
             try
             {
-                await Browser.EvaluateJavaScriptAsync("window.regnepsNativeShareAvailable = true;");
+                await Browser.EvaluateJavaScriptAsync(
+                    "window.regnepsNativeShareAvailable = true;" +
+                    "window.regnepsOfflineBridgeAvailable = true;" +
+                    "if (window.regnepsOfflineBridge && window.regnepsOfflineBridge._markReady) {" +
+                    "  window.regnepsOfflineBridge._markReady();" +
+                    "}");
             }
             catch
             {
@@ -137,6 +177,51 @@ public partial class MainPage : ContentPage
         ShowError(
             "No se pudo conectar con RegNeps. Comprueba servidor, Wi‑Fi y puerto. Puede usar captura offline.",
             offerOffline: true);
+    }
+
+    private bool TryBeginOfflineBridge(string? rawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl) ||
+            !rawUrl.StartsWith(OfflineBridgeConstants.Scheme + ":", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        _ = ProcessOfflineBridgeAsync(rawUrl);
+        return true;
+    }
+
+    private async Task ProcessOfflineBridgeAsync(string rawUrl)
+    {
+        try
+        {
+            var processor = GetBridgeProcessor();
+            var (handled, response) = await processor.TryProcessUrlAsync(rawUrl);
+            if (!handled || response is null)
+            {
+                return;
+            }
+
+            var json = OfflineBridgeCodec.Serialize(response);
+            var literal = OfflineBridgeCodec.ToJavaScriptStringLiteral(json);
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+            {
+                try
+                {
+                    await Browser.EvaluateJavaScriptAsync(
+                        "window.regnepsOfflineBridge && window.regnepsOfflineBridge.deliver && " +
+                        $"window.regnepsOfflineBridge.deliver({literal});");
+                }
+                catch
+                {
+                    /* respuesta no entregable si la página navega */
+                }
+            });
+        }
+        catch
+        {
+            /* no tumbar la app por un mensaje de bridge */
+        }
     }
 
     private bool TryBeginNativeShare(string? rawUrl)
