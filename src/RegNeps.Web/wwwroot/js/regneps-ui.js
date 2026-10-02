@@ -113,27 +113,73 @@ window.regnepsUi = (function () {
         },
 
         /**
-         * Comparte texto vía Web Share API; si se cancela, retorna false.
-         * Si no hay share nativo, copia al portapapeles y retorna true.
+         * Comparte texto. Devuelve un estado explícito (nunca bool):
+         * "shared" | "native-requested" | "copied" | "cancelled" | "unsupported" | "failed"
+         *
+         * "copied" NO es "shared". Cancelar NO dispara clipboard.
+         * En la APK MAUI (window.regnepsNativeShareAvailable) usa el puente regneps-share://.
+         * Límite de URL del puente: 3500 caracteres (Android WebView).
          */
         shareText: async function (text, title) {
             var payload = text || '';
-            if (navigator.share) {
+            var shareTitle = title || 'RegNeps';
+
+            // Puente nativo MAUI/Android: solo si la app lo marcó tras navegación exitosa.
+            if (window.regnepsNativeShareAvailable === true) {
                 try {
-                    await navigator.share({
-                        title: title || 'RegNeps',
-                        text: payload
-                    });
-                    return true;
-                } catch (err) {
-                    if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
-                        return false;
+                    var encodedTitle = encodeURIComponent(shareTitle);
+                    var encodedText = encodeURIComponent(payload);
+                    var nativeUrl = 'regneps-share://share?title=' + encodedTitle + '&text=' + encodedText;
+                    // Límite práctico de URL en WebView Android; no crashear si se excede.
+                    if (nativeUrl.length > 3500) {
+                        try {
+                            var copiedLong = await window.regnepsUi.copyText(payload);
+                            return copiedLong ? 'copied' : 'unsupported';
+                        } catch (_) {
+                            return 'unsupported';
+                        }
                     }
-                    // Fallback a clipboard si share falla por otro motivo.
+
+                    var iframe = document.createElement('iframe');
+                    iframe.setAttribute('aria-hidden', 'true');
+                    iframe.style.cssText = 'display:none;width:0;height:0;border:0;position:absolute';
+                    iframe.src = nativeUrl;
+                    document.body.appendChild(iframe);
+                    setTimeout(function () {
+                        try {
+                            document.body.removeChild(iframe);
+                        } catch (_) {
+                            /* ignore */
+                        }
+                    }, 1500);
+                    return 'native-requested';
+                } catch (_) {
+                    return 'failed';
                 }
             }
 
-            return await window.regnepsUi.copyText(payload);
+            if (typeof navigator.share === 'function') {
+                try {
+                    await navigator.share({
+                        title: shareTitle,
+                        text: payload
+                    });
+                    return 'shared';
+                } catch (err) {
+                    if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) {
+                        // Cancelación del usuario: no copiar al portapapeles.
+                        return 'cancelled';
+                    }
+                    // Fallo distinto de cancelación → intentar clipboard.
+                }
+            }
+
+            try {
+                var copied = await window.regnepsUi.copyText(payload);
+                return copied ? 'copied' : 'unsupported';
+            } catch (_) {
+                return 'failed';
+            }
         },
         scrollIntoView: function (el, options) {
             if (!el || typeof el.scrollIntoView !== 'function') {
@@ -210,6 +256,71 @@ window.regnepsUi = (function () {
                 sessionStorage.setItem(key, sessionId);
             } catch (_) {
                 /* storage no disponible */
+            }
+        },
+
+        /** Toast breve para alertas en tiempo real (centro de notificaciones). */
+        showToast: function (message, durationMs) {
+            var text = message || '';
+            var ms = typeof durationMs === 'number' && durationMs > 0 ? durationMs : 5000;
+            var host = document.getElementById('rn-toast-host');
+            if (!host) {
+                host = document.createElement('div');
+                host.id = 'rn-toast-host';
+                host.className = 'rn-toast-host';
+                host.setAttribute('aria-live', 'polite');
+                host.setAttribute('aria-atomic', 'true');
+                document.body.appendChild(host);
+            }
+
+            var el = document.createElement('div');
+            el.className = 'rn-toast';
+            el.setAttribute('role', 'status');
+            el.textContent = text;
+            host.appendChild(el);
+
+            window.setTimeout(function () {
+                try {
+                    el.classList.add('is-hiding');
+                    window.setTimeout(function () {
+                        if (el.parentNode) {
+                            el.parentNode.removeChild(el);
+                        }
+                    }, 280);
+                } catch (_) {
+                    /* ignore */
+                }
+            }, ms);
+        },
+
+        getAnalyticsPreferences: function (userId) {
+            if (!userId) {
+                return null;
+            }
+            try {
+                var raw = localStorage.getItem('regneps.analytics.prefs.' + userId);
+                if (!raw) {
+                    return null;
+                }
+                return JSON.parse(raw);
+            } catch (_) {
+                return null;
+            }
+        },
+
+        setAnalyticsPreferences: function (userId, prefs) {
+            if (!userId) {
+                return;
+            }
+            try {
+                var key = 'regneps.analytics.prefs.' + userId;
+                if (!prefs) {
+                    localStorage.removeItem(key);
+                    return;
+                }
+                localStorage.setItem(key, JSON.stringify(prefs));
+            } catch (_) {
+                /* storage lleno o modo privado */
             }
         }
     };

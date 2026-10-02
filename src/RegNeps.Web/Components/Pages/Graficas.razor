@@ -460,8 +460,98 @@ else
         _allowed = true;
         if (!_chartsReady)
         {
+            await LoadPreferencesAsync();
             await LoadAsync();
             _chartsReady = true;
+        }
+    }
+
+    private async Task LoadPreferencesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_session?.UserId))
+        {
+            return;
+        }
+
+        try
+        {
+            var prefs = await Js.InvokeAsync<AnalyticsPrefsDto?>(
+                "regnepsUi.getAnalyticsPreferences",
+                _session.UserId);
+            if (prefs is null)
+            {
+                return;
+            }
+
+            if (prefs.PeriodDays is int pd)
+            {
+                _periodDays = pd;
+            }
+
+            if (!string.IsNullOrWhiteSpace(prefs.Grouping)
+                && Enum.TryParse<ChartTimeGrouping>(prefs.Grouping, ignoreCase: true, out var grouping))
+            {
+                _grouping = grouping;
+            }
+
+            if (DateTime.TryParse(prefs.FromLocal, out var from))
+            {
+                _fromLocal = from.Date;
+            }
+
+            if (DateTime.TryParse(prefs.ToLocal, out var to))
+            {
+                _toLocal = to.Date;
+            }
+
+            _filterTelar = prefs.FilterTelar ?? "";
+            _filterTela = prefs.FilterTela ?? "";
+            _filterLote = prefs.FilterLote ?? "";
+            _filterTurno = prefs.FilterTurno ?? "";
+            _filterAlert = prefs.FilterAlert ?? "";
+            _filterOperario = prefs.FilterOperario ?? "";
+            _telarRanking = prefs.TelarRanking ?? "";
+            _telarTableSort = string.IsNullOrWhiteSpace(prefs.TelarTableSort) ? "code" : prefs.TelarTableSort!;
+        }
+        catch
+        {
+            // Defaults del componente si localStorage falla.
+        }
+    }
+
+    private async Task SavePreferencesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_session?.UserId))
+        {
+            return;
+        }
+
+        try
+        {
+            var prefs = new AnalyticsPrefsDto
+            {
+                PeriodDays = _periodDays,
+                Grouping = _grouping.ToString(),
+                FromLocal = _fromLocal?.ToString("yyyy-MM-dd"),
+                ToLocal = _toLocal?.ToString("yyyy-MM-dd"),
+                FilterTelar = _filterTelar,
+                FilterTela = _filterTela,
+                FilterLote = _filterLote,
+                FilterTurno = _filterTurno,
+                FilterAlert = _filterAlert,
+                FilterOperario = _filterOperario,
+                TelarRanking = _telarRanking,
+                TelarTableSort = _telarTableSort
+            };
+
+            await Js.InvokeVoidAsync(
+                "regnepsUi.setAnalyticsPreferences",
+                _session.UserId,
+                prefs);
+        }
+        catch
+        {
+            // Persistencia opcional.
         }
     }
 
@@ -484,6 +574,7 @@ else
         if (_periodDays != 0)
         {
             await LoadAsync();
+            await SavePreferencesAsync();
         }
     }
 
@@ -496,6 +587,7 @@ else
 
         _grouping = grouping;
         await LoadAsync();
+        await SavePreferencesAsync();
     }
 
     private IEnumerable<GroupSummary> OrderedTelars
@@ -632,6 +724,7 @@ else
         _telarTableSort = "code";
         _grouping = ChartTimeGrouping.Day;
         await LoadAsync();
+        await SavePreferencesAsync();
     }
 
     private async Task LoadAsync()
@@ -678,6 +771,8 @@ else
         {
             _loading = false;
         }
+
+        await SavePreferencesAsync();
     }
 
     private RecordFilters BuildFilters(out string? error)
@@ -1118,6 +1213,22 @@ else
         {
             return [];
         }
+    }
+
+    private sealed class AnalyticsPrefsDto
+    {
+        public int? PeriodDays { get; set; }
+        public string? Grouping { get; set; }
+        public string? FromLocal { get; set; }
+        public string? ToLocal { get; set; }
+        public string? FilterTelar { get; set; }
+        public string? FilterTela { get; set; }
+        public string? FilterLote { get; set; }
+        public string? FilterTurno { get; set; }
+        public string? FilterAlert { get; set; }
+        public string? FilterOperario { get; set; }
+        public string? TelarRanking { get; set; }
+        public string? TelarTableSort { get; set; }
     }
 
     private sealed class ChartCaptureDto

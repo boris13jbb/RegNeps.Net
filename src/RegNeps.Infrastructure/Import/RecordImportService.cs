@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Text;
 using ClosedXML.Excel;
 using RegNeps.Application.Abstractions;
+using RegNeps.Application.Records;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 
@@ -12,14 +14,28 @@ public sealed class RecordImportService : IRecordImportService
 
     public RecordImportService(INepRecordRepository records) => _records = records;
 
-    public async Task<(int Imported, IReadOnlyList<string> Errors)> ImportExcelAsync(
+    public Task<RecordImportResult> ImportFileAsync(
+        Stream stream,
+        string fileName,
+        string? createdByUserId,
+        string? createdByEmail,
+        string? createdByRole,
+        CancellationToken ct = default)
+    {
+        var ext = Path.GetExtension(fileName ?? string.Empty).ToLowerInvariant();
+        return ext == ".csv"
+            ? ImportCsvAsync(stream, createdByUserId, createdByEmail, createdByRole, ct)
+            : ImportExcelAsync(stream, createdByUserId, createdByEmail, createdByRole, ct);
+    }
+
+    public async Task<RecordImportResult> ImportExcelAsync(
         Stream stream,
         string? createdByUserId,
         string? createdByEmail,
         string? createdByRole,
         CancellationToken ct = default)
     {
-        var errors = new List<string>();
+        var rows = new List<RecordImportRowResult>();
         var imported = 0;
 
         using var workbook = new XLWorkbook(stream);
@@ -40,63 +56,237 @@ public sealed class RecordImportService : IRecordImportService
                 continue;
             }
 
-            try
+            var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (header, col) in map)
             {
-                var telar = GetString(row, map, "TELAR");
-                if (string.IsNullOrWhiteSpace(telar))
-                {
-                    errors.Add($"Fila {rowNum}: TELAR es obligatorio.");
-                    continue;
-                }
-
-                if (!TryGetDouble(row, map, "NEPS", out var neps))
-                {
-                    errors.Add($"Fila {rowNum}: NEPS inválido.");
-                    continue;
-                }
-
-                if (neps < 0)
-                {
-                    errors.Add($"Fila {rowNum}: NEPS no puede ser negativo.");
-                    continue;
-                }
-
-                var lote = GetString(row, map, "LOTE");
-                if (string.IsNullOrWhiteSpace(lote))
-                {
-                    lote = NepsConstants.LoteTramaPrefix;
-                }
-
-                var createdAt = TryGetDate(row, map, "FECHA") ?? DateTime.UtcNow;
-
-                var record = new NepRecord
-                {
-                    Telar = telar.Trim(),
-                    Neps = neps,
-                    Tela = GetString(row, map, "TELA").Trim(),
-                    LoteTrama = lote.Trim().ToUpperInvariant(),
-                    Turno = GetString(row, map, "TURNO").Trim(),
-                    Operario = GetString(row, map, "OPERARIO").Trim(),
-                    LineaProduccion = GetString(row, map, "LINEA").Trim(),
-                    Observacion = GetString(row, map, "OBSERVACION").Trim(),
-                    CreatedAt = createdAt.Kind == DateTimeKind.Unspecified
-                        ? DateTime.SpecifyKind(createdAt, DateTimeKind.Local).ToUniversalTime()
-                        : createdAt.ToUniversalTime(),
-                    CreatedByUserId = createdByUserId,
-                    CreatedByEmail = createdByEmail,
-                    CreatedByRole = createdByRole
-                };
-
-                await _records.AddAsync(record, ct);
-                imported++;
+                fields[header] = row.Cell(col).GetFormattedString()?.Trim() ?? string.Empty;
             }
-            catch (Exception ex)
+
+            var result = await TryImportRowAsync(
+                rowNum, fields, createdByUserId, createdByEmail, createdByRole, ct);
+            rows.Add(result);
+            if (result.Success)
             {
-                errors.Add($"Fila {rowNum}: {ex.Message}");
+                imported++;
             }
         }
 
-        return (imported, errors);
+        return new RecordImportResult { Imported = imported, Rows = rows };
+    }
+
+    public async Task<RecordImportResult> ImportCsvAsync(
+        Stream stream,
+        string? createdByUserId,
+        string? createdByEmail,
+        string? createdByRole,
+        CancellationToken ct = default)
+    {
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var content = await reader.ReadToEndAsync(ct);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new InvalidOperationException("El archivo CSV está vacío.");
+        }
+
+        // Quitar BOM residual si el lector no lo eliminó.
+        if (content.Length > 0 && content[0] == '\uFEFF')
+        {
+            content = content[1..];
+        }
+
+        var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length == 0)
+        {
+            throw new InvalidOperationException("El archivo CSV no contiene filas.");
+        }
+
+        var delimiter = DetectDelimiter(lines[0]);
+        var headers = SplitCsvLine(lines[0], delimiter)
+            .Select(NormalizeHeader)
+            .ToList();
+        var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < headers.Count; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(headers[i]) && !map.ContainsKey(headers[i]))
+            {
+                map[headers[i]] = i;
+            }
+        }
+
+        RequireHeaders(map, "TELAR", "NEPS");
+
+        var rows = new List<RecordImportRowResult>();
+        var imported = 0;
+        for (var i = 1; i < lines.Length; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var rowNum = i + 1;
+            var cells = SplitCsvLine(lines[i], delimiter);
+            if (cells.All(string.IsNullOrWhiteSpace))
+            {
+                continue;
+            }
+
+            var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (header, idx) in map)
+            {
+                fields[header] = idx < cells.Count ? cells[idx].Trim() : string.Empty;
+            }
+
+            var result = await TryImportRowAsync(
+                rowNum, fields, createdByUserId, createdByEmail, createdByRole, ct);
+            rows.Add(result);
+            if (result.Success)
+            {
+                imported++;
+            }
+        }
+
+        return new RecordImportResult { Imported = imported, Rows = rows };
+    }
+
+    private async Task<RecordImportRowResult> TryImportRowAsync(
+        int rowNum,
+        Dictionary<string, string> fields,
+        string? createdByUserId,
+        string? createdByEmail,
+        string? createdByRole,
+        CancellationToken ct)
+    {
+        try
+        {
+            fields.TryGetValue("TELAR", out var telar);
+            if (string.IsNullOrWhiteSpace(telar))
+            {
+                return Fail(rowNum, "TELAR es obligatorio.");
+            }
+
+            fields.TryGetValue("NEPS", out var nepsText);
+            if (!TryParseDouble(nepsText, out var neps))
+            {
+                return Fail(rowNum, "NEPS inválido.");
+            }
+
+            if (neps < 0)
+            {
+                return Fail(rowNum, "NEPS no puede ser negativo.");
+            }
+
+            fields.TryGetValue("LOTE", out var lote);
+            if (string.IsNullOrWhiteSpace(lote))
+            {
+                lote = NepsConstants.LoteTramaPrefix;
+            }
+
+            fields.TryGetValue("FECHA", out var fechaText);
+            var createdAt = TryParseDate(fechaText) ?? DateTime.UtcNow;
+
+            fields.TryGetValue("TELA", out var tela);
+            fields.TryGetValue("TURNO", out var turno);
+            fields.TryGetValue("OPERARIO", out var operario);
+            fields.TryGetValue("LINEA", out var linea);
+            fields.TryGetValue("OBSERVACION", out var observacion);
+
+            var record = new NepRecord
+            {
+                Telar = telar.Trim(),
+                Neps = neps,
+                Tela = (tela ?? string.Empty).Trim(),
+                LoteTrama = lote.Trim().ToUpperInvariant(),
+                Turno = (turno ?? string.Empty).Trim(),
+                Operario = (operario ?? string.Empty).Trim(),
+                LineaProduccion = (linea ?? string.Empty).Trim(),
+                Observacion = (observacion ?? string.Empty).Trim(),
+                CreatedAt = createdAt.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(createdAt, DateTimeKind.Local).ToUniversalTime()
+                    : createdAt.ToUniversalTime(),
+                CreatedByUserId = createdByUserId,
+                CreatedByEmail = createdByEmail,
+                CreatedByRole = createdByRole
+            };
+
+            await _records.AddAsync(record, ct);
+            return new RecordImportRowResult { RowNumber = rowNum, Success = true };
+        }
+        catch (Exception ex)
+        {
+            return Fail(rowNum, ex.Message);
+        }
+    }
+
+    private static RecordImportRowResult Fail(int rowNum, string reason) =>
+        new() { RowNumber = rowNum, Success = false, Reason = reason };
+
+    private static char DetectDelimiter(string headerLine)
+    {
+        var commas = headerLine.Count(c => c == ',');
+        var semis = headerLine.Count(c => c == ';');
+        return semis > commas ? ';' : ',';
+    }
+
+    private static List<string> SplitCsvLine(string line, char delimiter)
+    {
+        var result = new List<string>();
+        var sb = new StringBuilder();
+        var inQuotes = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    sb.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+
+                continue;
+            }
+
+            if (ch == delimiter && !inQuotes)
+            {
+                result.Add(sb.ToString());
+                sb.Clear();
+                continue;
+            }
+
+            sb.Append(ch);
+        }
+
+        result.Add(sb.ToString());
+        return result;
+    }
+
+    private static bool TryParseDouble(string? text, out double value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return double.TryParse(text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out value)
+               || double.TryParse(text.Trim(), NumberStyles.Any, CultureInfo.CurrentCulture, out value);
+    }
+
+    private static DateTime? TryParseDate(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out var parsed) ||
+            DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out parsed))
+        {
+            return parsed;
+        }
+
+        return null;
     }
 
     private static Dictionary<string, int> BuildHeaderMap(IXLRow headerRow)
@@ -124,66 +314,8 @@ public sealed class RecordImportService : IRecordImportService
         {
             if (!map.ContainsKey(key))
             {
-                throw new InvalidOperationException($"Falta la columna obligatoria '{key}' en el Excel.");
+                throw new InvalidOperationException($"Falta la columna obligatoria '{key}' en el archivo.");
             }
         }
-    }
-
-    private static string GetString(IXLRow row, Dictionary<string, int> map, string header)
-    {
-        if (!map.TryGetValue(header, out var col))
-        {
-            return string.Empty;
-        }
-
-        return row.Cell(col).GetFormattedString()?.Trim() ?? string.Empty;
-    }
-
-    private static bool TryGetDouble(IXLRow row, Dictionary<string, int> map, string header, out double value)
-    {
-        value = 0;
-        if (!map.TryGetValue(header, out var col))
-        {
-            return false;
-        }
-
-        var cell = row.Cell(col);
-        if (cell.TryGetValue(out double d))
-        {
-            value = d;
-            return true;
-        }
-
-        var text = cell.GetFormattedString()?.Trim();
-        return !string.IsNullOrWhiteSpace(text) &&
-               double.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out value);
-    }
-
-    private static DateTime? TryGetDate(IXLRow row, Dictionary<string, int> map, string header)
-    {
-        if (!map.TryGetValue(header, out var col))
-        {
-            return null;
-        }
-
-        var cell = row.Cell(col);
-        if (cell.TryGetValue(out DateTime dt))
-        {
-            return dt;
-        }
-
-        var text = cell.GetFormattedString()?.Trim();
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        if (DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out var parsed) ||
-            DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out parsed))
-        {
-            return parsed;
-        }
-
-        return null;
     }
 }

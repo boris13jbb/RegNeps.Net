@@ -54,6 +54,86 @@ public sealed class ReportExportAppService
         return await BuildExportFileAsync(format, records, filters, style, ct, columns);
     }
 
+    /// <summary>
+    /// Exporta exclusivamente los Ids indicados (deduplicados), con el mismo aislamiento que QueryAsync.
+    /// No usa CaptureSessionId, fechas ni otros filtros de expansión.
+    /// </summary>
+    public async Task<(byte[] Bytes, string FileName, string ContentType)> ExportByIdsAsync(
+        string format,
+        IReadOnlyCollection<Guid> ids,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        string style = "completo",
+        IReadOnlyList<string>? columns = null,
+        CancellationToken ct = default)
+    {
+        var unique = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var id in ids ?? Array.Empty<Guid>())
+        {
+            if (id == Guid.Empty || !seen.Add(id))
+            {
+                continue;
+            }
+
+            unique.Add(id);
+        }
+
+        if (unique.Count == 0)
+        {
+            throw new ArgumentException("Indique al menos un registro para exportar.");
+        }
+
+        var records = await _records.GetByIdsAsync(unique, viewerUserId, viewerSeesAll, ct);
+        if (records.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No hay registros accesibles para exportar con los Ids indicados.");
+        }
+
+        // Conservar el orden de solicitud (ya deduplicado).
+        var byId = records.ToDictionary(r => r.Id);
+        var ordered = unique
+            .Where(id => byId.ContainsKey(id))
+            .Select(id => byId[id])
+            .ToList();
+
+        var filters = new RecordFilters();
+        var file = await BuildExportFileAsync(format, ordered, filters, style, ct, columns);
+
+        // Nombres más claros para compartir desde Captura.
+        var stamp = Stamp();
+        var baseName = ordered.Count == 1
+            ? $"regneps_registro_{SanitizeFilePart(ordered[0].Telar)}_{stamp}"
+            : $"regneps_seleccion_{ordered.Count}_{stamp}";
+
+        var ext = Path.GetExtension(file.FileName);
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            ext = format.Trim().ToLowerInvariant() switch
+            {
+                "pdf" => ".pdf",
+                "xlsx" or "excel" => ".xlsx",
+                _ => ".csv"
+            };
+        }
+
+        return (file.Bytes, baseName + ext, file.ContentType);
+    }
+
+    private static string SanitizeFilePart(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "registro";
+        }
+
+        var chars = value.Trim().Select(ch =>
+            char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_').ToArray();
+        var cleaned = new string(chars);
+        return string.IsNullOrWhiteSpace(cleaned) ? "registro" : cleaned;
+    }
+
     private async Task<(byte[] Bytes, string FileName, string ContentType)> BuildExportFileAsync(
         string format,
         IReadOnlyList<NepRecord> records,
@@ -175,8 +255,11 @@ public sealed class ReportExportAppService
         string? userId,
         string? userName,
         bool viewerSeesAll,
+        bool hasManageReports,
         CancellationToken ct = default)
     {
+        SavedReportAccess.EnsureCanManageReports(hasManageReports);
+
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new ArgumentException("El nombre del informe es obligatorio.");
@@ -193,13 +276,76 @@ public sealed class ReportExportAppService
                 "No hay registros en el rango seleccionado. No se guardó el informe.");
         }
 
+        return await PersistSavedReportAsync(name, filters, records, config, userId, userName, ct);
+    }
+
+    /// <summary>
+    /// Guarda un informe con exactamente los IDs indicados (sin expandir por filtros/sesión).
+    /// </summary>
+    public async Task<SavedReport> SaveReportByIdsAsync(
+        string name,
+        IReadOnlyCollection<Guid> ids,
+        string? userId,
+        string? userName,
+        bool viewerSeesAll,
+        bool hasManageReports,
+        CancellationToken ct = default)
+    {
+        SavedReportAccess.EnsureCanManageReports(hasManageReports);
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("El nombre del informe es obligatorio.");
+        }
+
+        var unique = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var id in ids ?? Array.Empty<Guid>())
+        {
+            if (id == Guid.Empty || !seen.Add(id))
+            {
+                continue;
+            }
+
+            unique.Add(id);
+        }
+
+        if (unique.Count == 0)
+        {
+            throw new ArgumentException("Indique al menos un registro para guardar el informe.");
+        }
+
+        var records = await _records.GetByIdsAsync(unique, userId, viewerSeesAll, ct);
+        if (records.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No hay registros accesibles con los Ids indicados. No se guardó el informe.");
+        }
+
+        var byId = records.ToDictionary(r => r.Id);
+        var ordered = unique.Where(id => byId.ContainsKey(id)).Select(id => byId[id]).ToList();
+        var config = await _alertConfig.GetAsync(ct);
+        var filters = new RecordFilters();
+        return await PersistSavedReportAsync(name, filters, ordered, config, userId, userName, ct);
+    }
+
+    private async Task<SavedReport> PersistSavedReportAsync(
+        string name,
+        RecordFilters filters,
+        IReadOnlyList<NepRecord> records,
+        AlertConfig config,
+        string? userId,
+        string? userName,
+        CancellationToken ct)
+    {
         var criticos = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Critico);
         var avg = records.Average(r => r.Neps);
 
-        var fromLabel = filters.FromUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "?";
+        var fromLabel = filters.FromUtc?.ToLocalTime().ToString("dd/MM/yyyy")
+                        ?? records.Min(r => r.CreatedAt).ToLocalTime().ToString("dd/MM/yyyy");
         var toLabel = filters.ToExclusiveUtc?.ToLocalTime().AddTicks(-1).ToString("dd/MM/yyyy")
                       ?? filters.ToUtc?.ToLocalTime().ToString("dd/MM/yyyy")
-                      ?? "?";
+                      ?? records.Max(r => r.CreatedAt).ToLocalTime().ToString("dd/MM/yyyy");
 
         var report = new SavedReport
         {
@@ -223,15 +369,19 @@ public sealed class ReportExportAppService
         RecordFilters filters,
         string? userId,
         bool viewerSeesAll,
+        bool hasManageReports,
+        bool hasExportReports = false,
         CancellationToken ct = default)
     {
+        SavedReportAccess.EnsureCanManageReports(hasManageReports);
+
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new ArgumentException("El nombre del informe es obligatorio.");
         }
 
-        _ = await _saved.GetByIdAsync(id, ct)
-            ?? throw new InvalidOperationException("Informe no encontrado.");
+        var actor = ReportAccessActor.Create(userId, viewerSeesAll, hasManageReports, hasExportReports);
+        var existing = await GetAccessibleSavedAsync(id, actor, ct);
 
         filters ??= new RecordFilters();
         ReportDateRange.EnsureConsolidatedRange(filters);
@@ -250,6 +400,8 @@ public sealed class ReportExportAppService
         {
             Id = id,
             Name = name.Trim(),
+            CreatedByUserId = existing.CreatedByUserId,
+            CreatedByName = existing.CreatedByName,
             RecordCount = records.Count,
             FiltersJson = JsonSerializer.Serialize(filters),
             SnapshotJson = records.Count > 0 ? BuildSnapshotJson(records) : null,
@@ -290,30 +442,75 @@ public sealed class ReportExportAppService
             .ToList();
     }
 
-    public Task<IReadOnlyList<SavedReport>> ListSavedAsync(CancellationToken ct = default) =>
-        _saved.ListAsync(ct);
+    /// <summary>Lista solo informes accesibles para el actor (autor o SeesAll + Manage/Export).</summary>
+    public async Task<IReadOnlyList<SavedReport>> ListSavedAsync(
+        ReportAccessActor actor,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var all = await _saved.ListAsync(ct);
+        return all.Where(r => SavedReportAccess.CanAccess(r, actor)).ToList();
+    }
 
-    public Task DeleteSavedAsync(Guid id, CancellationToken ct = default) =>
-        _saved.DeleteAsync(id, ct);
+    public async Task DeleteSavedAsync(
+        Guid id,
+        ReportAccessActor actor,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        SavedReportAccess.EnsureCanManageReports(actor.HasManageReports);
+        _ = await GetAccessibleSavedAsync(id, actor, ct);
+        await _saved.DeleteAsync(id, ct);
+    }
 
     public async Task<(byte[] Bytes, string FileName, string ContentType)> ExportSavedAsync(
         Guid savedReportId,
         string format,
         string? viewerUserId,
         bool viewerSeesAll,
+        string style = "completo",
+        IReadOnlyList<string>? columns = null,
+        bool hasManageReports = false,
+        bool hasExportReports = false,
         CancellationToken ct = default)
     {
-        var report = await _saved.GetByIdAsync(savedReportId, ct)
-            ?? throw new InvalidOperationException("Informe no encontrado.");
+        var actor = ReportAccessActor.Create(
+            viewerUserId, viewerSeesAll, hasManageReports, hasExportReports);
+        var report = await GetAccessibleSavedAsync(savedReportId, actor, ct);
 
         var filters = ResolveSavedFilters(report).Filters;
         var snapshot = await _snapshots.LoadSnapshotRecordsAsync(savedReportId, ct);
+        var normalizedStyle = string.IsNullOrWhiteSpace(style) ? "completo" : style.Trim().ToLowerInvariant();
         var file = snapshot.Count > 0
-            ? await BuildExportFileAsync(format, snapshot, filters, "completo", ct)
-            : await ExportAsync(format, filters, viewerUserId, viewerSeesAll, "completo", ct: ct);
+            ? await BuildExportFileAsync(format, snapshot, filters, normalizedStyle, ct, columns)
+            : await ExportAsync(
+                format, filters, viewerUserId, viewerSeesAll, normalizedStyle, columns, ct);
         var safeName = SanitizeFileName(report.Name);
         var ext = Path.GetExtension(file.FileName);
         return (file.Bytes, $"{safeName}_{Stamp()}{ext}", file.ContentType);
+    }
+
+    /// <summary>Obtiene el informe solo si el actor puede acceder; si no, «no encontrado».</summary>
+    public async Task<SavedReport> GetAccessibleSavedAsync(
+        Guid id,
+        ReportAccessActor actor,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var report = await _saved.GetByIdAsync(id, ct)
+            ?? throw new InvalidOperationException(SavedReportAccess.NotFoundMessage);
+        SavedReportAccess.EnsureCanAccess(report, actor);
+        return report;
+    }
+
+    /// <summary>Carga el snapshot solo tras validar acceso al informe.</summary>
+    public async Task<IReadOnlyList<NepRecord>> LoadAccessibleSnapshotAsync(
+        Guid reportId,
+        ReportAccessActor actor,
+        CancellationToken ct = default)
+    {
+        _ = await GetAccessibleSavedAsync(reportId, actor, ct);
+        return await _snapshots.LoadSnapshotRecordsAsync(reportId, ct);
     }
 
     /// <summary>
@@ -341,6 +538,7 @@ public sealed class ReportExportAppService
         return new ResolvedSavedFilters(filters, Inferred: true, InferenceSource: "fecha de creación");
     }
 
+    /// <summary>Sin control de acceso. Preferir <see cref="GetAccessibleSavedAsync"/>.</summary>
     public async Task<SavedReport?> GetSavedAsync(Guid id, CancellationToken ct = default) =>
         await _saved.GetByIdAsync(id, ct);
 

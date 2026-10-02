@@ -1,4 +1,5 @@
 using RegNeps.Application.Abstractions;
+using RegNeps.Application.Alerts;
 using RegNeps.Application.Permissions;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
@@ -22,15 +23,18 @@ public sealed class NepRecordService
     private readonly INepRecordRepository _records;
     private readonly IAlertConfigRepository _alertConfig;
     private readonly IPermissionService? _permissions;
+    private readonly IAlertCriticalPublisher? _criticalPublisher;
 
     public NepRecordService(
         INepRecordRepository records,
         IAlertConfigRepository alertConfig,
-        IPermissionService? permissions = null)
+        IPermissionService? permissions = null,
+        IAlertCriticalPublisher? criticalPublisher = null)
     {
         _records = records;
         _alertConfig = alertConfig;
         _permissions = permissions;
+        _criticalPublisher = criticalPublisher;
     }
 
     /// <summary>
@@ -38,10 +42,24 @@ public sealed class NepRecordService
     /// siguen la matriz inicial para no exigir base de permisos en cada caso.
     /// </summary>
     private bool ActorHas(RecordActor actor, AppPermission permission) =>
-        _permissions?.HasPermission(actor.Role, actor.IsSuperAdmin, true, permission)
+        _permissions?.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, permission)
         ?? actor.Has(permission);
 
     public async Task<NepRecord> CreateAsync(
+        CreateNepRecordRequest request,
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        var (saved, inserted) = await CreateInternalAsync(request, actor, ct);
+        if (inserted)
+        {
+            await TryPublishCriticalIfEvaluatedAsync(saved, ct);
+        }
+
+        return saved;
+    }
+
+    private async Task<(NepRecord Record, bool Inserted)> CreateInternalAsync(
         CreateNepRecordRequest request,
         RecordActor actor,
         CancellationToken ct = default)
@@ -76,7 +94,7 @@ public sealed class NepRecordService
                         "La operación no pertenece a la sesión de captura actual.");
                 }
 
-                return existing;
+                return (existing, false);
             }
         }
 
@@ -102,7 +120,53 @@ public sealed class NepRecordService
             ConcurrencyStamp = Guid.NewGuid().ToString("N")
         };
 
-        return await _records.AddAsync(record, ct);
+        var saved = await _records.AddAsync(record, ct);
+        return (saved, true);
+    }
+
+    /// <summary>
+    /// Indica si existe un registro reciente del mismo usuario con la misma medición (ventana de duplicados).
+    /// </summary>
+    public async Task<bool> HasRecentDuplicateAsync(
+        CreateNepRecordRequest request,
+        RecordActor actor,
+        DateTime? nowUtc = null,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var now = nowUtc ?? DateTime.UtcNow;
+        var since = now.AddMinutes(-CaptureValidationConstants.DuplicateWindowMinutes);
+        var recent = await _records.FindRecentByUserAsync(
+            actor.UserId,
+            actor.ExternalUserId,
+            since,
+            take: 100,
+            ct);
+
+        var lote = string.IsNullOrWhiteSpace(request.LoteTrama)
+            ? NepsConstants.LoteTramaPrefix
+            : request.LoteTrama.Trim().ToUpperInvariant();
+
+        foreach (var existing in recent)
+        {
+            if (CaptureValidationRules.IsRecentDuplicate(
+                    actor.UserId,
+                    request.Telar,
+                    request.Tela,
+                    lote,
+                    request.Neps,
+                    existing,
+                    now,
+                    CaptureValidationConstants.DuplicateWindowMinutes,
+                    actor.ExternalUserId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -151,7 +215,7 @@ public sealed class NepRecordService
         NepRecord saved;
         try
         {
-            saved = await CreateAsync(request, actor, ct);
+            (saved, _) = await CreateInternalAsync(request, actor, ct);
         }
         catch (UnauthorizedRecordAccessException ex)
         {
@@ -191,6 +255,11 @@ public sealed class NepRecordService
             alertFailed = true;
         }
 
+        if (!alreadySaved && level == AlertLevel.Critico)
+        {
+            await TryPublishCriticalAlertAsync(saved, ct);
+        }
+
         return new RecordSaveResult
         {
             Status = alreadySaved ? RecordSaveStatus.AlreadySaved : RecordSaveStatus.Saved,
@@ -198,6 +267,39 @@ public sealed class NepRecordService
             AlertLevel = level,
             AlertEvaluationFailed = alertFailed
         };
+    }
+
+    private async Task TryPublishCriticalIfEvaluatedAsync(NepRecord record, CancellationToken ct)
+    {
+        try
+        {
+            var eval = await EvaluateAsync(record.Neps, record.Telar, ct);
+            if (eval.Level == AlertLevel.Critico)
+            {
+                await TryPublishCriticalAlertAsync(record, ct);
+            }
+        }
+        catch
+        {
+            // No bloquear captura si falla evaluación o push.
+        }
+    }
+
+    private async Task TryPublishCriticalAlertAsync(NepRecord record, CancellationToken ct)
+    {
+        if (_criticalPublisher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _criticalPublisher.PublishNewCriticalAsync(record, ct);
+        }
+        catch
+        {
+            // No bloquear captura si falla el canal en tiempo real.
+        }
     }
 
     public async Task<NepRecord> UpdateAsync(
@@ -367,6 +469,66 @@ public sealed class NepRecordService
 
         EnsureCanMutate(actor, record, requireEditPermission: false);
         await _records.DeleteAsync(id, ct);
+    }
+
+    /// <summary>
+    /// Elimina en lote. Si un ID no existe o falla, continúa y reporta resumen sin dejar IDs fantasmas.
+    /// </summary>
+    public async Task<BatchDeleteResult> DeleteManyAsync(
+        IEnumerable<Guid> ids,
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!ActorHas(actor, AppPermission.DeleteRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para eliminar registros.");
+        }
+
+        var unique = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var id in ids ?? Array.Empty<Guid>())
+        {
+            if (id == Guid.Empty || !seen.Add(id))
+            {
+                continue;
+            }
+
+            unique.Add(id);
+        }
+
+        var deleted = new List<Guid>();
+        var failed = new List<Guid>();
+
+        foreach (var id in unique)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var record = await _records.GetByIdAsync(id, ct);
+                if (record is null)
+                {
+                    failed.Add(id);
+                    continue;
+                }
+
+                EnsureCanMutate(actor, record, requireEditPermission: false);
+                await _records.DeleteAsync(id, ct);
+                deleted.Add(id);
+            }
+            catch
+            {
+                failed.Add(id);
+            }
+        }
+
+        return new BatchDeleteResult
+        {
+            Deleted = deleted.Count,
+            NotFoundOrFailed = failed.Count,
+            DeletedIds = deleted,
+            FailedIds = failed
+        };
     }
 
     public async Task ClearAllAsync(RecordActor actor, CancellationToken ct = default)

@@ -1,7 +1,10 @@
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.SignalR.Client
+@using RegNeps.Web.Realtime
 @inject NepRecordService RecordService
 @inject IAlertConfigRepository AlertConfigRepository
 @inject CurrentUserService CurrentUser
+@inject NavigationManager Navigation
 @inject IJSRuntime Js
 @implements IAsyncDisposable
 
@@ -240,6 +243,8 @@
     private UserSession? _session;
 
     private bool _seenLoaded;
+    private HubConnection? _hub;
+    private bool _hubStarted;
 
     private int _unreadCount => _items.Count(i => !i.Seen);
     private string BadgeText => _unreadCount > 99 ? "99+" : _unreadCount.ToString();
@@ -266,6 +271,7 @@
         if (gained)
         {
             await RefreshAlertsAsync();
+            await EnsureHubConnectedAsync();
         }
     }
 
@@ -281,6 +287,7 @@
             _seenLoaded = true;
             await LoadSeenAsync();
             ApplySeenFlags();
+            await EnsureHubConnectedAsync();
             await InvokeAsync(StateHasChanged);
         }
 
@@ -525,6 +532,53 @@
         return local.ToString("dd/MM/yyyy HH:mm");
     }
 
+    private async Task EnsureHubConnectedAsync()
+    {
+        if (_disposed || !_allowed || _hubStarted || string.IsNullOrWhiteSpace(_session?.UserId))
+        {
+            return;
+        }
+
+        try
+        {
+            _hub ??= new HubConnectionBuilder()
+                .WithUrl(Navigation.ToAbsoluteUri("/hubs/alerts"))
+                .WithAutomaticReconnect()
+                .Build();
+
+            _hub.On<CriticalAlertClientPayload>(
+                AlertNotificationHub.CriticalAlertMethod,
+                async payload =>
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await RefreshAlertsAsync();
+                        try
+                        {
+                            await Js.InvokeVoidAsync(
+                                "regnepsUi.showToast",
+                                string.IsNullOrWhiteSpace(payload.Summary)
+                                    ? "Nueva alerta crítica registrada"
+                                    : payload.Summary);
+                        }
+                        catch
+                        {
+                            // Script no disponible.
+                        }
+
+                        StateHasChanged();
+                    });
+                });
+
+            await _hub.StartAsync();
+            _hubStarted = true;
+        }
+        catch
+        {
+            // SignalR opcional; la UI sigue con refresco manual.
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -533,6 +587,18 @@
         }
 
         _disposed = true;
+
+        if (_hub is not null)
+        {
+            try
+            {
+                await _hub.DisposeAsync();
+            }
+            catch
+            {
+                // Circuito cerrado.
+            }
+        }
         if (_dialogOpen)
         {
             await DeactivateAsync(_dialogRoot);
@@ -559,4 +625,11 @@
         string Message,
         string RelativeTime,
         bool Seen);
+
+    private sealed class CriticalAlertClientPayload
+    {
+        public Guid RecordId { get; set; }
+        public DateTime CreatedAtUtc { get; set; }
+        public string? Summary { get; set; }
+    }
 }

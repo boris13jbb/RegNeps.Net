@@ -36,16 +36,18 @@ dotnet run --project src/RegNeps.Web
 | Login / AuthGate | `/login` + cookies | Operativo (usuarios locales) |
 | Dashboard | `/dashboard` | Operativo |
 | Gráficas / Analytics | `/graficas` | Operativo (KPIs + tablas) |
-| Captura | `/captura` | Operativo |
-| Registros + filtros + import | `/registros` | Operativo |
-| Alertas + correctivas | `/alertas` | Operativo |
+| Captura | `/captura` | Operativo (confirmación Neps>100, duplicados, compartir hoy, estilo PDF) |
+| Registros + filtros + import | `/registros` | Operativo (paginación, multi-select, CSV, solo lectura informe) |
+| Alertas + correctivas | `/alertas` | Operativo (+ push SignalR críticos en vivo) |
 | Telas | `/telas` | Operativo |
-| Informes guardados | `/informes` | Operativo |
-| Reportes profesionales | `/reportes` | Operativo (periodo, preview, export) |
-| Exportar CSV/Excel/PDF | `/exportar` + `/api/export/*` | Operativo |
+| Informes guardados | `/informes` | Operativo (export completo/clásico) |
+| Constructor de informes | `/constructor-informes` | Operativo (agrupación + PDF/Excel profesional) |
+| Reportes (alias) | `/reportes` | Redirect a `/exportar` |
+| Exportar CSV/Excel/PDF | `/exportar` + `/api/export/*` | Operativo (`style`, `columns`) |
 | Usuarios | `/usuarios` | Operativo |
 | Config alertas | `/config` | Operativo |
-| Roles / permisos | `RolePermissions` | Paridad con Flutter |
+| Roles / permisos | `/roles` + entidad `AppRole` | Roles parametrizables + matriz |
+| Gráficas | `/graficas` | Operativo (preferencias localStorage) |
 | Fórmula Mts = Neps / 0.09 | Domain | Operativa |
 | Umbrales 30 / 60 + reincidencia | Domain | Operativos |
 

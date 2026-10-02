@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Permissions;
 using RegNeps.Application.Records;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
@@ -29,6 +30,7 @@ public class RolePermissionServiceTests : IAsyncLifetime
     {
         await using var db = new RegNepsDbContext(_options);
         await db.Database.EnsureCreatedAsync();
+        await DatabaseInitializer.ApplySchemaPatchesAsync(db);
         await DbSeeder.SeedAsync(db);
     }
 
@@ -43,8 +45,9 @@ public class RolePermissionServiceTests : IAsyncLifetime
     {
         await using (var db = new RegNepsDbContext(_options))
         {
+            var superRole = await db.Roles.SingleAsync(r => r.Code == SystemRoleCodes.SuperAdmin);
             var tampered = await db.RolePermissions.FirstAsync(x =>
-                x.Role == AppUserRole.SuperAdmin && x.Permission == AppPermission.ManageRoles);
+                x.RoleId == superRole.Id && x.Permission == AppPermission.ManageRoles);
             tampered.IsEnabled = false;
             await db.SaveChangesAsync();
         }
@@ -130,9 +133,10 @@ public class RolePermissionServiceTests : IAsyncLifetime
     [Fact]
     public async Task Seeder_Does_Not_Duplicate_Role_Permissions()
     {
-        var expected = PermissionCatalog.All.Count * 5;
         await using (var db = new RegNepsDbContext(_options))
         {
+            var roleCount = await db.Roles.CountAsync();
+            var expected = PermissionCatalog.All.Count * roleCount;
             Assert.Equal(expected, await db.RolePermissions.CountAsync());
             await DbSeeder.SeedAsync(db);
             Assert.Equal(expected, await db.RolePermissions.CountAsync());
@@ -169,7 +173,7 @@ public class RolePermissionServiceTests : IAsyncLifetime
         var actor = await SuperActorAsync();
         var factory = new TestDbFactory(_options);
         await using var db = factory.CreateDbContext();
-        var permissions = new PermissionService(new RolePermissionRepository(db), new PermissionMatrix());
+        var permissions = CreateService(db);
         await permissions.UpdateRolePermissionAsync(
             AppUserRole.Supervisor, AppPermission.CaptureRecords, true, actor);
 
@@ -234,11 +238,68 @@ public class RolePermissionServiceTests : IAsyncLifetime
             AppUserRole.Supervisor, AppPermission.DeleteRecords, true, actor);
 
         await using var db = new RegNepsDbContext(_options);
+        var supervisorRole = await db.Roles.SingleAsync(r => r.Code == SystemRoleCodes.Supervisor);
         var audit = await db.RolePermissionAudits.SingleAsync(x =>
-            x.Role == AppUserRole.Supervisor && x.Permission == AppPermission.DeleteRecords);
+            x.RoleId == supervisorRole.Id && x.Permission == AppPermission.DeleteRecords);
         Assert.False(audit.PreviousValue);
         Assert.True(audit.NewValue);
         Assert.Equal(actor.UserId, audit.ModifiedByUserId);
+    }
+
+    [Fact]
+    public async Task Inactive_Role_Denies_All_Permissions_Except_SuperAdmin()
+    {
+        var permissions = CreateService();
+        var roleAdmin = CreateRoleAdminService();
+        var actor = await SuperActorAsync();
+        await permissions.UpdateRolePermissionAsync(
+            AppUserRole.Supervisor, AppPermission.ViewDashboard, true, actor);
+
+        await using var db = new RegNepsDbContext(_options);
+        var supervisor = await db.Roles.SingleAsync(r => r.Code == SystemRoleCodes.Supervisor);
+        await roleAdmin.SetActiveAsync(supervisor.Id, false, actor);
+        await permissions.RefreshMatrixAsync();
+
+        Assert.False(permissions.HasPermissionByRoleCode(SystemRoleCodes.Supervisor, false, true, AppPermission.ViewDashboard));
+        Assert.True(permissions.HasPermission(AppUserRole.SuperAdmin, true, true, AppPermission.ManageRoles));
+    }
+
+    [Fact]
+    public async Task Operario_SeesAllRecords_Is_False_From_Role_Flag()
+    {
+        var permissions = CreateService();
+        await permissions.EnsureLoadedAsync();
+        Assert.False(permissions.SeesAllRecords(SystemRoleCodes.Operario, false));
+        Assert.True(permissions.SeesAllRecords(SystemRoleCodes.Supervisor, false));
+    }
+
+    [Fact]
+    public async Task Custom_Role_Permissions_Are_Enforced_By_RoleCode()
+    {
+        var permissions = CreateService();
+        var roleAdmin = CreateRoleAdminService();
+        var actor = await SuperActorAsync();
+        var custom = await roleAdmin.CreateCustomRoleAsync("qa_lead", "Líder QA", true, actor);
+
+        await permissions.UpdateRolePermissionsForRoleIdAsync(
+            custom.Id,
+            new Dictionary<AppPermission, bool> { [AppPermission.ViewDashboard] = true },
+            actor);
+
+        Assert.True(permissions.HasPermissionByRoleCode("qa_lead", false, true, AppPermission.ViewDashboard));
+        Assert.False(permissions.HasPermissionByRoleCode("qa_lead", false, true, AppPermission.CaptureRecords));
+    }
+
+    [Fact]
+    public async Task Initialize_Base_Roles_Is_Idempotent()
+    {
+        var roleAdmin = CreateRoleAdminService();
+        var actor = await SuperActorAsync();
+        var first = await roleAdmin.InitializeBaseRolesAsync(actor);
+        var second = await roleAdmin.InitializeBaseRolesAsync(actor);
+        Assert.Equal(first, second);
+        await using var db = new RegNepsDbContext(_options);
+        Assert.Equal(SystemRoleCodes.Definitions.Count, await db.Roles.CountAsync(r => r.IsSystem));
     }
 
     private sealed class TestDbFactory : IDbContextFactory<RegNepsDbContext>
@@ -248,16 +309,25 @@ public class RolePermissionServiceTests : IAsyncLifetime
         public RegNepsDbContext CreateDbContext() => new(_options);
     }
 
-    private PermissionService CreateService()
+    private PermissionService CreateService(RegNepsDbContext? db = null)
+    {
+        db ??= new RegNepsDbContext(_options);
+        return new PermissionService(
+            new RolePermissionRepository(db),
+            new RoleRepository(db),
+            new PermissionMatrix());
+    }
+
+    private RoleAdminService CreateRoleAdminService()
     {
         var db = new RegNepsDbContext(_options);
-        return new PermissionService(new RolePermissionRepository(db), new PermissionMatrix());
+        return new RoleAdminService(new RoleRepository(db), CreateService(db));
     }
 
     private async Task<CallerContext> SuperActorAsync()
     {
         await using var db = new RegNepsDbContext(_options);
         var admin = await db.Users.SingleAsync(u => u.Username == "admin");
-        return new CallerContext(admin.Id, AppUserRole.SuperAdmin, true);
+        return new CallerContext(admin.Id, AppUserRole.SuperAdmin, true, true, SystemRoleCodes.SuperAdmin);
     }
 }

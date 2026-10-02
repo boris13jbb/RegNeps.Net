@@ -24,7 +24,7 @@ public sealed class RolePermissionRepository : IRolePermissionRepository
         foreach (var row in upserts)
         {
             var existing = await _db.RolePermissions.FindAsync(
-                [row.Role, row.Permission],
+                [row.RoleId, row.Permission],
                 ct);
 
             if (existing is null)

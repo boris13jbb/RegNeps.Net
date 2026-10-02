@@ -58,7 +58,9 @@ else
                     </div>
                     <div class="col-12">
                         <p class="small text-muted mb-0">
-                            Crítico desde: @_config.LimiteCriticoMin · Ventana reincidencias: @_config.VentanaReincidenciasHoras h
+                            Crítico desde: @_config.LimiteCriticoMin ·
+                            Ventana reincidencias (informativo): @_config.VentanaReincidenciasHoras h
+                            (= @_config.DiasParaReincidencia días × 24). La evaluación usa días.
                         </p>
                     </div>
                     @if (_canEdit)

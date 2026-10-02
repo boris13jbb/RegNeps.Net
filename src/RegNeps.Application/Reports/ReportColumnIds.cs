@@ -59,4 +59,31 @@ public static class ReportColumnIds
 
     public static bool Includes(IReadOnlyList<string> columns, string id) =>
         columns.Any(c => string.Equals(c, id, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Parsea <c>columns</c> repetidos o valores separados por coma desde query string.
+    /// </summary>
+    public static IReadOnlyList<string>? ParseQuerySelection(IEnumerable<string>? queryValues)
+    {
+        if (queryValues is null)
+        {
+            return null;
+        }
+
+        var list = new List<string>();
+        foreach (var raw in queryValues)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                list.Add(part);
+            }
+        }
+
+        return list.Count == 0 ? null : list;
+    }
 }

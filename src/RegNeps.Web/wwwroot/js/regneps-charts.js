@@ -199,10 +199,93 @@ window.regnepsDownload = (function () {
     }, 120000);
   }
 
+  /**
+   * Intenta Web Share con el archivo temporal; si cancela o no está disponible, descarga.
+   * Consume la URL una sola vez (TempExportStore es de un solo uso).
+   * @returns {'shared'|'downloaded'|'cancelled'}
+   */
+  async function shareOrDownload(url, fileName) {
+    if (!url) {
+      return "failed";
+    }
+
+    const name = fileName || "regneps-export";
+
+    // APK MAUI: no consumir el temp aquí; el puente nativo lo descarga con la cookie del WebView.
+    if (window.regnepsNativeShareAvailable === true) {
+      try {
+        const match = String(url).match(/\/api\/export\/temp\/([^/?#]+)/i);
+        if (match && match[1]) {
+          const nativeUrl =
+            "regneps-share://file?id=" + encodeURIComponent(match[1]) +
+            "&name=" + encodeURIComponent(name);
+          if (nativeUrl.length > 3500) {
+            return "failed";
+          }
+          const iframe = document.createElement("iframe");
+          iframe.setAttribute("aria-hidden", "true");
+          iframe.style.cssText = "display:none;width:0;height:0;border:0;position:absolute";
+          iframe.src = nativeUrl;
+          document.body.appendChild(iframe);
+          setTimeout(function () {
+            try {
+              document.body.removeChild(iframe);
+            } catch (_) {
+              /* ignore */
+            }
+          }, 1500);
+          return "native-requested";
+        }
+      } catch (_) {
+        return "failed";
+      }
+    }
+
+    let blob;
+    try {
+      const response = await fetch(url, { credentials: "same-origin" });
+      if (!response.ok) {
+        throw new Error("No se pudo obtener el archivo temporal.");
+      }
+      blob = await response.blob();
+    } catch (_) {
+      downloadUrl(url);
+      return "downloaded";
+    }
+
+    try {
+      if (navigator.share && navigator.canShare) {
+        const file = new File([blob], name, {
+          type: blob.type || "application/octet-stream"
+        });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: name
+          });
+          return "shared";
+        }
+      }
+    } catch (err) {
+      if (err && (err.name === "AbortError" || err.name === "NotAllowedError")) {
+        return "cancelled";
+      }
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      triggerDownload(objectUrl, name);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+    return "downloaded";
+  }
+
   return {
     fileFromBase64,
     fileFromDataUrl,
     openUrl,
-    downloadUrl
+    downloadUrl,
+    shareOrDownload
   };
 })();

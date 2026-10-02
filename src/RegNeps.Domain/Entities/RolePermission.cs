@@ -1,4 +1,3 @@
-using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
 
 namespace RegNeps.Domain.Entities;
@@ -8,7 +7,8 @@ namespace RegNeps.Domain.Entities;
 /// </summary>
 public sealed class RolePermission
 {
-    public AppUserRole Role { get; set; }
+    public Guid RoleId { get; set; }
+    public AppRole? Role { get; set; }
     public AppPermission Permission { get; set; }
     public bool IsEnabled { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -1,4 +1,3 @@
-using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
 
 namespace RegNeps.Domain.Entities;
@@ -9,7 +8,7 @@ namespace RegNeps.Domain.Entities;
 public sealed class RolePermissionAudit
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public AppUserRole Role { get; set; }
+    public Guid RoleId { get; set; }
     public AppPermission Permission { get; set; }
     public bool PreviousValue { get; set; }
     public bool NewValue { get; set; }

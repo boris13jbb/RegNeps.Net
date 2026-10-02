@@ -36,18 +36,61 @@ public static class DatabaseInitializer
         if (db.Database.IsSqlite())
         {
             await ApplySqlitePatchesAsync(db);
+            await RoleSchemaPatches.ApplyAsync(db, isSqlite: true);
             return;
         }
 
         if (db.Database.IsSqlServer())
         {
             await ApplySqlServerPatchesAsync(db);
+            await RoleSchemaPatches.ApplyAsync(db, isSqlite: false);
         }
     }
 
+    internal static Task TryExecuteAsync(RegNepsDbContext db, string sql) => TryExecuteAsyncPrivate(db, sql);
+
+    /// <summary>Ejecuta SQL con parámetros EF (<c>{0}</c>, <c>{1}</c>, …). Idempotente ante «already exists».</summary>
+    internal static Task TryExecuteAsync(RegNepsDbContext db, string sql, params object[] parameters) =>
+        TryExecuteAsyncPrivate(db, sql, parameters);
+
+    internal static Task<bool> SqliteColumnExistsAsync(RegNepsDbContext db, string table, string column) =>
+        SqliteColumnExistsPrivateAsync(db, table, column);
+
+    internal static async Task<bool> SqliteTableExistsAsync(RegNepsDbContext db, string table)
+    {
+        var conn = db.Database.GetDbConnection();
+        var openedHere = conn.State != System.Data.ConnectionState.Open;
+        if (openedHere)
+        {
+            await conn.OpenAsync();
+        }
+
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1""";
+            var p = cmd.CreateParameter();
+            p.ParameterName = "$name";
+            p.Value = table;
+            cmd.Parameters.Add(p);
+            var result = await cmd.ExecuteScalarAsync();
+            return result is not null && result is not DBNull;
+        }
+        finally
+        {
+            if (openedHere)
+            {
+                await conn.CloseAsync();
+            }
+        }
+    }
+
+    internal static Task<bool> SqlServerColumnExistsAsync(RegNepsDbContext db, string table, string column) =>
+        SqlServerColumnExistsPrivateAsync(db, table, column);
+
     private static async Task ApplySqlitePatchesAsync(RegNepsDbContext db)
     {
-        if (!await SqliteColumnExistsAsync(db, "Users", "ExternalUserId"))
+        if (!await SqliteColumnExistsPrivateAsync(db, "Users", "ExternalUserId"))
         {
             await TryExecuteAsync(db, """ALTER TABLE "Users" ADD COLUMN "ExternalUserId" TEXT NULL""");
         }
@@ -109,37 +152,6 @@ public static class DatabaseInitializer
                 """);
         }
 
-        await TryExecuteAsync(db,
-            """
-            CREATE TABLE IF NOT EXISTS "RolePermissions" (
-                "Role" INTEGER NOT NULL,
-                "Permission" INTEGER NOT NULL,
-                "IsEnabled" INTEGER NOT NULL,
-                "CreatedAt" TEXT NOT NULL,
-                "UpdatedAt" TEXT NOT NULL,
-                "UpdatedByUserId" TEXT NULL,
-                CONSTRAINT "PK_RolePermissions" PRIMARY KEY ("Role", "Permission")
-            )
-            """);
-
-        await TryExecuteAsync(db,
-            """
-            CREATE TABLE IF NOT EXISTS "RolePermissionAudits" (
-                "Id" TEXT NOT NULL CONSTRAINT "PK_RolePermissionAudits" PRIMARY KEY,
-                "Role" INTEGER NOT NULL,
-                "Permission" INTEGER NOT NULL,
-                "PreviousValue" INTEGER NOT NULL,
-                "NewValue" INTEGER NOT NULL,
-                "ModifiedByUserId" TEXT NULL,
-                "ChangedAt" TEXT NOT NULL
-            )
-            """);
-
-        await TryExecuteAsync(db,
-            """
-            CREATE INDEX IF NOT EXISTS "IX_RolePermissionAudits_ChangedAt"
-            ON "RolePermissionAudits" ("ChangedAt")
-            """);
     }
 
     private static async Task ApplySqlServerPatchesAsync(RegNepsDbContext db)
@@ -207,45 +219,20 @@ public static class DatabaseInitializer
                 """);
         }
 
-        await TryExecuteAsync(db,
-            """
-            IF OBJECT_ID(N'[RolePermissions]', N'U') IS NULL
-            BEGIN
-                CREATE TABLE [RolePermissions] (
-                    [Role] int NOT NULL,
-                    [Permission] int NOT NULL,
-                    [IsEnabled] bit NOT NULL,
-                    [CreatedAt] datetime2 NOT NULL,
-                    [UpdatedAt] datetime2 NOT NULL,
-                    [UpdatedByUserId] uniqueidentifier NULL,
-                    CONSTRAINT [PK_RolePermissions] PRIMARY KEY ([Role], [Permission])
-                );
-            END
-            """);
-
-        await TryExecuteAsync(db,
-            """
-            IF OBJECT_ID(N'[RolePermissionAudits]', N'U') IS NULL
-            BEGIN
-                CREATE TABLE [RolePermissionAudits] (
-                    [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_RolePermissionAudits] PRIMARY KEY,
-                    [Role] int NOT NULL,
-                    [Permission] int NOT NULL,
-                    [PreviousValue] bit NOT NULL,
-                    [NewValue] bit NOT NULL,
-                    [ModifiedByUserId] uniqueidentifier NULL,
-                    [ChangedAt] datetime2 NOT NULL
-                );
-                CREATE INDEX [IX_RolePermissionAudits_ChangedAt] ON [RolePermissionAudits] ([ChangedAt]);
-            END
-            """);
     }
 
-    private static async Task TryExecuteAsync(RegNepsDbContext db, string sql)
+    private static async Task TryExecuteAsyncPrivate(RegNepsDbContext db, string sql, object[]? parameters = null)
     {
         try
         {
-            await db.Database.ExecuteSqlRawAsync(sql);
+            if (parameters is { Length: > 0 })
+            {
+                await db.Database.ExecuteSqlRawAsync(sql, parameters);
+            }
+            else
+            {
+                await db.Database.ExecuteSqlRawAsync(sql);
+            }
         }
         catch (Exception ex) when (IsAlreadyExistsError(ex))
         {
@@ -281,7 +268,7 @@ public static class DatabaseInitializer
         return false;
     }
 
-    private static async Task<bool> SqliteColumnExistsAsync(RegNepsDbContext db, string table, string column)
+    private static async Task<bool> SqliteColumnExistsPrivateAsync(RegNepsDbContext db, string table, string column)
     {
         var conn = db.Database.GetDbConnection();
         var openedHere = conn.State != System.Data.ConnectionState.Open;
@@ -344,7 +331,7 @@ public static class DatabaseInitializer
         }
     }
 
-    private static async Task<bool> SqlServerColumnExistsAsync(RegNepsDbContext db, string table, string column)
+    private static async Task<bool> SqlServerColumnExistsPrivateAsync(RegNepsDbContext db, string table, string column)
     {
         var conn = db.Database.GetDbConnection();
         var openedHere = conn.State != System.Data.ConnectionState.Open;

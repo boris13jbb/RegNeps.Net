@@ -4,6 +4,7 @@
 @inject NepRecordService RecordService
 @inject CurrentUserService CurrentUser
 @inject NavigationManager Nav
+@using RegNeps.Application.Reports
 
 <PageTitle>Informes — RegNeps</PageTitle>
 <PermissionRefresh OnChanged="RefreshAccessAsync" />
@@ -74,6 +75,21 @@ else
                     <label class="form-label" for="inf-tela">Tela</label>
                     <input id="inf-tela" class="form-control" @bind="_tela" />
                 </div>
+                <div class="col-12">
+                    <span class="form-label d-block">Estilo de exportación</span>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Estilo de exportación">
+                        <button type="button"
+                                class="btn @(_exportStyle == "completo" ? "btn-primary" : "btn-outline-primary")"
+                                @onclick='() => _exportStyle = "completo"'>
+                            Completo
+                        </button>
+                        <button type="button"
+                                class="btn @(_exportStyle == "clasico" ? "btn-primary" : "btn-outline-primary")"
+                                @onclick='() => _exportStyle = "clasico"'>
+                            Clásico
+                        </button>
+                    </div>
+                </div>
                 <div class="col-12 d-flex flex-wrap gap-2">
                     <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@_saving" aria-busy="@_saving">
                         @(_saving ? "Guardando…" : _loadedId is not null ? "Guardar cambios" : "Guardar informe")
@@ -136,6 +152,7 @@ else
                             </button>
                             <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "xlsx")" title="Excel">Excel</a>
                             <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "pdf")" title="PDF">PDF</a>
+                            <a class="btn btn-outline-secondary btn-sm" href="@ExportUrl(r.Id, "csv")" title="CSV">CSV</a>
                             <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => DeleteAsync(r.Id)">
                                 Borrar
                             </button>
@@ -161,11 +178,13 @@ else
     private string? _message;
     private Guid? _loadedId;
     private int _totalRecordsInDb;
+    private string _exportStyle = "completo";
 
     private static readonly IReadOnlyList<(string Href, string Label)> InformesTabs =
     [
         ("/informes", "Guardados"),
-        ("/exportar", "Exportar")
+        ("/exportar", "Exportar"),
+        ("/constructor-informes", "Constructor")
     ];
 
     private bool _reportsReady;
@@ -198,10 +217,22 @@ else
         }
     }
 
-    private async Task LoadAsync() => _list = await Reports.ListSavedAsync();
+    private async Task LoadAsync()
+    {
+        if (_session is null)
+        {
+            _list = [];
+            return;
+        }
 
-    private static string ExportUrl(Guid id, string format) =>
-        $"/api/export/saved/{id}/{format}";
+        _list = await Reports.ListSavedAsync(_session.ToReportAccessActor());
+    }
+
+    private string ExportUrl(Guid id, string format)
+    {
+        var style = Uri.EscapeDataString(_exportStyle);
+        return $"/api/export/saved/{id}/{format}?style={style}";
+    }
 
     private RecordFilters BuildFiltersFromForm()
     {
@@ -248,6 +279,12 @@ else
         // auto=1 → Registros/Reportes cargan al abrir
         q.Add("auto=1");
         return path + "?" + string.Join('&', q);
+    }
+
+    private string AppendExportStyle(string url)
+    {
+        var style = Uri.EscapeDataString(_exportStyle);
+        return url.Contains('?') ? $"{url}&style={style}" : $"{url}?style={style}";
     }
 
     private static string BuildQueryUrl(string path, RecordFilters filters, int savedCount, Guid? reportId = null)
@@ -312,7 +349,9 @@ else
             return;
         }
 
-        Nav.NavigateTo(BuildQueryUrl("/exportar", filters, report.RecordCount, report.Id), forceLoad: true);
+        Nav.NavigateTo(
+            AppendExportStyle(BuildQueryUrl("/exportar", filters, report.RecordCount, report.Id)),
+            forceLoad: true);
     }
 
     private void OpenRegistrosFromForm()
@@ -336,7 +375,7 @@ else
             return;
         }
 
-        Nav.NavigateTo(BuildQueryUrl("/exportar", filters), forceLoad: true);
+        Nav.NavigateTo(AppendExportStyle(BuildQueryUrl("/exportar", filters)), forceLoad: true);
     }
 
     private void ClearEdit()
@@ -381,14 +420,16 @@ else
             if (_loadedId is Guid id)
             {
                 var updated = await Reports.UpdateReportAsync(
-                    id, _name, filters, _session.UserId, _session.SeesAllRecords);
+                    id, _name, filters, _session.UserId, _session.SeesAllRecords,
+                    hasManageReports: true);
                 _message = $"Cambios guardados en «{updated.Name}» ({range.LabelLocal}).";
                 await LoadAsync();
             }
             else
             {
                 await Reports.SaveReportAsync(
-                    _name, filters, _session.UserId, _session.DisplayName, _session.SeesAllRecords);
+                    _name, filters, _session.UserId, _session.DisplayName, _session.SeesAllRecords,
+                    hasManageReports: true);
                 _message = $"Informe guardado ({range.LabelLocal}).";
                 ClearEdit();
                 await LoadAsync();
@@ -414,7 +455,13 @@ else
 
         try
         {
-            await Reports.DeleteSavedAsync(id);
+            if (_session is null)
+            {
+                _error = "Sesión no válida.";
+                return;
+            }
+
+            await Reports.DeleteSavedAsync(id, _session.ToReportAccessActor());
             if (_loadedId == id)
             {
                 ClearEdit();

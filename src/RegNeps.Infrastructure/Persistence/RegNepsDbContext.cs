@@ -16,6 +16,7 @@ public sealed class RegNepsDbContext : DbContext
     public DbSet<AlertConfig> AlertConfigs => Set<AlertConfig>();
     public DbSet<SavedReport> SavedReports => Set<SavedReport>();
     public DbSet<LoteTramaItem> LoteTramaItems => Set<LoteTramaItem>();
+    public DbSet<AppRole> Roles => Set<AppRole>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<RolePermissionAudit> RolePermissionAudits => Set<RolePermissionAudit>();
 
@@ -77,7 +78,17 @@ public sealed class RegNepsDbContext : DbContext
             e.Property(x => x.PasswordHash).HasMaxLength(512);
             e.Property(x => x.ExternalUserId).HasMaxLength(128);
             e.HasIndex(x => x.ExternalUserId);
+            e.Property(x => x.RoleCode).HasMaxLength(64);
+            e.HasIndex(x => x.RoleCode);
             e.Property(x => x.DeletedAt);
+        });
+
+        modelBuilder.Entity<AppRole>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Code).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            e.HasIndex(x => x.Code).IsUnique();
         });
 
         modelBuilder.Entity<Fabric>(e =>
@@ -124,17 +135,20 @@ public sealed class RegNepsDbContext : DbContext
 
         modelBuilder.Entity<RolePermission>(e =>
         {
-            e.HasKey(x => new { x.Role, x.Permission });
-            e.Property(x => x.Role).HasConversion<int>();
+            e.HasKey(x => new { x.RoleId, x.Permission });
             e.Property(x => x.Permission).HasConversion<int>();
+            e.HasOne(x => x.Role)
+                .WithMany(x => x.Permissions)
+                .HasForeignKey(x => x.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<RolePermissionAudit>(e =>
         {
             e.HasKey(x => x.Id);
-            e.Property(x => x.Role).HasConversion<int>();
             e.Property(x => x.Permission).HasConversion<int>();
             e.HasIndex(x => x.ChangedAt);
+            e.HasIndex(x => x.RoleId);
         });
     }
 }

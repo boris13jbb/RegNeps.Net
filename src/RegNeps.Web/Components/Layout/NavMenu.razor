@@ -141,6 +141,7 @@
                 "telas" => "Telas",
                 "lotes" => "Lotes",
                 "informes" => "Informes",
+                "constructor-informes" => "Constructor informes",
                 "reportes" or "exportar" => "Informes",
                 "usuarios" => "Usuarios",
                 "roles" => "Roles y permisos",
@@ -188,7 +189,7 @@
         var path = Nav.ToBaseRelativePath(Nav.Uri).Trim('/').Split('?', '#')[0].ToLowerInvariant();
         if (href is "informes")
         {
-            return path is "informes" or "exportar" or "reportes";
+            return path is "informes" or "exportar" or "reportes" or "constructor-informes";
         }
 
         if (href is "telas")
@@ -226,7 +227,10 @@
         if (_session?.Has(AppPermission.ViewDashboard) == true)
             analisis.Add(new("graficas", "Análisis", "chart"));
         if (_session?.Has(AppPermission.ManageReports) == true || _session?.Has(AppPermission.ExportReports) == true)
+        {
             analisis.Add(new("informes", "Informes", "bookmark"));
+            analisis.Add(new("constructor-informes", "Constructor informes", "report"));
+        }
         if (analisis.Count > 0)
             links.Add(new NavLinkDef("analisis", "Consultas", analisis));
 

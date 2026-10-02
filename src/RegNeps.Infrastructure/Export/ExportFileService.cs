@@ -6,6 +6,7 @@ using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Analytics;
+using RegNeps.Application.Export;
 using RegNeps.Application.Reports;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
@@ -44,7 +45,7 @@ public sealed class ExportFileService : IExportFileService
         {
             var r = sorted[i];
             var level = AlertEvaluator.GetLevel(r.Neps, config);
-            sb.AppendLine(string.Join(',', cols.Select(id => Escape(GetColumnValue(id, i + 1, r, level)))));
+            sb.AppendLine(string.Join(',', cols.Select(id => EscapeCsvColumn(id, GetColumnValue(id, i + 1, r, level)))));
         }
 
         var summary = Summarize(sorted);
@@ -295,10 +296,10 @@ public sealed class ExportFileService : IExportFileService
         sb.AppendLine("Nombre,Codigo,Activo,Creado");
         foreach (var f in fabrics)
         {
-            sb.Append(Escape(f.Name)).Append(',');
-            sb.Append(Escape(f.Code ?? string.Empty)).Append(',');
+            sb.Append(EscapeText(f.Name)).Append(',');
+            sb.Append(EscapeText(f.Code)).Append(',');
             sb.Append(f.IsActive ? "Si" : "No").Append(',');
-            sb.Append(Escape(FormatDate(f.CreatedAt)));
+            sb.Append(EscapeText(FormatDate(f.CreatedAt)));
             sb.AppendLine();
         }
 
@@ -318,9 +319,9 @@ public sealed class ExportFileService : IExportFileService
         var row = 2;
         foreach (var f in fabrics)
         {
-            sheet.Cell(row, 1).Value = f.Name;
-            sheet.Cell(row, 2).Value = f.Code ?? string.Empty;
-            sheet.Cell(row, 3).Value = f.IsActive ? "Si" : "No";
+            SetExcelText(sheet.Cell(row, 1), f.Name);
+            SetExcelText(sheet.Cell(row, 2), f.Code);
+            SetExcelText(sheet.Cell(row, 3), f.IsActive ? "Si" : "No");
             sheet.Cell(row, 4).Value = f.CreatedAt.ToLocalTime();
             row++;
         }
@@ -337,9 +338,9 @@ public sealed class ExportFileService : IExportFileService
         sb.AppendLine("Codigo,Activo,Creado");
         foreach (var lote in lotes)
         {
-            sb.Append(Escape(lote.Code)).Append(',');
+            sb.Append(EscapeText(lote.Code)).Append(',');
             sb.Append(lote.IsActive ? "Si" : "No").Append(',');
-            sb.Append(Escape(FormatDate(lote.CreatedAt)));
+            sb.Append(EscapeText(FormatDate(lote.CreatedAt)));
             sb.AppendLine();
         }
 
@@ -358,8 +359,8 @@ public sealed class ExportFileService : IExportFileService
         var row = 2;
         foreach (var lote in lotes)
         {
-            sheet.Cell(row, 1).Value = lote.Code;
-            sheet.Cell(row, 2).Value = lote.IsActive ? "Si" : "No";
+            SetExcelText(sheet.Cell(row, 1), lote.Code);
+            SetExcelText(sheet.Cell(row, 2), lote.IsActive ? "Si" : "No");
             sheet.Cell(row, 3).Value = lote.CreatedAt.ToLocalTime();
             row++;
         }
@@ -375,7 +376,7 @@ public sealed class ExportFileService : IExportFileService
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(periodDescription))
         {
-            sb.AppendLine($"Periodo,{Escape(periodDescription)}");
+            sb.AppendLine($"Periodo,{EscapeText(periodDescription)}");
         }
 
         sb.AppendLine("Metrica,Valor");
@@ -390,7 +391,7 @@ public sealed class ExportFileService : IExportFileService
         sb.AppendLine("Telar,Promedio,Registros,Criticos,Advertencias,Mts");
         foreach (var g in summary.ByTelar)
         {
-            sb.Append(Escape(g.Key)).Append(',');
+            sb.Append(EscapeText(g.Key)).Append(',');
             sb.Append(FormatDecimal(g.AverageNeps)).Append(',');
             sb.Append(g.RecordCount).Append(',');
             sb.Append(g.CriticalCount).Append(',');
@@ -403,7 +404,7 @@ public sealed class ExportFileService : IExportFileService
         sb.AppendLine("Tela,Promedio,Registros,Criticos,Advertencias,Mts");
         foreach (var g in summary.ByTela)
         {
-            sb.Append(Escape(g.Key)).Append(',');
+            sb.Append(EscapeText(g.Key)).Append(',');
             sb.Append(FormatDecimal(g.AverageNeps)).Append(',');
             sb.Append(g.RecordCount).Append(',');
             sb.Append(g.CriticalCount).Append(',');
@@ -416,7 +417,7 @@ public sealed class ExportFileService : IExportFileService
         sb.AppendLine("Periodo,Promedio,Cantidad");
         foreach (var d in summary.ByDay)
         {
-            sb.Append(Escape(d.Label ?? d.Date.ToString("dd/MM/yyyy", Inv))).Append(',');
+            sb.Append(EscapeText(d.Label ?? d.Date.ToString("dd/MM/yyyy", Inv))).Append(',');
             sb.Append(FormatDecimal(d.AverageNeps)).Append(',');
             sb.Append(d.Count);
             sb.AppendLine();
@@ -436,7 +437,7 @@ public sealed class ExportFileService : IExportFileService
         if (!string.IsNullOrWhiteSpace(periodDescription))
         {
             kpis.Cell(2, 1).Value = "Periodo";
-            kpis.Cell(2, 2).Value = periodDescription;
+            SetExcelText(kpis.Cell(2, 2), periodDescription);
         }
 
         var start = string.IsNullOrWhiteSpace(periodDescription) ? 2 : 3;
@@ -579,6 +580,302 @@ public sealed class ExportFileService : IExportFileService
         return document.GeneratePdf();
     }
 
+    public byte[] BuildReportBuilderExcel(
+        ReportBuilderResult result,
+        string? periodDescription = null,
+        string? filtersDescription = null)
+    {
+        using var workbook = new XLWorkbook();
+
+        var kpis = workbook.Worksheets.Add("Resumen");
+        kpis.Cell(1, 1).Value = "Constructor de informes — RegNeps VICUNHA";
+        kpis.Cell(1, 1).Style.Font.SetBold();
+        var row = 2;
+        if (!string.IsNullOrWhiteSpace(periodDescription))
+        {
+            kpis.Cell(row, 1).Value = "Periodo";
+            SetExcelText(kpis.Cell(row, 2), periodDescription);
+            row++;
+        }
+
+        if (!string.IsNullOrWhiteSpace(filtersDescription))
+        {
+            kpis.Cell(row, 1).Value = "Filtros";
+            SetExcelText(kpis.Cell(row, 2), filtersDescription);
+            row++;
+        }
+
+        kpis.Cell(row, 1).Value = "Agrupación";
+        SetExcelText(kpis.Cell(row, 2), BuildGroupingLabel(result));
+        row++;
+        kpis.Cell(row, 1).Value = "Registros";
+        kpis.Cell(row, 2).Value = result.TotalRecords;
+        row++;
+        kpis.Cell(row, 1).Value = "Suma neps";
+        kpis.Cell(row, 2).Value = result.SumNeps;
+        row++;
+        kpis.Cell(row, 1).Value = "Promedio neps";
+        kpis.Cell(row, 2).Value = result.AverageNeps;
+        row++;
+        kpis.Cell(row, 1).Value = "Total mts";
+        kpis.Cell(row, 2).Value = result.TotalMts;
+        row++;
+        kpis.Cell(row, 1).Value = "Índice calidad %";
+        kpis.Cell(row, 2).Value = result.QualityIndex;
+        row++;
+        kpis.Cell(row, 1).Value = "Normal / Adv / Crít %";
+        kpis.Cell(row, 2).Value =
+            $"{FormatDecimal(result.NormalPercent)} / {FormatDecimal(result.WarningPercent)} / {FormatDecimal(result.CriticalPercent)}";
+        kpis.Columns().AdjustToContents();
+
+        var groups = workbook.Worksheets.Add("Grupos");
+        WriteReportBuilderGroupHeader(groups);
+        var gr = 2;
+        foreach (var g in result.Groups)
+        {
+            WriteReportBuilderGroupRow(groups, gr++, g);
+        }
+
+        groups.Columns().AdjustToContents();
+
+        WriteTelarRankSheet(workbook, "Mejores telares", result.BestTelars);
+        WriteTelarRankSheet(workbook, "Peores telares", result.WorstTelars);
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return stream.ToArray();
+    }
+
+    public byte[] BuildReportBuilderPdf(
+        ReportBuilderResult result,
+        string? periodDescription = null,
+        string? filtersDescription = null,
+        IReadOnlyList<AnalyticsChartImage>? chartImages = null)
+    {
+        var navy = "#1F2A44";
+        var execBox = "#F5F0E6";
+        var tableHeader = Color.FromHex("#E8EEF5");
+        var zebra = Color.FromHex("#FAFAFA");
+
+        var document = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(28);
+                page.DefaultTextStyle(x => x.FontSize(9));
+
+                page.Content().Column(col =>
+                {
+                    col.Spacing(8);
+                    col.Item().Background(navy).Padding(12).Column(h =>
+                    {
+                        h.Item().Text("Informe profesional — Constructor RegNeps VICUNHA")
+                            .FontColor(Colors.White).SemiBold().FontSize(14);
+                        h.Item().PaddingTop(2).Text(BuildGroupingLabel(result)).FontColor(Colors.Grey.Lighten2).FontSize(10);
+                        if (!string.IsNullOrWhiteSpace(periodDescription))
+                        {
+                            h.Item().Text(periodDescription).FontColor(Colors.Grey.Lighten2).FontSize(9);
+                        }
+
+                        h.Item().Text($"Generado: {FormatDate(DateTime.UtcNow)}").FontColor(Colors.Grey.Lighten3).FontSize(8);
+                    });
+
+                    if (!string.IsNullOrWhiteSpace(filtersDescription))
+                    {
+                        col.Item().Text($"Filtros: {filtersDescription}").FontSize(9);
+                    }
+
+                    col.Item().Background(execBox).Padding(10).Column(box =>
+                    {
+                        box.Item().Text("Resumen ejecutivo").SemiBold().FontSize(11);
+                        box.Item().Text(
+                            $"Registros: {result.TotalRecords} | Suma neps: {FormatDecimal(result.SumNeps)} | " +
+                            $"Promedio: {FormatDecimal(result.AverageNeps)} | Mts: {FormatMts(result.TotalMts)}");
+                        box.Item().Text(
+                            $"Min/Max neps: {FormatDecimal(result.MinNeps)} – {FormatDecimal(result.MaxNeps)} | " +
+                            $"Calidad: {FormatDecimal(result.QualityIndex)}%");
+                        box.Item().Text(
+                            $"Normal {FormatDecimal(result.NormalPercent)}% · Advertencia {FormatDecimal(result.WarningPercent)}% · " +
+                            $"Crítico {FormatDecimal(result.CriticalPercent)}%");
+                    });
+
+                    if (chartImages is { Count: > 0 })
+                    {
+                        col.Item().PaddingTop(4).Text("Visualizaciones").SemiBold().FontSize(11);
+                        foreach (var img in chartImages)
+                        {
+                            if (img.PngBytes.Length == 0)
+                            {
+                                continue;
+                            }
+
+                            col.Item().PaddingTop(6).Text(img.Title).SemiBold().FontSize(9);
+                            col.Item().MaxHeight(220).Image(img.PngBytes).FitArea();
+                        }
+                    }
+
+                    col.Item().PaddingTop(6).Text("Detalle por grupos").SemiBold().FontSize(11);
+                    col.Item().Table(t =>
+                    {
+                        t.ColumnsDefinition(c =>
+                        {
+                            c.RelativeColumn(3);
+                            c.RelativeColumn(1);
+                            c.RelativeColumn(1);
+                            c.RelativeColumn(1);
+                            c.RelativeColumn(1);
+                            c.RelativeColumn(1);
+                        });
+                        t.Header(h =>
+                        {
+                            h.Cell().Element(c => ReportHeaderCell(c, tableHeader)).Text("Grupo");
+                            h.Cell().Element(c => ReportHeaderCell(c, tableHeader)).Text("Regs");
+                            h.Cell().Element(c => ReportHeaderCell(c, tableHeader)).Text("Prom.");
+                            h.Cell().Element(c => ReportHeaderCell(c, tableHeader)).Text("Mts");
+                            h.Cell().Element(c => ReportHeaderCell(c, tableHeader)).Text("Calidad %");
+                            h.Cell().Element(c => ReportHeaderCell(c, tableHeader)).Text("Crít.");
+                        });
+
+                        var i = 0;
+                        foreach (var g in result.Groups.Take(40))
+                        {
+                            var alt = i++ % 2 == 1 ? zebra : Color.FromHex("#FFFFFF");
+                            t.Cell().Element(c => ReportBodyCell(c, alt)).Text(TruncatePdf(g.DisplayLabel, 48));
+                            t.Cell().Element(c => ReportBodyCell(c, alt)).Text(g.Count.ToString(Inv));
+                            t.Cell().Element(c => ReportBodyCell(c, alt)).Text(FormatDecimal(g.AverageNeps));
+                            t.Cell().Element(c => ReportBodyCell(c, alt)).Text(FormatMts(g.TotalMts));
+                            t.Cell().Element(c => ReportBodyCell(c, alt)).Text(FormatDecimal(g.QualityIndex));
+                            t.Cell().Element(c => ReportBodyCell(c, alt)).Text(g.CriticalCount.ToString(Inv));
+                        }
+                    });
+
+                    if (result.BestTelars.Count > 0)
+                    {
+                        col.Item().PaddingTop(8).Text("Mejores telares (menor neps/m²)").SemiBold();
+                        col.Item().Element(c => WritePdfTelarRankTable(c, result.BestTelars, tableHeader, zebra));
+                    }
+
+                    if (result.WorstTelars.Count > 0)
+                    {
+                        col.Item().PaddingTop(6).Text("Peores telares (mayor neps/m²)").SemiBold();
+                        col.Item().Element(c => WritePdfTelarRankTable(c, result.WorstTelars, tableHeader, zebra));
+                    }
+                });
+            });
+        });
+
+        return document.GeneratePdf();
+    }
+
+    private static string BuildGroupingLabel(ReportBuilderResult result)
+    {
+        var primary = ReportBuilderService.DimensionDisplayName(result.PrimaryDimension);
+        if (result.SecondaryDimension is not { } sec)
+        {
+            return primary;
+        }
+
+        return $"{primary} + {ReportBuilderService.DimensionDisplayName(sec)}";
+    }
+
+    private static void WriteReportBuilderGroupHeader(IXLWorksheet sheet)
+    {
+        var headers = new[]
+        {
+            "Grupo", "Registros", "Suma neps", "Promedio", "Mts", "Min", "Max",
+            "Normal", "Advertencia", "Crítico", "Normal %", "Adv %", "Crít %", "Calidad %", "Neps/m²"
+        };
+        for (var c = 0; c < headers.Length; c++)
+        {
+            sheet.Cell(1, c + 1).Value = headers[c];
+        }
+
+        sheet.Row(1).Style.Font.SetBold();
+    }
+
+    private static void WriteReportBuilderGroupRow(IXLWorksheet sheet, int row, ReportBuilderGroupRow g)
+    {
+        SetExcelText(sheet.Cell(row, 1), g.DisplayLabel);
+        sheet.Cell(row, 2).Value = g.Count;
+        sheet.Cell(row, 3).Value = g.SumNeps;
+        sheet.Cell(row, 4).Value = g.AverageNeps;
+        sheet.Cell(row, 5).Value = g.TotalMts;
+        sheet.Cell(row, 6).Value = g.MinNeps;
+        sheet.Cell(row, 7).Value = g.MaxNeps;
+        sheet.Cell(row, 8).Value = g.NormalCount;
+        sheet.Cell(row, 9).Value = g.WarningCount;
+        sheet.Cell(row, 10).Value = g.CriticalCount;
+        sheet.Cell(row, 11).Value = g.NormalPercent;
+        sheet.Cell(row, 12).Value = g.WarningPercent;
+        sheet.Cell(row, 13).Value = g.CriticalPercent;
+        sheet.Cell(row, 14).Value = g.QualityIndex;
+        sheet.Cell(row, 15).Value = g.NepsPerM2;
+    }
+
+    private static void WriteTelarRankSheet(
+        XLWorkbook workbook,
+        string name,
+        IReadOnlyList<ReportBuilderTelarRank> ranks)
+    {
+        var sheet = workbook.Worksheets.Add(name);
+        sheet.Cell(1, 1).Value = "Telar";
+        sheet.Cell(1, 2).Value = "Promedio neps";
+        sheet.Cell(1, 3).Value = "Neps/m²";
+        sheet.Cell(1, 4).Value = "Registros";
+        sheet.Cell(1, 5).Value = "Mts";
+        sheet.Row(1).Style.Font.SetBold();
+        var row = 2;
+        foreach (var t in ranks)
+        {
+            SetExcelText(sheet.Cell(row, 1), t.Telar);
+            sheet.Cell(row, 2).Value = t.AverageNeps;
+            sheet.Cell(row, 3).Value = t.NepsPerM2;
+            sheet.Cell(row, 4).Value = t.RecordCount;
+            sheet.Cell(row, 5).Value = t.TotalMts;
+            row++;
+        }
+
+        sheet.Columns().AdjustToContents();
+    }
+
+    private static void WritePdfTelarRankTable(
+        IContainer container,
+        IReadOnlyList<ReportBuilderTelarRank> ranks,
+        Color headerBg,
+        Color zebra)
+    {
+        container.Table(t =>
+        {
+            t.ColumnsDefinition(c =>
+            {
+                c.RelativeColumn(2);
+                c.RelativeColumn(1);
+                c.RelativeColumn(1);
+                c.RelativeColumn(1);
+            });
+            t.Header(h =>
+            {
+                h.Cell().Element(c => ReportHeaderCell(c, headerBg)).Text("Telar");
+                h.Cell().Element(c => ReportHeaderCell(c, headerBg)).Text("Neps/m²");
+                h.Cell().Element(c => ReportHeaderCell(c, headerBg)).Text("Prom.");
+                h.Cell().Element(c => ReportHeaderCell(c, headerBg)).Text("Regs");
+            });
+            var i = 0;
+            foreach (var r in ranks.Take(10))
+            {
+                var alt = i++ % 2 == 1 ? zebra : Color.FromHex("#FFFFFF");
+                t.Cell().Element(c => ReportBodyCell(c, alt)).Text(r.Telar);
+                t.Cell().Element(c => ReportBodyCell(c, alt)).Text(FormatMts(r.NepsPerM2));
+                t.Cell().Element(c => ReportBodyCell(c, alt)).Text(FormatDecimal(r.AverageNeps));
+                t.Cell().Element(c => ReportBodyCell(c, alt)).Text(r.RecordCount.ToString(Inv));
+            }
+        });
+    }
+
+    private static string TruncatePdf(string value, int max) =>
+        string.IsNullOrEmpty(value) || value.Length <= max ? value : value[..(max - 1)] + "…";
+
     private static void WriteAnalyticsGroupSheet(
         XLWorkbook workbook,
         string name,
@@ -595,7 +892,7 @@ public sealed class ExportFileService : IExportFileService
         var row = 2;
         foreach (var g in groups)
         {
-            sheet.Cell(row, 1).Value = g.Key;
+            SetExcelText(sheet.Cell(row, 1), g.Key);
             sheet.Cell(row, 2).Value = g.AverageNeps;
             sheet.Cell(row, 3).Value = g.RecordCount;
             sheet.Cell(row, 4).Value = g.CriticalCount;
@@ -648,7 +945,7 @@ public sealed class ExportFileService : IExportFileService
         {
             var r = sorted[i];
             var level = AlertEvaluator.GetLevel(r.Neps, config);
-            sb.AppendLine(string.Join(',', cols.Select(id => Escape(GetColumnValue(id, i + 1, r, level)))));
+            sb.AppendLine(string.Join(',', cols.Select(id => EscapeCsvColumn(id, GetColumnValue(id, i + 1, r, level)))));
         }
 
         sb.AppendLine($"TOTAL REGISTROS,{sorted.Count}");
@@ -956,7 +1253,7 @@ public sealed class ExportFileService : IExportFileService
             {
                 var r = records[i];
                 var level = AlertEvaluator.GetLevel(r.Neps, config);
-                var rowBg = i % 2 == 1 ? zebra : Colors.White;
+                var rowBg = i % 2 == 1 ? zebra : Color.FromHex("#FFFFFF");
                 IContainer Cell(IContainer c) => ReportBodyCell(c, rowBg);
 
                 foreach (var id in cols)
@@ -989,16 +1286,16 @@ public sealed class ExportFileService : IExportFileService
                 cell.Value = rowNumber;
                 break;
             case ReportColumnIds.Fecha:
-                cell.Value = FormatDate(record.CreatedAt);
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(FormatDate(record.CreatedAt));
                 break;
             case ReportColumnIds.Lote:
-                cell.Value = record.LoteTrama;
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(record.LoteTrama);
                 break;
             case ReportColumnIds.Tela:
-                cell.Value = record.Tela;
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(record.Tela);
                 break;
             case ReportColumnIds.Telar:
-                cell.Value = record.Telar;
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(record.Telar);
                 break;
             case ReportColumnIds.Neps:
                 cell.Value = record.Neps;
@@ -1007,13 +1304,14 @@ public sealed class ExportFileService : IExportFileService
                 cell.Value = Math.Round(record.MtsCalculados, MidpointRounding.AwayFromZero);
                 break;
             case ReportColumnIds.Estado:
-                cell.Value = level.ToDisplayLabel();
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(level.ToDisplayLabel());
                 break;
             case ReportColumnIds.Observacion:
-                cell.Value = record.Observacion;
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(record.Observacion);
                 break;
             case ReportColumnIds.Recomendacion:
-                cell.Value = string.Join(' ', AlertEvaluator.GetRecommendations(level));
+                cell.Value = SpreadsheetFormulaGuard.NeutralizeText(
+                    string.Join(' ', AlertEvaluator.GetRecommendations(level)));
                 break;
             default:
                 cell.Value = string.Empty;
@@ -1053,7 +1351,7 @@ public sealed class ExportFileService : IExportFileService
             {
                 var r = alerts[i];
                 var level = AlertEvaluator.GetLevel(r.Neps, config);
-                var rowBg = i % 2 == 1 ? zebra : Colors.White;
+                var rowBg = i % 2 == 1 ? zebra : Color.FromHex("#FFFFFF");
                 IContainer Cell(IContainer c) => ReportBodyCell(c, rowBg);
 
                 table.Cell().Element(Cell).Text(FormatDate(r.CreatedAt));
@@ -1092,7 +1390,7 @@ public sealed class ExportFileService : IExportFileService
 
             for (var i = 0; i < rows.Count; i++)
             {
-                var rowBg = i % 2 == 1 ? zebra : Colors.White;
+                var rowBg = i % 2 == 1 ? zebra : Color.FromHex("#FFFFFF");
                 IContainer Cell(IContainer c) => ReportBodyCell(c, rowBg);
                 foreach (var cell in rows[i])
                     table.Cell().Element(Cell).Text(cell);
@@ -1188,6 +1486,21 @@ public sealed class ExportFileService : IExportFileService
     /// <summary>Paridad Flutter formatNumber con decimals=0 (Mts / promedios redondeados).</summary>
     private static string FormatMts(double value) =>
         Math.Round(value, MidpointRounding.AwayFromZero).ToString(Inv);
+
+    private static bool IsNumericExportColumn(string columnId) =>
+        columnId is ReportColumnIds.Nro or ReportColumnIds.Neps or ReportColumnIds.Mts;
+
+    private static string EscapeCsvColumn(string columnId, string? value) =>
+        IsNumericExportColumn(columnId)
+            ? Escape(value)
+            : EscapeText(value);
+
+    /// <summary>CSV de texto: neutraliza fórmulas y escapa comillas/comas.</summary>
+    private static string EscapeText(string? value) =>
+        Escape(SpreadsheetFormulaGuard.NeutralizeText(value));
+
+    private static void SetExcelText(IXLCell cell, string? value) =>
+        cell.Value = SpreadsheetFormulaGuard.NeutralizeText(value);
 
     private static string Escape(string? value)
     {

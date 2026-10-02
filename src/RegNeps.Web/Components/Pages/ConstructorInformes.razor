@@ -1,0 +1,691 @@
+@page "/constructor-informes"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject ReportBuilderService ReportBuilder
+@inject CurrentUserService CurrentUser
+@inject IExportFileService ExportFiles
+@inject TempExportStore TempExports
+@inject IJSRuntime Js
+@using RegNeps.Application.Reports
+@using RegNeps.Domain.Enums
+@using RegNeps.Domain.Filters
+
+<PageTitle>Constructor de informes — RegNeps</PageTitle>
+<PermissionRefresh OnChanged="RefreshAccessAsync" />
+
+@if (!_allowed)
+{
+    <div class="alert alert-warning" role="alert">No tiene permiso para exportar informes (ExportReports).</div>
+}
+else
+{
+    <PageHeader Title="Constructor de informes"
+                Subtitle="Agrupe por telar, tela, lote, turno, operario o periodo y exporte PDF o Excel profesional.">
+        <Actions>
+            @if (_result is not null && _result.TotalRecords > 0)
+            {
+                <button class="btn btn-outline-success btn-sm" @onclick='() => ExportAsync("xlsx")' disabled="@_exporting">Excel</button>
+                <button class="btn btn-outline-danger btn-sm" @onclick="ExportPdfAsync" disabled="@_exporting">
+                    @(_exporting ? "…" : "PDF")
+                </button>
+            }
+            <a class="btn btn-outline-secondary btn-sm" href="/exportar">Exportar registros</a>
+        </Actions>
+    </PageHeader>
+
+    <HubTabs AriaLabel="Informes" Tabs="@(_canManageSaved ? InformesTabsFull : InformesTabsExport)" />
+
+    <div class="rn-filters mb-3" style="max-width: 1100px;">
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="rb-periodo">Periodo</label>
+                <select id="rb-periodo" class="form-select form-select-sm" @bind="_periodDays">
+                    <option value="7">Últimos 7 días</option>
+                    <option value="30">Últimos 30 días</option>
+                    <option value="90">Últimos 90 días</option>
+                    <option value="0">Rango personalizado</option>
+                    <option value="-1">Todo el histórico</option>
+                </select>
+            </div>
+            @if (_periodDays == 0)
+            {
+                <div class="col-6 col-md-2">
+                    <label class="rn-field-label" for="rb-desde">Desde</label>
+                    <InputDate id="rb-desde" class="form-control form-control-sm" @bind-Value="_fromLocal" />
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="rn-field-label" for="rb-hasta">Hasta</label>
+                    <InputDate id="rb-hasta" class="form-control form-control-sm" @bind-Value="_toLocal" />
+                </div>
+            }
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="rb-telar">Telar</label>
+                <input id="rb-telar" class="form-control form-control-sm" @bind="_filterTelar" placeholder="Opcional" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="rb-tela">Tela</label>
+                <input id="rb-tela" class="form-control form-control-sm" @bind="_filterTela" placeholder="Opcional" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="rb-lote">Lote</label>
+                <input id="rb-lote" class="form-control form-control-sm" @bind="_filterLote" placeholder="Opcional" />
+            </div>
+            <div class="col-6 col-md-1">
+                <label class="rn-field-label" for="rb-turno">Turno</label>
+                <select id="rb-turno" class="form-select form-select-sm" @bind="_filterTurno">
+                    <option value="">Todos</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="rb-alerta">Alerta</label>
+                <select id="rb-alerta" class="form-select form-select-sm" @bind="_filterAlert">
+                    <option value="">Todas</option>
+                    <option value="Normal">Normal</option>
+                    <option value="Advertencia">Advertencia</option>
+                    <option value="Critico">Crítico</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="rn-field-label" for="rb-operario">Operario</label>
+                <input id="rb-operario" class="form-control form-control-sm" @bind="_filterOperario" placeholder="Opcional" />
+            </div>
+        </div>
+
+        <div class="row g-2 align-items-end mt-2">
+            <div class="col-6 col-md-3">
+                <label class="rn-field-label" for="rb-dim1">Agrupar por (1)</label>
+                <select id="rb-dim1" class="form-select form-select-sm" @bind="_primaryDim">
+                    @foreach (var d in DimensionChoices)
+                    {
+                        <option value="@d">@ReportBuilderService.DimensionDisplayName(d)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="rn-field-label" for="rb-dim2">Agrupar por (2, opcional)</label>
+                <select id="rb-dim2" class="form-select form-select-sm" @bind="_secondaryDim">
+                    <option value="">— Ninguna —</option>
+                    @foreach (var d in DimensionChoices)
+                    {
+                        <option value="@d">@ReportBuilderService.DimensionDisplayName(d)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-12 col-md-auto d-flex flex-wrap gap-2">
+                <button class="btn btn-primary btn-sm" @onclick="LoadAsync" disabled="@_loading">
+                    @(_loading ? "Generando…" : "Generar vista previa")
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ClearFiltersAsync" disabled="@_loading">
+                    Limpiar
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_filterSummary))
+        {
+            <p class="small text-muted mb-0 mt-2">@_filterSummary</p>
+        }
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger py-2" role="alert">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_exportMessage))
+    {
+        <div class="alert alert-info py-2" role="status">@_exportMessage</div>
+    }
+    @if (!string.IsNullOrEmpty(_exportError))
+    {
+        <div class="alert alert-danger py-2" role="alert">@_exportError</div>
+    }
+
+    @if (_result is null)
+    {
+        <p class="text-muted">Configure filtros y agrupación, luego pulse «Generar vista previa».</p>
+    }
+    else if (_result.TotalRecords == 0)
+    {
+        <EmptyState Title="Sin datos" Message="No hay registros con estos filtros.">
+            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="ClearFiltersAsync">Limpiar filtros</button>
+        </EmptyState>
+    }
+    else
+    {
+        <div class="row g-3 mb-3">
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Registros">@_result.TotalRecords</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Promedio neps">@_result.AverageNeps.ToString("0.##")</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Total mts">@_result.TotalMts.ToString("0.#")</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Índice calidad" Tone="success">@_result.QualityIndex.ToString("0.#")%</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Normal">@_result.NormalCount (@_result.NormalPercent.ToString("0.#")%)</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Advertencia" Tone="warning">@_result.WarningCount</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Crítico" Tone="danger">@_result.CriticalCount</KpiCard></div>
+        </div>
+
+        <div class="row g-3 mb-4">
+            <div class="col-lg-8">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <h5 class="card-title mb-3">Top grupos (promedio neps)</h5>
+                        <div class="chart-wrap">
+                            <canvas id="chart-builder-groups"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <h5 class="card-title mb-3">Distribución alertas</h5>
+                        <div class="chart-wrap chart-wrap--square">
+                            <canvas id="chart-builder-alerts"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-responsive mb-4">
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr>
+                        <th>Grupo</th>
+                        <th>Regs</th>
+                        <th>Suma</th>
+                        <th>Prom.</th>
+                        <th>Mts</th>
+                        <th>Min</th>
+                        <th>Max</th>
+                        <th>Normal</th>
+                        <th>Adv.</th>
+                        <th>Crít.</th>
+                        <th>Calidad %</th>
+                        <th>Neps/m²</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var g in _result.Groups.Take(200))
+                    {
+                        <tr>
+                            <td>@g.DisplayLabel</td>
+                            <td>@g.Count</td>
+                            <td>@g.SumNeps.ToString("0.##")</td>
+                            <td>@g.AverageNeps.ToString("0.##")</td>
+                            <td>@g.TotalMts.ToString("0.##")</td>
+                            <td>@g.MinNeps.ToString("0.##")</td>
+                            <td>@g.MaxNeps.ToString("0.##")</td>
+                            <td>@g.NormalCount (@g.NormalPercent.ToString("0.#")%)</td>
+                            <td>@g.WarningCount</td>
+                            <td>@g.CriticalCount</td>
+                            <td>@g.QualityIndex.ToString("0.#")</td>
+                            <td>@g.NepsPerM2.ToString("0.##")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (_result.BestTelars.Count > 0 || _result.WorstTelars.Count > 0)
+        {
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <h6>Mejores telares (menor neps/m²)</h6>
+                    <ul class="list-unstyled small mb-0">
+                        @foreach (var t in _result.BestTelars.Take(5))
+                        {
+                            <li>@t.Telar — @t.NepsPerM2.ToString("0.##") neps/m² (@t.RecordCount reg.)</li>
+                        }
+                    </ul>
+                </div>
+                <div class="col-md-6">
+                    <h6>Peores telares (mayor neps/m²)</h6>
+                    <ul class="list-unstyled small mb-0">
+                        @foreach (var t in _result.WorstTelars.Take(5))
+                        {
+                            <li>@t.Telar — @t.NepsPerM2.ToString("0.##") neps/m² (@t.RecordCount reg.)</li>
+                        }
+                    </ul>
+                </div>
+            </div>
+        }
+    }
+}
+
+@code {
+    private static readonly ReportBuilderDimension[] DimensionChoices =
+    [
+        ReportBuilderDimension.Telar,
+        ReportBuilderDimension.Tela,
+        ReportBuilderDimension.Lote,
+        ReportBuilderDimension.Turno,
+        ReportBuilderDimension.Operario,
+        ReportBuilderDimension.Day,
+        ReportBuilderDimension.Week,
+        ReportBuilderDimension.Month
+    ];
+
+    private static readonly IReadOnlyList<(string Href, string Label)> InformesTabsFull =
+    [
+        ("/informes", "Guardados"),
+        ("/exportar", "Exportar"),
+        ("/constructor-informes", "Constructor")
+    ];
+
+    private static readonly IReadOnlyList<(string Href, string Label)> InformesTabsExport =
+    [
+        ("/exportar", "Exportar"),
+        ("/constructor-informes", "Constructor")
+    ];
+
+    private static readonly string[] ChartIds = ["chart-builder-groups", "chart-builder-alerts"];
+    private static readonly string[] ChartTitles = ["Top grupos (promedio neps)", "Distribución alertas"];
+
+    private UserSession? _session;
+    private bool _allowed;
+    private bool _canManageSaved;
+    private ReportBuilderResult? _result;
+    private bool _loading;
+    private bool _exporting;
+    private bool _chartsDirty;
+    private bool _jsReady;
+    private string? _error;
+    private string? _exportMessage;
+    private string? _exportError;
+    private string? _filterSummary;
+
+    private int _periodDays = 30;
+    private DateTime? _fromLocal = DateTime.Today.AddDays(-30);
+    private DateTime? _toLocal = DateTime.Today;
+    private string _filterTelar = "";
+    private string _filterTela = "";
+    private string _filterLote = "";
+    private string _filterTurno = "";
+    private string _filterAlert = "";
+    private string _filterOperario = "";
+    private ReportBuilderDimension _primaryDim = ReportBuilderDimension.Telar;
+    private string _secondaryDim = "";
+
+    protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsReady = true;
+        }
+
+        if (_jsReady && _chartsDirty && _result is { TotalRecords: > 0 })
+        {
+            _chartsDirty = false;
+            await RenderChartsAsync();
+        }
+    }
+
+    private async Task RefreshAccessAsync()
+    {
+        _session = await CurrentUser.GetAsync();
+        _canManageSaved = _session?.Has(AppPermission.ManageReports) == true;
+        _allowed = _session?.Has(AppPermission.ExportReports) == true
+                   || _canManageSaved;
+    }
+
+    private ReportBuilderOptions BuildOptions()
+    {
+        ReportBuilderDimension? secondary = null;
+        if (!string.IsNullOrWhiteSpace(_secondaryDim) &&
+            Enum.TryParse<ReportBuilderDimension>(_secondaryDim, out var parsed))
+        {
+            secondary = parsed;
+        }
+
+        return new ReportBuilderOptions
+        {
+            Primary = _primaryDim,
+            Secondary = secondary
+        };
+    }
+
+    private RecordFilters BuildFilters(out string? validationError)
+    {
+        validationError = null;
+        AlertLevel? alert = null;
+        if (!string.IsNullOrEmpty(_filterAlert) &&
+            Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
+        {
+            alert = parsed;
+        }
+
+        var filters = new RecordFilters
+        {
+            Telar = string.IsNullOrWhiteSpace(_filterTelar) ? null : _filterTelar.Trim(),
+            Tela = string.IsNullOrWhiteSpace(_filterTela) ? null : _filterTela.Trim(),
+            LoteTrama = string.IsNullOrWhiteSpace(_filterLote) ? null : _filterLote.Trim(),
+            Turno = string.IsNullOrWhiteSpace(_filterTurno) ? null : _filterTurno.Trim(),
+            Operario = string.IsNullOrWhiteSpace(_filterOperario) ? null : _filterOperario.Trim(),
+            AlertLevel = alert
+        };
+
+        if (_periodDays > 0)
+        {
+            var toDay = DateTime.Today;
+            var fromDay = toDay.AddDays(-(_periodDays - 1));
+            ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
+        }
+        else if (_periodDays == 0)
+        {
+            if (_fromLocal is null || _toLocal is null)
+            {
+                validationError = "Indique fecha desde y hasta.";
+                return filters;
+            }
+
+            if (_fromLocal > _toLocal)
+            {
+                validationError = "La fecha «desde» no puede ser posterior a «hasta».";
+                return filters;
+            }
+
+            ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value).ApplyTo(filters);
+        }
+
+        return filters;
+    }
+
+    private string PeriodDescription()
+    {
+        if (_periodDays > 0)
+        {
+            return $"Últimos {_periodDays} días";
+        }
+
+        if (_periodDays == -1)
+        {
+            return "Todo el histórico";
+        }
+
+        return $"{_fromLocal?.ToString("dd/MM/yyyy") ?? "?"} – {_toLocal?.ToString("dd/MM/yyyy") ?? "?"}";
+    }
+
+    private static string BuildFilterSummary(RecordFilters filters)
+    {
+        var parts = new List<string>();
+        if (filters.Telar is not null) parts.Add($"Telar={filters.Telar}");
+        if (filters.Tela is not null) parts.Add($"Tela={filters.Tela}");
+        if (filters.LoteTrama is not null) parts.Add($"Lote={filters.LoteTrama}");
+        if (filters.Turno is not null) parts.Add($"Turno={filters.Turno}");
+        if (filters.Operario is not null) parts.Add($"Operario={filters.Operario}");
+        if (filters.AlertLevel is not null) parts.Add($"Alerta={filters.AlertLevel}");
+        return parts.Count == 0 ? "Sin filtros adicionales" : string.Join(", ", parts);
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        _exportError = null;
+        try
+        {
+            if (_primaryDim.ToString() == _secondaryDim)
+            {
+                _error = "La segunda dimensión no puede ser igual a la primera.";
+                return;
+            }
+
+            var filters = BuildFilters(out var validationError);
+            if (validationError is not null)
+            {
+                _error = validationError;
+                return;
+            }
+
+            _result = await ReportBuilder.BuildFromFiltersAsync(
+                filters,
+                _session.UserId,
+                _session.SeesAllRecords,
+                BuildOptions());
+
+            _filterSummary = $"{PeriodDescription()} · {BuildFilterSummary(filters)} · " +
+                             $"Agrupación: {ReportBuilderService.DimensionDisplayName(_primaryDim)}" +
+                             (string.IsNullOrWhiteSpace(_secondaryDim)
+                                 ? ""
+                                 : $" + {ReportBuilderService.DimensionDisplayName(Enum.Parse<ReportBuilderDimension>(_secondaryDim))}");
+
+            _chartsDirty = true;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ClearFiltersAsync()
+    {
+        _periodDays = 30;
+        _fromLocal = DateTime.Today.AddDays(-30);
+        _toLocal = DateTime.Today;
+        _filterTelar = "";
+        _filterTela = "";
+        _filterLote = "";
+        _filterTurno = "";
+        _filterAlert = "";
+        _filterOperario = "";
+        _primaryDim = ReportBuilderDimension.Telar;
+        _secondaryDim = "";
+        await LoadAsync();
+    }
+
+    private async Task RenderChartsAsync()
+    {
+        if (_result is null || _result.TotalRecords == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var topGroups = _result.Groups
+                .OrderByDescending(g => g.AverageNeps)
+                .Take(12)
+                .ToList();
+
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-builder-groups", new
+            {
+                type = "bar",
+                data = new
+                {
+                    labels = topGroups.Select(g => Truncate(g.DisplayLabel, 22)).ToArray(),
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            label = "Promedio neps",
+                            data = topGroups.Select(g => Math.Round(g.AverageNeps, 2)).ToArray(),
+                            backgroundColor = "rgba(31, 111, 91, 0.75)",
+                            borderColor = "#1F6F5B",
+                            borderWidth = 1
+                        }
+                    }
+                },
+                options = new
+                {
+                    indexAxis = "y",
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    plugins = new { legend = new { display = false } },
+                    scales = new { x = new { beginAtZero = true } }
+                }
+            });
+
+            await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "chart-builder-alerts", new
+            {
+                type = "doughnut",
+                data = new
+                {
+                    labels = new[] { "Normal", "Advertencia", "Crítico" },
+                    datasets = new object[]
+                    {
+                        new
+                        {
+                            data = new[] { _result.NormalCount, _result.WarningCount, _result.CriticalCount },
+                            backgroundColor = new[] { "#1F6F5B", "#C4A35A", "#B33A3A" },
+                            borderWidth = 0
+                        }
+                    }
+                },
+                options = new
+                {
+                    responsive = true,
+                    maintainAspectRatio = false,
+                    plugins = new { legend = new { position = "bottom" } }
+                }
+            });
+        }
+        catch (JSException)
+        {
+            _chartsDirty = true;
+        }
+    }
+
+    private async Task ExportPdfAsync() => await ExportAsync("pdf");
+
+    private async Task ExportAsync(string format)
+    {
+        if (_result is null || _session is null || _result.TotalRecords == 0)
+        {
+            return;
+        }
+
+        _exporting = true;
+        _exportMessage = null;
+        _exportError = null;
+        try
+        {
+            IReadOnlyList<AnalyticsChartImage> images = [];
+            if (format == "pdf" && _jsReady)
+            {
+                try
+                {
+                    images = await CaptureChartImagesAsync();
+                }
+                catch
+                {
+                    // PDF sin gráficas si falla la captura.
+                }
+            }
+
+            var period = PeriodDescription();
+            var filtersDesc = _filterSummary;
+            byte[] bytes;
+            string contentType;
+            string fileName;
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
+
+            if (format == "pdf")
+            {
+                bytes = ExportFiles.BuildReportBuilderPdf(_result, period, filtersDesc, images);
+                contentType = "application/pdf";
+                fileName = $"informe_constructor_{stamp}.pdf";
+            }
+            else
+            {
+                bytes = ExportFiles.BuildReportBuilderExcel(_result, period, filtersDesc);
+                contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                fileName = $"informe_constructor_{stamp}.xlsx";
+            }
+
+            var id = TempExports.Put(bytes, contentType, fileName, _session.UserId);
+            await Js.InvokeVoidAsync("regnepsDownload.downloadUrl", $"/api/export/temp/{id}");
+            _exportMessage = format == "pdf" && images.Count > 0
+                ? $"PDF generado con {images.Count} gráfica(s)."
+                : $"{(format == "pdf" ? "PDF" : "Excel")} generado.";
+        }
+        catch (Exception ex)
+        {
+            _exportError = "No se pudo exportar: " + ex.Message;
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task<IReadOnlyList<AnalyticsChartImage>> CaptureChartImagesAsync()
+    {
+        var captures = await Js.InvokeAsync<ChartCaptureDto[]?>("regnepsCharts.captureAll", ChartIds, ChartTitles);
+        if (captures is null || captures.Length == 0)
+        {
+            return [];
+        }
+
+        var list = new List<AnalyticsChartImage>();
+        foreach (var c in captures)
+        {
+            var bytes = DecodeDataUrlImage(c.DataUrl);
+            if (bytes.Length == 0)
+            {
+                continue;
+            }
+
+            list.Add(new AnalyticsChartImage(
+                string.IsNullOrWhiteSpace(c.Title) ? "Gráfica" : c.Title.Trim(),
+                bytes));
+        }
+
+        return list;
+    }
+
+    private static byte[] DecodeDataUrlImage(string? dataUrl)
+    {
+        if (string.IsNullOrWhiteSpace(dataUrl))
+        {
+            return [];
+        }
+
+        const string marker = "base64,";
+        var idx = dataUrl.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            return [];
+        }
+
+        try
+        {
+            return Convert.FromBase64String(dataUrl[(idx + marker.Length)..]);
+        }
+        catch (FormatException)
+        {
+            return [];
+        }
+    }
+
+    private static string Truncate(string value, int max) =>
+        string.IsNullOrEmpty(value) || value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    private sealed class ChartCaptureDto
+    {
+        public string Title { get; set; } = "";
+        public string DataUrl { get; set; } = "";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("regnepsCharts.destroyAll");
+        }
+        catch
+        {
+        }
+    }
+}

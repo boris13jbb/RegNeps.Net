@@ -225,6 +225,58 @@ public sealed class NepRecordRepository : INepRecordRepository
             .FirstOrDefaultAsync(r => r.Id == id, ct);
     }
 
+    public async Task<IReadOnlyList<NepRecord>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> ids,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        CancellationToken ct = default)
+    {
+        var unique = ids?
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToList() ?? [];
+
+        if (unique.Count == 0)
+        {
+            return Array.Empty<NepRecord>();
+        }
+
+        // Fail-closed: consulta personal sin usuario válido nunca se convierte en global.
+        if (!viewerSeesAll && string.IsNullOrWhiteSpace(viewerUserId))
+        {
+            return Array.Empty<NepRecord>();
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = db.NepRecords
+            .AsNoTracking()
+            .Where(r => unique.Contains(r.Id));
+
+        if (!viewerSeesAll)
+        {
+            string? externalUid = null;
+            if (Guid.TryParse(viewerUserId, out var viewerGuid))
+            {
+                externalUid = await db.Users.AsNoTracking()
+                    .Where(u => u.Id == viewerGuid)
+                    .Select(u => u.ExternalUserId)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            if (!string.IsNullOrWhiteSpace(externalUid))
+            {
+                query = query.Where(r =>
+                    r.CreatedByUserId == viewerUserId || r.CreatedByUserId == externalUid);
+            }
+            else
+            {
+                query = query.Where(r => r.CreatedByUserId == viewerUserId);
+            }
+        }
+
+        return await query.ToListAsync(ct);
+    }
+
     public async Task<NepRecord?> FindByClientOperationAsync(
         string userId,
         string clientOperationId,
@@ -240,6 +292,40 @@ public sealed class NepRecordRepository : INepRecordRepository
             .AsNoTracking()
             .FirstOrDefaultAsync(r =>
                 r.CreatedByUserId == userId && r.ClientOperationId == clientOperationId, ct);
+    }
+
+    public async Task<IReadOnlyList<NepRecord>> FindRecentByUserAsync(
+        string userId,
+        string? externalUserId,
+        DateTime sinceUtc,
+        int take = 100,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Array.Empty<NepRecord>();
+        }
+
+        take = Math.Clamp(take, 1, 500);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = db.NepRecords.AsNoTracking()
+            .Where(r => r.CreatedAt >= sinceUtc);
+
+        if (!string.IsNullOrWhiteSpace(externalUserId))
+        {
+            query = query.Where(r =>
+                r.CreatedByUserId == userId || r.CreatedByUserId == externalUserId);
+        }
+        else
+        {
+            query = query.Where(r => r.CreatedByUserId == userId);
+        }
+
+        return await query
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(take)
+            .ToListAsync(ct);
     }
 
     public async Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default)
