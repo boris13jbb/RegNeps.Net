@@ -439,6 +439,47 @@ public sealed class OfflineOfflineDeleteTests : IAsyncLifetime
             o.OperationType == OfflineOperationType.DeleteRecord));
     }
 
+    /// <summary>
+    /// Gate 2D.6.1: Update Pending de usuario A bloquea Delete de SeesAll (EntityId, no UserId).
+    /// </summary>
+    [Fact]
+    public async Task SeesAll_Delete_Blocked_By_Other_Users_Update_Pending_On_Same_Entity()
+    {
+        await using var db = CreateContext();
+        var (capture, sessions, _, _) = await BootAsync(db, userId: "owner");
+        var (record, _) = await SeedSyncedAsync(capture, db, ownerUserId: "owner", stamp: "s0");
+
+        await capture.UpdateRecordAsync(new OfflineUpdateRecordRequest
+        {
+            LocalRecordId = record.Id,
+            Telar = "OWN-EDIT",
+            Neps = 20
+        });
+        Assert.Equal(1, await db.PendingOperations.CountAsync(o =>
+            o.OperationType == OfflineOperationType.UpdateRecord
+            && o.Status == PendingOperationStatus.Pending
+            && o.UserId == "owner"));
+
+        await sessions.ClearUxSnapshotAsync();
+        await sessions.UpsertUxSnapshotAsync(
+            "boss",
+            "boss@test",
+            "Supervisor",
+            [
+                OfflineStoreConstants.CaptureRecordsPermission,
+                OfflineStoreConstants.EditRecordsPermission,
+                OfflineStoreConstants.DeleteRecordsPermission
+            ],
+            "http://localhost:5080",
+            TimeSpan.FromHours(72));
+
+        var elig = await capture.GetDeleteEligibilityAsync(record.Id);
+        Assert.False(elig.CanDelete);
+        Assert.Equal(OfflineDeleteBlockReason.MutationAlreadyPending, elig.Reason);
+        Assert.Equal(0, await db.PendingOperations.CountAsync(o =>
+            o.OperationType == OfflineOperationType.DeleteRecord));
+    }
+
     [Fact]
     public async Task Other_User_Without_SeesAll_Cannot_Delete()
     {
