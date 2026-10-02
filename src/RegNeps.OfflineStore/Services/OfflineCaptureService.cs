@@ -399,11 +399,11 @@ public sealed class OfflineCaptureService
                 record.ServerRecordId);
         }
 
-        // Create Pending del mismo local (sin ServerRecordId ya cubierto) o Update pendiente/conflicto.
+        // Create Pending / Update Pending|Sending|Conflict por EntityId (cualquier UserId en el dispositivo).
+        // Evita dos Updates concurrentes del mismo registro aunque cambie la sesión UX.
         var blocking = await _db.PendingOperations.AsNoTracking()
-            .Where(o => o.UserId == session.UserId
-                        && (o.LocalNepRecordId == localRecordId
-                            || o.TargetServerRecordId == record.ServerRecordId))
+            .Where(o => o.LocalNepRecordId == localRecordId
+                        || o.TargetServerRecordId == record.ServerRecordId)
             .Where(o => o.Status == PendingOperationStatus.Pending
                         || o.Status == PendingOperationStatus.Sending
                         || o.Status == PendingOperationStatus.Conflict)
