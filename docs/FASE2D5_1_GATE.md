@@ -91,4 +91,5 @@ No se alteraron:
 ## Commit resultante
 
 Rama: `feature/fase-2d5-offline-update`  
-Commit de gate: se registra al cerrar este documento en git (mensaje `test: FASE 2D.5.1 — gate Offline Update`).
+Commit: `d350215` — `test: FASE 2D.5.1 — gate Offline Update + bloqueo Update por EntityId`  
+Sin push / sin PR.
