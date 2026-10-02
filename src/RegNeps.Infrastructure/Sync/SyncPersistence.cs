@@ -1,31 +1,30 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Records;
 using RegNeps.Application.Sync;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
-using RegNeps.Domain.Enums;
-using RegNeps.Domain.Services;
 using RegNeps.Domain.Sync;
 using RegNeps.Infrastructure.Persistence;
 
 namespace RegNeps.Infrastructure.Sync;
 
 /// <summary>
-/// Push/Pull durable sobre un único DbContext por operación (transacción real SQLite/SQL Server).
+/// Push/Pull durable. CreateRecord delega en <see cref="IAtomicNepRecordCreateStore"/>
+/// (mismo camino atómico que la captura online).
 /// </summary>
 public sealed class SyncPersistence : ISyncPersistence
 {
-    private static readonly JsonSerializerOptions PayloadJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
     private readonly IDbContextFactory<RegNepsDbContext> _factory;
+    private readonly IAtomicNepRecordCreateStore _atomicCreate;
 
-    public SyncPersistence(IDbContextFactory<RegNepsDbContext> factory) =>
+    public SyncPersistence(
+        IDbContextFactory<RegNepsDbContext> factory,
+        IAtomicNepRecordCreateStore atomicCreate)
+    {
         _factory = factory;
+        _atomicCreate = atomicCreate;
+    }
 
     public async Task<SyncCreatePersistResult> CreateRecordAtomicallyAsync(
         CreateNepRecordRequest request,
@@ -41,11 +40,10 @@ public sealed class SyncPersistence : ISyncPersistence
             ? null
             : request.CaptureSessionId.Trim();
 
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        try
+        // Comprobación rápida de sesión / duplicate fuera de TX (el store revalida en TX).
+        await using (var peek = await _factory.CreateDbContextAsync(ct))
         {
-            var existing = await db.NepRecords
+            var existing = await peek.NepRecords.AsNoTracking()
                 .FirstOrDefaultAsync(r =>
                     r.CreatedByUserId == actor.UserId && r.ClientOperationId == opId, ct);
 
@@ -55,7 +53,6 @@ public sealed class SyncPersistence : ISyncPersistence
                     && !string.IsNullOrWhiteSpace(existing.CaptureSessionId)
                     && !string.Equals(existing.CaptureSessionId, sessionId, StringComparison.Ordinal))
                 {
-                    await tx.RollbackAsync(ct);
                     return new SyncCreatePersistResult
                     {
                         Result = SyncOperationResult.Forbidden,
@@ -64,7 +61,7 @@ public sealed class SyncPersistence : ISyncPersistence
                     };
                 }
 
-                var existingSequence = await db.SyncChangeLogs.AsNoTracking()
+                var existingSequence = await peek.SyncChangeLogs.AsNoTracking()
                     .Where(c => c.EntityType == SyncConstants.EntityNepRecord
                                 && c.EntityId == existing.Id
                                 && c.ClientOperationId == opId)
@@ -72,7 +69,6 @@ public sealed class SyncPersistence : ISyncPersistence
                     .Select(c => (long?)c.Sequence)
                     .FirstOrDefaultAsync(ct);
 
-                await tx.CommitAsync(ct);
                 return new SyncCreatePersistResult
                 {
                     Result = SyncOperationResult.Duplicate,
@@ -80,126 +76,58 @@ public sealed class SyncPersistence : ISyncPersistence
                     ChangeSequence = existingSequence
                 };
             }
+        }
 
-            var now = DateTime.UtcNow;
-            var lote = string.IsNullOrWhiteSpace(request.LoteTrama)
-                ? NepsConstants.LoteTramaPrefix
-                : request.LoteTrama.Trim().ToUpperInvariant();
+        var now = DateTime.UtcNow;
+        var lote = string.IsNullOrWhiteSpace(request.LoteTrama)
+            ? NepsConstants.LoteTramaPrefix
+            : request.LoteTrama.Trim().ToUpperInvariant();
 
-            var record = new NepRecord
-            {
-                Id = Guid.NewGuid(),
-                Telar = request.Telar.Trim(),
-                Neps = request.Neps,
-                Tela = request.Tela?.Trim() ?? string.Empty,
-                LoteTrama = lote,
-                Turno = request.Turno?.Trim() ?? string.Empty,
-                Operario = request.Operario?.Trim() ?? string.Empty,
-                LineaProduccion = request.LineaProduccion?.Trim() ?? string.Empty,
-                Observacion = request.Observacion?.Trim() ?? string.Empty,
-                CreatedAt = now,
-                CreatedByUserId = actor.UserId,
-                CreatedByEmail = actor.Username,
-                CreatedByRole = actor.EffectiveRole.ToString(),
-                ClientOperationId = opId,
-                CaptureSessionId = sessionId,
-                ConcurrencyStamp = Guid.NewGuid().ToString("N")
-            };
+        var record = new NepRecord
+        {
+            Id = Guid.NewGuid(),
+            Telar = request.Telar.Trim(),
+            Neps = request.Neps,
+            Tela = request.Tela?.Trim() ?? string.Empty,
+            LoteTrama = lote,
+            Turno = request.Turno?.Trim() ?? string.Empty,
+            Operario = request.Operario?.Trim() ?? string.Empty,
+            LineaProduccion = request.LineaProduccion?.Trim() ?? string.Empty,
+            Observacion = request.Observacion?.Trim() ?? string.Empty,
+            CreatedAt = now,
+            CreatedByUserId = actor.UserId,
+            CreatedByEmail = actor.Username,
+            CreatedByRole = actor.EffectiveRole.ToString(),
+            ClientOperationId = opId,
+            CaptureSessionId = sessionId,
+            ConcurrencyStamp = Guid.NewGuid().ToString("N")
+        };
 
-            var level = AlertEvaluator.GetLevel(record.Neps);
-            var snapshot = new SyncNepRecordSnapshot
-            {
-                Id = record.Id,
-                Telar = record.Telar,
-                Neps = record.Neps,
-                MtsCalculados = record.MtsCalculados,
-                Tela = record.Tela,
-                LoteTrama = record.LoteTrama,
-                Turno = record.Turno,
-                Operario = record.Operario,
-                LineaProduccion = record.LineaProduccion,
-                Observacion = record.Observacion,
-                CreatedAtUtc = record.CreatedAt,
-                ConcurrencyStamp = record.ConcurrencyStamp,
-                ClientOperationId = record.ClientOperationId,
-                CaptureSessionId = record.CaptureSessionId,
-                OwnerUserId = record.CreatedByUserId,
-                QualityLabel = level.ToDisplayLabel()
-            };
-
-            var change = new SyncChangeLog
-            {
-                EntityType = SyncConstants.EntityNepRecord,
-                EntityId = record.Id,
-                ChangeType = SyncConstants.ChangeRecordUpserted,
-                OccurredAtUtc = now,
-                ActorUserId = actor.UserId,
-                OwnerUserId = actor.UserId,
-                ClientOperationId = opId,
-                DeviceId = deviceId,
-                PayloadJson = JsonSerializer.Serialize(snapshot, PayloadJsonOptions)
-            };
-
-            db.NepRecords.Add(record);
-            db.SyncChangeLogs.Add(change);
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
+        try
+        {
+            var outcome = await _atomicCreate.CreateWithChangeLogAsync(
+                record,
+                actor.UserId,
+                deviceId,
+                ct);
 
             return new SyncCreatePersistResult
             {
-                Result = SyncOperationResult.Accepted,
-                Record = record,
-                ChangeSequence = change.Sequence
+                Result = outcome.Inserted
+                    ? SyncOperationResult.Accepted
+                    : SyncOperationResult.Duplicate,
+                Record = outcome.Record,
+                ChangeSequence = outcome.ChangeSequence
             };
         }
         catch (DbUpdateException)
         {
-            await tx.RollbackAsync(ct);
-
-            // Tras cualquier fallo de persistencia: si la fila ya existe por la clave única
-            // (CreatedByUserId, ClientOperationId), es Duplicate determinista (carrera o retry).
-            // No dependemos de parsear mensajes UNIQUE genéricos (podrían ser de otro índice).
-            await using var read = await _factory.CreateDbContextAsync(ct);
-            var raced = await read.NepRecords.AsNoTracking()
-                .FirstOrDefaultAsync(r =>
-                    r.CreatedByUserId == actor.UserId && r.ClientOperationId == opId, ct);
-            if (raced is null)
-            {
-                return new SyncCreatePersistResult
-                {
-                    Result = SyncOperationResult.TransientError,
-                    ErrorCode = "PERSISTENCE",
-                    Message = "Error temporal al procesar la operación."
-                };
-            }
-
-            var seq = await read.SyncChangeLogs.AsNoTracking()
-                .Where(c => c.EntityType == SyncConstants.EntityNepRecord
-                            && c.EntityId == raced.Id
-                            && c.ClientOperationId == opId)
-                .OrderBy(c => c.Sequence)
-                .Select(c => (long?)c.Sequence)
-                .FirstOrDefaultAsync(ct);
-
             return new SyncCreatePersistResult
             {
-                Result = SyncOperationResult.Duplicate,
-                Record = raced,
-                ChangeSequence = seq
+                Result = SyncOperationResult.TransientError,
+                ErrorCode = "PERSISTENCE",
+                Message = "Error temporal al procesar la operación."
             };
-        }
-        catch
-        {
-            try
-            {
-                await tx.RollbackAsync(ct);
-            }
-            catch
-            {
-                // ignorar fallo de rollback secundario
-            }
-
-            throw;
         }
     }
 
@@ -223,7 +151,6 @@ public sealed class SyncPersistence : ISyncPersistence
                 .FirstOrDefaultAsync(ct);
         }
 
-        // NextCursor = última Sequence examinada (incluye no autorizadas).
         long nextCursor = cursor;
         var authorized = new List<SyncChangeLog>(pageSize);
         const int scanBatch = 100;
@@ -274,8 +201,6 @@ public sealed class SyncPersistence : ISyncPersistence
 
         if (!scannedAny)
         {
-            // Cursor por delante del máximo real (cliente corrupto/malicioso): anclar al max
-            // para no perder inserts futuros con Sequence <= cursor fantasma.
             var maxSeq = await db.SyncChangeLogs.AsNoTracking()
                 .Select(c => (long?)c.Sequence)
                 .MaxAsync(ct) ?? 0L;
@@ -329,25 +254,5 @@ public sealed class SyncPersistence : ISyncPersistence
         }
 
         return false;
-    }
-
-    private sealed class SyncNepRecordSnapshot
-    {
-        public Guid Id { get; set; }
-        public string Telar { get; set; } = string.Empty;
-        public double Neps { get; set; }
-        public double MtsCalculados { get; set; }
-        public string Tela { get; set; } = string.Empty;
-        public string LoteTrama { get; set; } = string.Empty;
-        public string Turno { get; set; } = string.Empty;
-        public string Operario { get; set; } = string.Empty;
-        public string LineaProduccion { get; set; } = string.Empty;
-        public string Observacion { get; set; } = string.Empty;
-        public DateTime CreatedAtUtc { get; set; }
-        public string ConcurrencyStamp { get; set; } = string.Empty;
-        public string? ClientOperationId { get; set; }
-        public string? CaptureSessionId { get; set; }
-        public string? OwnerUserId { get; set; }
-        public string QualityLabel { get; set; } = string.Empty;
     }
 }

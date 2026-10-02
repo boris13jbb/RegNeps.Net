@@ -92,8 +92,9 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
             new RolePermissionRepository(db),
             new RoleRepository(db),
             matrix);
+        var atomic = new AtomicNepRecordCreateStore(_factory);
         return new SyncAppService(
-            new SyncPersistence(_factory),
+            new SyncPersistence(_factory, atomic),
             permissions,
             NullLogger<SyncAppService>.Instance);
     }

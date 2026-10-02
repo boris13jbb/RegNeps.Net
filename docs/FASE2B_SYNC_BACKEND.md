@@ -122,6 +122,35 @@ Valores mayores se clampean; nunca se acepta un page arbitrario enorme.
 Logs: UserId, DeviceId, ClientOperationId, Result, DurationMs, CorrelationId (`TraceIdentifier`).  
 No se registran passwords, cookies ni tokens.
 
-## Fuera de 2B
+## FASE 2B.1 — ChangeLog en captura online
+
+Toda creación exitosa vía `NepRecordService` (Blazor Captura) usa `IAtomicNepRecordCreateStore`:
+mismo DbContext/transacción que escribe `NepRecord` + `SyncChangeLog` (`RecordUpserted`).
+
+Push offline delega en el mismo store → un solo ChangeLog por operación, payload canónico
+(`SyncNepRecordPayloadMapper`).
+
+`DeviceId` en online = `null` (no se inventa identidad de dispositivo).
+
+Import masivo vía `NepRecordRepository.AddAsync` aún no escribe ChangeLog (fuera de 2B.1).
+
+## Canal lateral del cursor (P5) — no resuelto en 2B.1
+
+`NextCursor` avanza sobre el log **global** (incluye Sequences no autorizadas examinadas).
+Un cliente puede inferir actividad ajena por gaps o por avance con `Changes` vacío.
+
+**Recomendación técnica (no implementada):**
+
+| Opción | Impacto |
+|--------|---------|
+| Aceptar en intranet actual | Bajo esfuerzo; riesgo aceptable si todos los usuarios son internos de confianza. |
+| Resolver antes de producción multi-tenant/exposición externa | Obligatorio si el canal lateral es inaceptable. |
+| Cursor por propietario (Sequence local) | Rompe el modelo monotónico global; complica Pull y tombstones. |
+| Páginas “opacas” / no avanzar en solo-no-autorizados | Puede bloquear el cursor o requerir scan server-side costoso. |
+| HasMore/NextCursor sin filtrar actividad (status quo) | Documentar como limitación conocida. |
+
+Decisión pendiente del producto antes de producción amplia.
+
+## Fuera de 2B / 2B.1
 
 UI offline, SyncEngine, retry/backoff, catálogos completos, Update/Delete, conflictos, SignalR recovery.

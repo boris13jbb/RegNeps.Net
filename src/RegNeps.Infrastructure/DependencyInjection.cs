@@ -66,6 +66,7 @@ public static class DependencyInjection
 
         services.AddSingleton<IAlertRealtimeNotifier, NoOpAlertRealtimeNotifier>();
         services.AddScoped<IAlertCriticalPublisher, AlertCriticalPublisher>();
+        services.AddScoped<IAtomicNepRecordCreateStore, AtomicNepRecordCreateStore>();
         services.AddScoped<NepRecordService>();
         services.AddScoped<ISyncPersistence, SyncPersistence>();
         services.AddScoped<SyncAppService>();

@@ -24,17 +24,20 @@ public sealed class NepRecordService
     private readonly IAlertConfigRepository _alertConfig;
     private readonly IPermissionService? _permissions;
     private readonly IAlertCriticalPublisher? _criticalPublisher;
+    private readonly IAtomicNepRecordCreateStore? _atomicCreate;
 
     public NepRecordService(
         INepRecordRepository records,
         IAlertConfigRepository alertConfig,
         IPermissionService? permissions = null,
-        IAlertCriticalPublisher? criticalPublisher = null)
+        IAlertCriticalPublisher? criticalPublisher = null,
+        IAtomicNepRecordCreateStore? atomicCreate = null)
     {
         _records = records;
         _alertConfig = alertConfig;
         _permissions = permissions;
         _criticalPublisher = criticalPublisher;
+        _atomicCreate = atomicCreate;
     }
 
     /// <summary>
@@ -120,6 +123,19 @@ public sealed class NepRecordService
             ConcurrencyStamp = Guid.NewGuid().ToString("N")
         };
 
+        // FASE 2B.1: creación online observable por sync (NepRecord + ChangeLog atómicos).
+        // DeviceId=null: captura Blazor no inventa identidad de dispositivo.
+        if (_atomicCreate is not null)
+        {
+            var outcome = await _atomicCreate.CreateWithChangeLogAsync(
+                record,
+                actor.UserId,
+                deviceId: null,
+                ct);
+            return (outcome.Record, outcome.Inserted);
+        }
+
+        // Fallback para tests unitarios que no registran el store atómico.
         var saved = await _records.AddAsync(record, ct);
         return (saved, true);
     }
@@ -213,9 +229,10 @@ public sealed class NepRecordService
         }
 
         NepRecord saved;
+        bool inserted;
         try
         {
-            (saved, _) = await CreateInternalAsync(request, actor, ct);
+            (saved, inserted) = await CreateInternalAsync(request, actor, ct);
         }
         catch (UnauthorizedRecordAccessException ex)
         {
@@ -234,8 +251,8 @@ public sealed class NepRecordService
             };
         }
 
-        // Tras insert: Saved. Idempotencia previa ya devolvió AlreadySaved.
-        return await BuildSavedResultAsync(saved, alreadySaved: false, ct);
+        // Inserted=false: carrera/idempotencia → AlreadySaved (sin segundo ChangeLog).
+        return await BuildSavedResultAsync(saved, alreadySaved: !inserted, ct);
     }
 
     private async Task<RecordSaveResult> BuildSavedResultAsync(
