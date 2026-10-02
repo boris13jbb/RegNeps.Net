@@ -83,6 +83,12 @@ public sealed class SyncEngine : ISyncEngine
             result.Message = ex.Message;
             await TouchSyncStateErrorAsync(deviceId, ex.Message, ex.Kind.ToString(), ct);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fallo al persistir resultado de Push: Outbox permanece Pending (TX rollback).
+            result.Message = ex.Message;
+            await TouchSyncStateErrorAsync(deviceId, ex.Message, "PushPersistFailed", ct);
+        }
 
         try
         {
