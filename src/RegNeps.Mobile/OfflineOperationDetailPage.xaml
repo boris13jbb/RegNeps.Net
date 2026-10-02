@@ -58,8 +58,9 @@
                     TextColor="White" />
 
             <Button x:Name="ReviewButton"
-                    Text="Requiere revisión"
-                    IsEnabled="False"
+                    Text="Resolver conflicto"
+                    Clicked="OnResolveConflictClicked"
+                    IsEnabled="True"
                     IsVisible="False"
                     BackgroundColor="#F59E0B"
                     TextColor="White" />

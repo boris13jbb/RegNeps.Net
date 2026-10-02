@@ -247,6 +247,25 @@ public partial class OfflineOperationDetailPage : ContentPage
         }
     }
 
+    private async void OnResolveConflictClicked(object? sender, EventArgs e)
+    {
+        if (_operationId == Guid.Empty)
+        {
+            return;
+        }
+
+        var services = Handler?.MauiContext?.Services
+                       ?? Application.Current?.Handler?.MauiContext?.Services;
+        if (services is null)
+        {
+            return;
+        }
+
+        var page = services.GetRequiredService<OfflineConflictResolvePage>();
+        page.Initialize(_operationId);
+        await Navigation.PushAsync(page);
+    }
+
     private async void OnReloginClicked(object? sender, EventArgs e)
     {
         // Volver a MainPage (raíz) y abrir WebView login.

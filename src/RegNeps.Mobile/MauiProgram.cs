@@ -34,6 +34,7 @@ public static class MauiProgram
         builder.Services.AddTransient<OfflineOperationsPage>();
         builder.Services.AddTransient<OfflineOperationDetailPage>();
         builder.Services.AddTransient<OfflineEditRecordPage>();
+        builder.Services.AddTransient<OfflineConflictResolvePage>();
         // MainPage se resuelve desde App; registrar para DI explícito.
         builder.Services.AddTransient<MainPage>();
 
