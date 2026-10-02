@@ -98,6 +98,8 @@ internal static class RoleSchemaPatches
 
         // BD ya migradas con Guid hex (sin guiones) de la semilla antigua.
         await RepairSqliteUndashedRoleGuidsAsync(db);
+        // EF Core SQLite persiste Guid TEXT en mayúsculas; normaliza filas en minúsculas.
+        await RepairSqliteGuidTextCasingAsync(db);
     }
 
     private static async Task ApplySqlServerAsync(RegNepsDbContext db)
@@ -272,6 +274,8 @@ internal static class RoleSchemaPatches
     /// <summary>
     /// Convierte Roles.Id / RolePermissions.RoleId / RolePermissionAudits.RoleId
     /// de formato N (32 hex) a formato D (con guiones). Idempotente.
+    /// El valor nuevo se pasa como <see cref="Guid"/> para que el proveedor SQLite
+    /// de EF lo persista en mayúsculas (mismo casing que SaveChanges).
     /// </summary>
     internal static async Task RepairSqliteUndashedRoleGuidsAsync(
         RegNepsDbContext db,
@@ -293,48 +297,190 @@ internal static class RoleSchemaPatches
         var hasAudits = await DatabaseInitializer.SqliteTableExistsAsync(db, "RolePermissionAudits")
             && await DatabaseInitializer.SqliteColumnExistsAsync(db, "RolePermissionAudits", "RoleId");
 
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys=OFF;", ct);
         try
         {
-            foreach (var hexId in hexIds)
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                if (!Guid.TryParseExact(hexId, "N", out var guid))
+                foreach (var hexId in hexIds)
                 {
-                    continue;
-                }
+                    if (!Guid.TryParseExact(hexId, "N", out var guid))
+                    {
+                        continue;
+                    }
 
-                var dashed = guid.ToString("D");
-                if (string.Equals(hexId, dashed, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+                    // Ya en formato D (con o sin casing distinto): no reescribir aquí.
+                    if (hexId.Contains('-', StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
 
-                if (hasRolePermissions)
-                {
+                    if (hasRolePermissions)
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            """UPDATE "RolePermissions" SET "RoleId" = {0} WHERE "RoleId" = {1}""",
+                            guid, hexId);
+                    }
+
+                    if (hasAudits)
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            """UPDATE "RolePermissionAudits" SET "RoleId" = {0} WHERE "RoleId" = {1}""",
+                            guid, hexId);
+                    }
+
                     await db.Database.ExecuteSqlRawAsync(
-                        """UPDATE "RolePermissions" SET "RoleId" = {0} WHERE "RoleId" = {1}""",
-                        dashed, hexId);
+                        """UPDATE "Roles" SET "Id" = {0} WHERE "Id" = {1}""",
+                        guid, hexId);
                 }
 
-                if (hasAudits)
-                {
-                    await db.Database.ExecuteSqlRawAsync(
-                        """UPDATE "RolePermissionAudits" SET "RoleId" = {0} WHERE "RoleId" = {1}""",
-                        dashed, hexId);
-                }
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        }
+        finally
+        {
+            await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys=ON;", ct);
+        }
+    }
 
-                await db.Database.ExecuteSqlRawAsync(
-                    """UPDATE "Roles" SET "Id" = {0} WHERE "Id" = {1}""",
-                    dashed, hexId);
+    /// <summary>
+    /// Normaliza Guid TEXT en minúsculas (formato D) al casing mayúsculas que escribe EF Core
+    /// en SQLite. Sin esto, SELECT por username funciona pero UPDATE por Id falla
+    /// (DbUpdateConcurrencyException: 0 filas). Idempotente.
+    /// </summary>
+    internal static async Task RepairSqliteGuidTextCasingAsync(
+        RegNepsDbContext db,
+        CancellationToken ct = default)
+    {
+        // Recolectar trabajo primero; si no hay minúsculas, no tocar PRAGMA/FK.
+        var jobs = new List<(string Table, string Column, List<string> Values)>();
+        async Task QueueAsync(string table, string column)
+        {
+            if (!await DatabaseInitializer.SqliteTableExistsAsync(db, table)
+                || !await DatabaseInitializer.SqliteColumnExistsAsync(db, table, column))
+            {
+                return;
             }
 
-            await tx.CommitAsync(ct);
+            var lowers = await ListSqliteLowercaseDashedGuidsAsync(db, table, column, ct);
+            if (lowers.Count > 0)
+            {
+                jobs.Add((table, column, lowers));
+            }
         }
-        catch
+
+        await QueueAsync("RolePermissions", "RoleId");
+        await QueueAsync("RolePermissions", "UpdatedByUserId");
+        await QueueAsync("RolePermissionAudits", "RoleId");
+        await QueueAsync("RolePermissionAudits", "Id");
+        await QueueAsync("RolePermissionAudits", "ModifiedByUserId");
+        await QueueAsync("Roles", "Id");
+        await QueueAsync("Users", "Id");
+        await QueueAsync("Fabrics", "Id");
+        await QueueAsync("SavedReports", "Id");
+        await QueueAsync("CorrectiveActions", "Id");
+        await QueueAsync("CorrectiveActions", "NepRecordId");
+        await QueueAsync("NepRecords", "Id");
+        await QueueAsync("LoteTramaItems", "Id");
+
+        if (jobs.Count == 0)
         {
-            await tx.RollbackAsync(ct);
-            throw;
+            return;
         }
+
+        // PRAGMA foreign_keys no tiene efecto dentro de una transacción ya abierta.
+        await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys=OFF;", ct);
+        try
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
+            {
+                foreach (var (table, column, values) in jobs)
+                {
+                    foreach (var raw in values)
+                    {
+                        if (!Guid.TryParse(raw, out var guid))
+                        {
+                            continue;
+                        }
+
+                        // Parámetro Guid → TEXT mayúsculas (formato del proveedor SQLite de EF).
+                        var sql = string.Format(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            """UPDATE "{0}" SET "{1}" = {{0}} WHERE "{1}" = {{1}}""",
+                            table,
+                            column);
+                        await db.Database.ExecuteSqlRawAsync(sql, guid, raw);
+                    }
+                }
+
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        }
+        finally
+        {
+            await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys=ON;", ct);
+        }
+    }
+
+    private static async Task<List<string>> ListSqliteLowercaseDashedGuidsAsync(
+        RegNepsDbContext db, string table, string column, CancellationToken ct)
+    {
+        var result = new List<string>();
+        var conn = db.Database.GetDbConnection();
+        var openedHere = conn.State != System.Data.ConnectionState.Open;
+        if (openedHere)
+        {
+            await conn.OpenAsync(ct);
+        }
+
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            // Formato D con al menos una letra hex minúscula (a-f). SQLite es case-sensitive.
+            cmd.CommandText =
+                $"""
+                SELECT DISTINCT "{column}" FROM "{table}"
+                WHERE "{column}" IS NOT NULL
+                  AND length("{column}") = 36
+                  AND instr("{column}", '-') > 0
+                  AND "{column}" GLOB '*[a-f]*'
+                """;
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (reader.IsDBNull(0))
+                {
+                    continue;
+                }
+
+                var id = reader.GetString(0);
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    result.Add(id);
+                }
+            }
+        }
+        finally
+        {
+            if (openedHere)
+            {
+                await conn.CloseAsync();
+            }
+        }
+
+        return result;
     }
 
     private static async Task<List<string>> ListSqliteUndashedRoleIdsAsync(
@@ -380,13 +526,15 @@ internal static class RoleSchemaPatches
         return result;
     }
 
-    private static async Task SeedSystemRolesSqliteAsync(RegNepsDbContext db)
+    /// <summary>Semilla cruda de roles de sistema (SQLite). Visible a tests de casing.</summary>
+    internal static async Task SeedSystemRolesSqliteAsync(RegNepsDbContext db)
     {
-        // EF Core en SQLite persiste Guid como TEXT con guiones (formato D).
+        // Pasar Guid (no ToString("D")): el proveedor SQLite de EF persiste TEXT en MAYÚSCULAS,
+        // igual que SaveChanges. ToString("D") escribe minúsculas y rompe UPDATE/joins posteriores.
         var now = DateTime.UtcNow.ToString("o");
         foreach (var def in Domain.Constants.SystemRoleCodes.Definitions)
         {
-            var id = Guid.NewGuid().ToString("D");
+            var id = Guid.NewGuid();
             await DatabaseInitializer.TryExecuteAsync(
                 db,
                 """
