@@ -49,6 +49,10 @@ public static class DatabaseInitializer
 
     internal static Task TryExecuteAsync(RegNepsDbContext db, string sql) => TryExecuteAsyncPrivate(db, sql);
 
+    /// <summary>Ejecuta SQL con parámetros EF (<c>{0}</c>, <c>{1}</c>, …). Idempotente ante «already exists».</summary>
+    internal static Task TryExecuteAsync(RegNepsDbContext db, string sql, params object[] parameters) =>
+        TryExecuteAsyncPrivate(db, sql, parameters);
+
     internal static Task<bool> SqliteColumnExistsAsync(RegNepsDbContext db, string table, string column) =>
         SqliteColumnExistsPrivateAsync(db, table, column);
 
@@ -217,11 +221,18 @@ public static class DatabaseInitializer
 
     }
 
-    private static async Task TryExecuteAsyncPrivate(RegNepsDbContext db, string sql)
+    private static async Task TryExecuteAsyncPrivate(RegNepsDbContext db, string sql, object[]? parameters = null)
     {
         try
         {
-            await db.Database.ExecuteSqlRawAsync(sql);
+            if (parameters is { Length: > 0 })
+            {
+                await db.Database.ExecuteSqlRawAsync(sql, parameters);
+            }
+            else
+            {
+                await db.Database.ExecuteSqlRawAsync(sql);
+            }
         }
         catch (Exception ex) when (IsAlreadyExistsError(ex))
         {

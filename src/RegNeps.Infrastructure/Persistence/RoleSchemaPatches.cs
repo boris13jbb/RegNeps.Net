@@ -215,13 +215,25 @@ internal static class RoleSchemaPatches
 
     private static async Task SeedSystemRolesSqliteAsync(RegNepsDbContext db)
     {
+        // EF Core en SQLite persiste Guid como TEXT con guiones (formato D).
+        // lower(hex(randomblob(16))) produce 32 hex sin guiones y rompe filtros/FK SQL de EF.
+        var now = DateTime.UtcNow.ToString("o");
         foreach (var def in Domain.Constants.SystemRoleCodes.Definitions)
         {
-            await DatabaseInitializer.TryExecuteAsync(db,
-                $"""
-                INSERT OR IGNORE INTO "Roles" ("Id", "Code", "Name", "IsActive", "IsSystem", "SeesAllRecords", "CreatedAt", "UpdatedAt")
-                VALUES (lower(hex(randomblob(16))), '{def.Code}', '{def.Name.Replace("'", "''")}', 1, 1, {(def.SeesAllRecords ? 1 : 0)}, datetime('now'), datetime('now'))
-                """);
+            var id = Guid.NewGuid().ToString("D");
+            await DatabaseInitializer.TryExecuteAsync(
+                db,
+                """
+                INSERT OR IGNORE INTO "Roles"
+                    ("Id", "Code", "Name", "IsActive", "IsSystem", "SeesAllRecords", "CreatedAt", "UpdatedAt")
+                VALUES ({0}, {1}, {2}, 1, 1, {3}, {4}, {5})
+                """,
+                id,
+                def.Code,
+                def.Name,
+                def.SeesAllRecords ? 1 : 0,
+                now,
+                now);
         }
     }
 
