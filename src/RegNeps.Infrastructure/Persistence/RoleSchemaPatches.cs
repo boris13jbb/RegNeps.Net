@@ -3,6 +3,12 @@ using Microsoft.EntityFrameworkCore;
 namespace RegNeps.Infrastructure.Persistence;
 
 /// <summary>Migración aditiva de RolePermissions (enum) → AppRole + RoleId.</summary>
+/// <remarks>
+/// Rebuilds destructivos (DROP + rename) van en transacción explícita vía
+/// <see cref="DatabaseFacade.BeginTransactionAsync"/>. El proyecto no usa
+/// EnableRetryOnFailure en SQL Server, así que no hace falta CreateExecutionStrategy
+/// (mismo patrón que <c>RolePermissionRepository</c>).
+/// </remarks>
 internal static class RoleSchemaPatches
 {
     public static async Task ApplyAsync(RegNepsDbContext db, bool isSqlite)
@@ -89,6 +95,9 @@ internal static class RoleSchemaPatches
                 ON "RolePermissionAudits" ("ChangedAt")
                 """);
         }
+
+        // BD ya migradas con Guid hex (sin guiones) de la semilla antigua.
+        await RepairSqliteUndashedRoleGuidsAsync(db);
     }
 
     private static async Task ApplySqlServerAsync(RegNepsDbContext db)
@@ -132,91 +141,248 @@ internal static class RoleSchemaPatches
         }
     }
 
-    private static async Task RebuildRolePermissionsSqliteAsync(RegNepsDbContext db)
+    /// <summary>
+    /// Rebuild enum→RoleId. <paramref name="afterDropAsync"/> solo para pruebas (inyectar fallo post-DROP).
+    /// </summary>
+    internal static async Task RebuildRolePermissionsSqliteAsync(
+        RegNepsDbContext db,
+        Func<CancellationToken, Task>? afterDropAsync = null,
+        CancellationToken ct = default)
     {
         await SeedSystemRolesSqliteAsync(db);
 
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            CREATE TABLE IF NOT EXISTS "RolePermissions_new" (
-                "RoleId" TEXT NOT NULL,
-                "Permission" INTEGER NOT NULL,
-                "IsEnabled" INTEGER NOT NULL,
-                "CreatedAt" TEXT NOT NULL,
-                "UpdatedAt" TEXT NOT NULL,
-                "UpdatedByUserId" TEXT NULL,
-                CONSTRAINT "PK_RolePermissions" PRIMARY KEY ("RoleId", "Permission")
-            )
-            """);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """DROP TABLE IF EXISTS "RolePermissions_new" """, ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE "RolePermissions_new" (
+                    "RoleId" TEXT NOT NULL,
+                    "Permission" INTEGER NOT NULL,
+                    "IsEnabled" INTEGER NOT NULL,
+                    "CreatedAt" TEXT NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL,
+                    "UpdatedByUserId" TEXT NULL,
+                    CONSTRAINT "PK_RolePermissions" PRIMARY KEY ("RoleId", "Permission")
+                )
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            INSERT OR IGNORE INTO "RolePermissions_new"
-                ("RoleId", "Permission", "IsEnabled", "CreatedAt", "UpdatedAt", "UpdatedByUserId")
-            SELECT r."Id", rp."Permission", rp."IsEnabled", rp."CreatedAt", rp."UpdatedAt", rp."UpdatedByUserId"
-            FROM "RolePermissions" rp
-            INNER JOIN "Roles" r ON r."Code" = CASE rp."Role"
-                WHEN 0 THEN 'Operario'
-                WHEN 1 THEN 'Supervisor'
-                WHEN 2 THEN 'Admin'
-                WHEN 3 THEN 'Gerencia'
-                WHEN 4 THEN 'SuperAdmin'
-                ELSE 'Operario'
-            END
-            """);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                INSERT OR IGNORE INTO "RolePermissions_new"
+                    ("RoleId", "Permission", "IsEnabled", "CreatedAt", "UpdatedAt", "UpdatedByUserId")
+                SELECT r."Id", rp."Permission", rp."IsEnabled", rp."CreatedAt", rp."UpdatedAt", rp."UpdatedByUserId"
+                FROM "RolePermissions" rp
+                INNER JOIN "Roles" r ON r."Code" = CASE rp."Role"
+                    WHEN 0 THEN 'Operario'
+                    WHEN 1 THEN 'Supervisor'
+                    WHEN 2 THEN 'Admin'
+                    WHEN 3 THEN 'Gerencia'
+                    WHEN 4 THEN 'SuperAdmin'
+                    ELSE 'Operario'
+                END
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db, "DROP TABLE IF EXISTS \"RolePermissions\"");
-        await DatabaseInitializer.TryExecuteAsync(db,
-            "ALTER TABLE \"RolePermissions_new\" RENAME TO \"RolePermissions\"");
+            await db.Database.ExecuteSqlRawAsync("""DROP TABLE IF EXISTS "RolePermissions" """, ct);
+
+            if (afterDropAsync is not null)
+            {
+                await afterDropAsync(ct);
+            }
+
+            await db.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "RolePermissions_new" RENAME TO "RolePermissions" """, ct);
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
     }
 
-    private static async Task RebuildRolePermissionAuditsSqliteAsync(RegNepsDbContext db)
+    internal static async Task RebuildRolePermissionAuditsSqliteAsync(
+        RegNepsDbContext db,
+        Func<CancellationToken, Task>? afterDropAsync = null,
+        CancellationToken ct = default)
     {
         await SeedSystemRolesSqliteAsync(db);
 
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            CREATE TABLE IF NOT EXISTS "RolePermissionAudits_new" (
-                "Id" TEXT NOT NULL CONSTRAINT "PK_RolePermissionAudits" PRIMARY KEY,
-                "RoleId" TEXT NOT NULL,
-                "Permission" INTEGER NOT NULL,
-                "PreviousValue" INTEGER NOT NULL,
-                "NewValue" INTEGER NOT NULL,
-                "ModifiedByUserId" TEXT NULL,
-                "ChangedAt" TEXT NOT NULL
-            )
-            """);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """DROP TABLE IF EXISTS "RolePermissionAudits_new" """, ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE "RolePermissionAudits_new" (
+                    "Id" TEXT NOT NULL CONSTRAINT "PK_RolePermissionAudits" PRIMARY KEY,
+                    "RoleId" TEXT NOT NULL,
+                    "Permission" INTEGER NOT NULL,
+                    "PreviousValue" INTEGER NOT NULL,
+                    "NewValue" INTEGER NOT NULL,
+                    "ModifiedByUserId" TEXT NULL,
+                    "ChangedAt" TEXT NOT NULL
+                )
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            INSERT OR IGNORE INTO "RolePermissionAudits_new"
-                ("Id", "RoleId", "Permission", "PreviousValue", "NewValue", "ModifiedByUserId", "ChangedAt")
-            SELECT a."Id", r."Id", a."Permission", a."PreviousValue", a."NewValue", a."ModifiedByUserId", a."ChangedAt"
-            FROM "RolePermissionAudits" a
-            INNER JOIN "Roles" r ON r."Code" = CASE a."Role"
-                WHEN 0 THEN 'Operario'
-                WHEN 1 THEN 'Supervisor'
-                WHEN 2 THEN 'Admin'
-                WHEN 3 THEN 'Gerencia'
-                WHEN 4 THEN 'SuperAdmin'
-                ELSE 'Operario'
-            END
-            """);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                INSERT OR IGNORE INTO "RolePermissionAudits_new"
+                    ("Id", "RoleId", "Permission", "PreviousValue", "NewValue", "ModifiedByUserId", "ChangedAt")
+                SELECT a."Id", r."Id", a."Permission", a."PreviousValue", a."NewValue", a."ModifiedByUserId", a."ChangedAt"
+                FROM "RolePermissionAudits" a
+                INNER JOIN "Roles" r ON r."Code" = CASE a."Role"
+                    WHEN 0 THEN 'Operario'
+                    WHEN 1 THEN 'Supervisor'
+                    WHEN 2 THEN 'Admin'
+                    WHEN 3 THEN 'Gerencia'
+                    WHEN 4 THEN 'SuperAdmin'
+                    ELSE 'Operario'
+                END
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db, "DROP TABLE IF EXISTS \"RolePermissionAudits\"");
-        await DatabaseInitializer.TryExecuteAsync(db,
-            "ALTER TABLE \"RolePermissionAudits_new\" RENAME TO \"RolePermissionAudits\"");
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            CREATE INDEX IF NOT EXISTS "IX_RolePermissionAudits_ChangedAt"
-            ON "RolePermissionAudits" ("ChangedAt")
-            """);
+            await db.Database.ExecuteSqlRawAsync("""DROP TABLE IF EXISTS "RolePermissionAudits" """, ct);
+
+            if (afterDropAsync is not null)
+            {
+                await afterDropAsync(ct);
+            }
+
+            await db.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "RolePermissionAudits_new" RENAME TO "RolePermissionAudits" """, ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE INDEX IF NOT EXISTS "IX_RolePermissionAudits_ChangedAt"
+                ON "RolePermissionAudits" ("ChangedAt")
+                """, ct);
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Convierte Roles.Id / RolePermissions.RoleId / RolePermissionAudits.RoleId
+    /// de formato N (32 hex) a formato D (con guiones). Idempotente.
+    /// </summary>
+    internal static async Task RepairSqliteUndashedRoleGuidsAsync(
+        RegNepsDbContext db,
+        CancellationToken ct = default)
+    {
+        if (!await DatabaseInitializer.SqliteTableExistsAsync(db, "Roles"))
+        {
+            return;
+        }
+
+        var hexIds = await ListSqliteUndashedRoleIdsAsync(db, ct);
+        if (hexIds.Count == 0)
+        {
+            return;
+        }
+
+        var hasRolePermissions = await DatabaseInitializer.SqliteTableExistsAsync(db, "RolePermissions")
+            && await DatabaseInitializer.SqliteColumnExistsAsync(db, "RolePermissions", "RoleId");
+        var hasAudits = await DatabaseInitializer.SqliteTableExistsAsync(db, "RolePermissionAudits")
+            && await DatabaseInitializer.SqliteColumnExistsAsync(db, "RolePermissionAudits", "RoleId");
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            foreach (var hexId in hexIds)
+            {
+                if (!Guid.TryParseExact(hexId, "N", out var guid))
+                {
+                    continue;
+                }
+
+                var dashed = guid.ToString("D");
+                if (string.Equals(hexId, dashed, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (hasRolePermissions)
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        """UPDATE "RolePermissions" SET "RoleId" = {0} WHERE "RoleId" = {1}""",
+                        dashed, hexId);
+                }
+
+                if (hasAudits)
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        """UPDATE "RolePermissionAudits" SET "RoleId" = {0} WHERE "RoleId" = {1}""",
+                        dashed, hexId);
+                }
+
+                await db.Database.ExecuteSqlRawAsync(
+                    """UPDATE "Roles" SET "Id" = {0} WHERE "Id" = {1}""",
+                    dashed, hexId);
+            }
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
+    }
+
+    private static async Task<List<string>> ListSqliteUndashedRoleIdsAsync(
+        RegNepsDbContext db, CancellationToken ct)
+    {
+        var result = new List<string>();
+        var conn = db.Database.GetDbConnection();
+        var openedHere = conn.State != System.Data.ConnectionState.Open;
+        if (openedHere)
+        {
+            await conn.OpenAsync(ct);
+        }
+
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            // 32 hex sin guiones (formato Guid "N" / lower(hex(randomblob(16)))).
+            cmd.CommandText =
+                """
+                SELECT "Id" FROM "Roles"
+                WHERE length("Id") = 32
+                  AND instr("Id", '-') = 0
+                  AND "Id" GLOB '[0-9a-fA-F]*'
+                """;
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var id = reader.GetString(0);
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    result.Add(id);
+                }
+            }
+        }
+        finally
+        {
+            if (openedHere)
+            {
+                await conn.CloseAsync();
+            }
+        }
+
+        return result;
     }
 
     private static async Task SeedSystemRolesSqliteAsync(RegNepsDbContext db)
     {
         // EF Core en SQLite persiste Guid como TEXT con guiones (formato D).
-        // lower(hex(randomblob(16))) produce 32 hex sin guiones y rompe filtros/FK SQL de EF.
         var now = DateTime.UtcNow.ToString("o");
         foreach (var def in Domain.Constants.SystemRoleCodes.Definitions)
         {
@@ -250,12 +416,21 @@ internal static class RoleSchemaPatches
         }
     }
 
-    private static async Task RebuildRolePermissionsSqlServerAsync(RegNepsDbContext db)
+    private static async Task RebuildRolePermissionsSqlServerAsync(
+        RegNepsDbContext db,
+        CancellationToken ct = default)
     {
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            IF OBJECT_ID(N'[RolePermissions_new]', N'U') IS NULL
-            BEGIN
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                IF OBJECT_ID(N'[RolePermissions_new]', N'U') IS NOT NULL
+                    DROP TABLE [RolePermissions_new];
+                """, ct);
+
+            await db.Database.ExecuteSqlRawAsync(
+                """
                 CREATE TABLE [RolePermissions_new] (
                     [RoleId] uniqueidentifier NOT NULL,
                     [Permission] int NOT NULL,
@@ -265,13 +440,10 @@ internal static class RoleSchemaPatches
                     [UpdatedByUserId] uniqueidentifier NULL,
                     CONSTRAINT [PK_RolePermissions] PRIMARY KEY ([RoleId], [Permission])
                 );
-            END
-            """);
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            IF NOT EXISTS (SELECT 1 FROM [RolePermissions_new])
-            BEGIN
+            await db.Database.ExecuteSqlRawAsync(
+                """
                 INSERT INTO [RolePermissions_new] ([RoleId], [Permission], [IsEnabled], [CreatedAt], [UpdatedAt], [UpdatedByUserId])
                 SELECT r.[Id], rp.[Permission], rp.[IsEnabled], rp.[CreatedAt], rp.[UpdatedAt], rp.[UpdatedByUserId]
                 FROM [RolePermissions] rp
@@ -283,20 +455,36 @@ internal static class RoleSchemaPatches
                     WHEN 4 THEN 'SuperAdmin'
                     ELSE 'Operario'
                 END;
-            END
-            """);
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db, """DROP TABLE [RolePermissions]""");
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """EXEC sp_rename 'RolePermissions_new', 'RolePermissions'""");
+            await db.Database.ExecuteSqlRawAsync("""DROP TABLE [RolePermissions]""", ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """EXEC sp_rename 'RolePermissions_new', 'RolePermissions'""", ct);
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
     }
 
-    private static async Task RebuildRolePermissionAuditsSqlServerAsync(RegNepsDbContext db)
+    private static async Task RebuildRolePermissionAuditsSqlServerAsync(
+        RegNepsDbContext db,
+        CancellationToken ct = default)
     {
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            IF OBJECT_ID(N'[RolePermissionAudits_new]', N'U') IS NULL
-            BEGIN
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                IF OBJECT_ID(N'[RolePermissionAudits_new]', N'U') IS NOT NULL
+                    DROP TABLE [RolePermissionAudits_new];
+                """, ct);
+
+            await db.Database.ExecuteSqlRawAsync(
+                """
                 CREATE TABLE [RolePermissionAudits_new] (
                     [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_RolePermissionAudits] PRIMARY KEY,
                     [RoleId] uniqueidentifier NOT NULL,
@@ -306,13 +494,10 @@ internal static class RoleSchemaPatches
                     [ModifiedByUserId] uniqueidentifier NULL,
                     [ChangedAt] datetime2 NOT NULL
                 );
-            END
-            """);
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            IF NOT EXISTS (SELECT 1 FROM [RolePermissionAudits_new])
-            BEGIN
+            await db.Database.ExecuteSqlRawAsync(
+                """
                 INSERT INTO [RolePermissionAudits_new]
                     ([Id], [RoleId], [Permission], [PreviousValue], [NewValue], [ModifiedByUserId], [ChangedAt])
                 SELECT a.[Id], r.[Id], a.[Permission], a.[PreviousValue], a.[NewValue], a.[ModifiedByUserId], a.[ChangedAt]
@@ -325,16 +510,23 @@ internal static class RoleSchemaPatches
                     WHEN 4 THEN 'SuperAdmin'
                     ELSE 'Operario'
                 END;
-            END
-            """);
+                """, ct);
 
-        await DatabaseInitializer.TryExecuteAsync(db, """DROP TABLE [RolePermissionAudits]""");
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """EXEC sp_rename 'RolePermissionAudits_new', 'RolePermissionAudits'""");
-        await DatabaseInitializer.TryExecuteAsync(db,
-            """
-            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RolePermissionAudits_ChangedAt')
-                CREATE INDEX [IX_RolePermissionAudits_ChangedAt] ON [RolePermissionAudits] ([ChangedAt]);
-            """);
+            await db.Database.ExecuteSqlRawAsync("""DROP TABLE [RolePermissionAudits]""", ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """EXEC sp_rename 'RolePermissionAudits_new', 'RolePermissionAudits'""", ct);
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RolePermissionAudits_ChangedAt')
+                    CREATE INDEX [IX_RolePermissionAudits_ChangedAt] ON [RolePermissionAudits] ([ChangedAt]);
+                """, ct);
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
     }
 }
