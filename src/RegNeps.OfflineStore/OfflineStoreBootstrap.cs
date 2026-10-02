@@ -4,6 +4,7 @@ using RegNeps.OfflineStore.Abstractions;
 using RegNeps.OfflineStore.Device;
 using RegNeps.OfflineStore.Services;
 using RegNeps.OfflineStore.Sync;
+using RegNeps.OfflineStore.Sync.Ux;
 
 namespace RegNeps.OfflineStore;
 
@@ -40,6 +41,8 @@ public static class OfflineStoreBootstrap
         services.AddScoped<OfflineCaptureService>();
         services.AddScoped<IOfflineOutboxQuery, OfflineOutboxQuery>();
         services.AddScoped<ISyncEngine, SyncEngine>();
+        services.AddScoped<OfflineSyncUxService>();
+        services.AddSingleton<ManualSyncGate>();
         return services;
     }
 }

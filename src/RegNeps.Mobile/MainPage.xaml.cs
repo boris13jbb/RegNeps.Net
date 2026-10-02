@@ -82,6 +82,17 @@ public partial class MainPage : ContentPage
         await MainThread.InvokeOnMainThreadAsync(() => Navigation.PushAsync(page));
     }
 
+    /// <summary>
+    /// FASE 2D.3 — re-login: vuelve a la superficie WebView/login existente.
+    /// No almacena credenciales; LocalSession se actualizará vía bridge al login exitoso.
+    /// </summary>
+    public Task ReturnToOnlineLoginAsync()
+    {
+        var currentUrl = ServerEntry.Text
+                         ?? Preferences.Default.Get(ServerUrlPreferenceKey, DefaultServerUrl);
+        return ProbeAndNavigateAsync(currentUrl, persist: false);
+    }
+
     private async Task ProbeAndNavigateAsync(string rawUrl, bool persist)
     {
         var normalized = NormalizeServerUrl(rawUrl);

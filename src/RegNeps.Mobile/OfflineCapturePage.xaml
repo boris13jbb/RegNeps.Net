@@ -7,14 +7,47 @@
 
     <ScrollView>
         <VerticalStackLayout Padding="16" Spacing="12">
+
+            <!-- Conectividad / sesión -->
             <Label x:Name="StatusBanner"
                    FontSize="14"
                    TextColor="#7C2D12"
                    BackgroundColor="#FFEDD5"
                    Padding="10"
-                   Text="Modo offline — los registros quedan pendientes de sincronización." />
+                   Text="Comprobando estado…" />
 
             <Label x:Name="SessionLabel" FontSize="13" TextColor="#444" />
+
+            <!-- Resumen Outbox -->
+            <Border Stroke="#D1D5DB" StrokeThickness="1" Padding="12" BackgroundColor="White">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Resumen de sincronización" FontAttributes="Bold" FontSize="15" />
+                    <Label x:Name="CounterPendingLabel" FontSize="13" Text="Pendientes: 0" />
+                    <Label x:Name="CounterSyncedLabel" FontSize="13" Text="Sincronizadas: 0" />
+                    <Label x:Name="CounterErrorLabel" FontSize="13" Text="Con error: 0" />
+                    <Label x:Name="CounterConflictLabel" FontSize="13" Text="En conflicto: 0" />
+                    <Label x:Name="LastSyncLabel" FontSize="12" TextColor="#6B7280" Text="Última sincronización: —" />
+                    <Label x:Name="SyncStateLabel" FontSize="12" TextColor="#6B7280" Text="" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Button x:Name="SyncNowButton"
+                    Text="Sincronizar ahora"
+                    Clicked="OnSyncClicked"
+                    BackgroundColor="#1E3A5F"
+                    TextColor="White" />
+
+            <Button x:Name="ReloginButton"
+                    Text="Volver a iniciar sesión"
+                    Clicked="OnReloginClicked"
+                    IsVisible="False"
+                    BackgroundColor="#92400E"
+                    TextColor="White" />
+
+            <Label x:Name="MessageLabel" FontSize="13" />
+
+            <!-- Captura Create-only -->
+            <Label Text="Nuevo registro" FontAttributes="Bold" FontSize="16" Margin="0,8,0,0" />
 
             <Label Text="Telar *" FontAttributes="Bold" />
             <Entry x:Name="TelarEntry" Placeholder="Ej. 003" />
@@ -47,16 +80,56 @@
                     BackgroundColor="#294D1E"
                     TextColor="White" />
 
-            <Button Text="Sincronizar ahora"
-                    Clicked="OnSyncClicked"
-                    BackgroundColor="#1E3A5F"
-                    TextColor="White" />
+            <!-- Conflictos -->
+            <Label Text="Conflictos (requieren revisión)"
+                   FontAttributes="Bold"
+                   Margin="0,12,0,0"
+                   FontSize="15" />
+            <Label x:Name="ConflictsEmptyLabel"
+                   FontSize="12"
+                   TextColor="#6B7280"
+                   Text="No hay conflictos pendientes." />
+            <CollectionView x:Name="ConflictsList" HeightRequest="160">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Border Stroke="#F59E0B" StrokeThickness="1" Padding="10" Margin="0,0,0,8" BackgroundColor="#FFFBEB">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="{Binding EntityLabel}" FontAttributes="Bold" />
+                                <Label Text="{Binding OperationTypeLabel}" FontSize="12" TextColor="#92400E" />
+                                <Label Text="{Binding LocalSummary}" FontSize="12" />
+                                <Label Text="{Binding ServerSummary}" FontSize="12" TextColor="#1E3A5F" />
+                                <Label Text="{Binding Reason}" FontSize="12" TextColor="#7C2D12" />
+                                <Label Text="{Binding ActionHint}" FontAttributes="Bold" FontSize="12" TextColor="#B45309" />
+                            </VerticalStackLayout>
+                        </Border>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
 
-            <Label x:Name="OutboxLabel" FontSize="13" TextColor="#444" />
-            <Label x:Name="MessageLabel" FontSize="13" />
+            <!-- Errores SyncError -->
+            <Label Text="Errores de sincronización"
+                   FontAttributes="Bold"
+                   Margin="0,8,0,0"
+                   FontSize="15" />
+            <Label x:Name="ErrorsEmptyLabel"
+                   FontSize="12"
+                   TextColor="#6B7280"
+                   Text="No hay errores permanentes." />
+            <CollectionView x:Name="ErrorsList" HeightRequest="120">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Border Stroke="#DC2626" StrokeThickness="1" Padding="10" Margin="0,0,0,8" BackgroundColor="#FEF2F2">
+                            <VerticalStackLayout Spacing="2">
+                                <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="13" />
+                                <Label Text="{Binding Detail}" FontSize="12" />
+                            </VerticalStackLayout>
+                        </Border>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
 
             <Label Text="Recientes" FontAttributes="Bold" Margin="0,12,0,0" />
-            <CollectionView x:Name="RecentList" HeightRequest="220">
+            <CollectionView x:Name="RecentList" HeightRequest="200">
                 <CollectionView.ItemTemplate>
                     <DataTemplate>
                         <Grid Padding="6" ColumnDefinitions="*,Auto,Auto">
@@ -68,7 +141,16 @@
                 </CollectionView.ItemTemplate>
             </CollectionView>
 
-            <Button Text="Volver / reintentar servidor"
+            <Button Text="Cerrar sesión local"
+                    Clicked="OnLogoutClicked"
+                    BackgroundColor="Transparent"
+                    TextColor="#7C2D12" />
+
+            <Label FontSize="11"
+                   TextColor="#6B7280"
+                   Text="Cerrar sesión no elimina el trabajo offline pendiente." />
+
+            <Button Text="Volver"
                     Clicked="OnBackClicked"
                     BackgroundColor="Transparent"
                     TextColor="#294D1E" />
