@@ -398,4 +398,95 @@ Ver `docs/FASE2D7_CONFLICT_IMPLEMENTATION.md`.
 
 ---
 
-*Diseño 2D.7 + implementación MVP. No avanzar a 2D.8 automáticamente.*
+## Semántica cerrada de resolución
+
+> **KeepServer no es un evento de mutación del servidor; es la cancelación local de una operación conflictiva** (alineación de la réplica SQLite al snapshot/tombstone ya conocido).  
+> No debe llamarse «ChangeLog de resolución»: no existe `SyncChangeLog` para KeepServer porque el servidor no cambia.
+
+### Tabla canónica
+
+| Conflicto | Acción | Mutación servidor |
+|-----------|--------|-------------------|
+| Update/Update | Keep Server | **No** (local: `Cancelled` + réplica = snapshot) |
+| Update/Update | Keep Local | **Sí**, nueva `UpdateRecord` (nuevo `ClientOperationId`, `ExpectedConcurrencyStamp` = stamp servidor) |
+| Update/Update | Edit & Retry | **Sí**, nueva `UpdateRecord` con campos editados (base UX = snapshot servidor) |
+| Update/Delete | Keep Server | **No** (local: tombstone; aceptar eliminación) |
+| Update/Delete | Keep Local | **Prohibido** (no Update sobre EntityId eliminado; sin Restore) |
+| Update/Delete | Edit & Retry | **Prohibido** (conservar datos ⇒ Create futuro con nuevo EntityId, fuera de 2D.7) |
+| Delete/Update | Keep Server | **No** (local: adoptar registro vivo del snapshot) |
+| Delete/Update | Keep Local (Delete explícito) | **Sí**, nueva `DeleteRecord` con stamp servidor actual |
+| Delete/Delete | Keep Server / retry protocolo | Semántica existente (`ENTITY_DELETED` / `Duplicate`); sin UI artificial de Conflict si el contrato ya cierra |
+
+### Keep Server vs mutación servidor
+
+| Tipo | Descripción | 2D.7 |
+|------|-------------|------|
+| **A. Resolver localmente** | Usuario abandona intención local; acepta estado servidor ya materializado | KeepServer |
+| **B. Resolver en servidor** | Nueva decisión de negocio que muta el servidor | Solo vía Keep Local / Edit&Retry (nueva Outbox + Push) |
+
+2D.7 **no** implementa un endpoint ni ChangeLog artificial para A.
+
+### Trazabilidad local de KeepServer (SQLite / `PendingOperation`)
+
+El marcador `Resolved:KeepServer` vive en **`PendingOperation.LastError`** (texto estructurado), no en `LocalNepRecord`, no en log de aplicación, no en servidor.
+
+Reconstrucción mínima desde la fila Cancelled:
+
+| Pregunta | Campo |
+|----------|--------|
+| Qué operación se canceló | `Id`, `ClientOperationId`, `OperationType`, `PayloadJson` |
+| Qué conflicto existió | `LastServerErrorCode`, `ConflictServerConcurrencyStamp`, `ConflictServerSnapshotJson` |
+| Cuándo se resolvió | `LastError` → `at=` (ISO) y `LastAttemptAtUtc` |
+| Quién resolvió | `LastError` → `by=` (UserId de sesión; puede diferir del `UserId` autor de la op si SeesAll) |
+| Qué snapshot se aceptó | `ConflictServerSnapshotJson` + stamp (se conservan al cancelar; no se borran) |
+| Kind | `LastError` → `kind=` y/ o reclasificación |
+
+Esto **no** es auditoría servidor. Las mutaciones Accepted (Keep Local / Edit&Retry) sí dejan `SyncChangeLog` vía protocolo Sync v1 existente.
+
+### Keep Local vs Edit & Retry
+
+Misma maquinaria técnica (cerrar Conflict + nueva Pending + stamp servidor). Diferencia UX/datos:
+
+- **Keep Local:** reaplica la intención local (valores en `LocalNepRecord` / payload conflictivo).  
+- **Edit & Retry:** UI parte del snapshot servidor; el usuario modifica antes de encolar.
+
+Ambos conceptos se mantienen: aportan claridad operativa sin duplicar protocolo.
+
+### Identidad e idempotencia
+
+- Resolución ligada a **`PendingOperation.Id`** (y EntityId para bloqueos), **no** solo a `UserId`.  
+- `AlreadyResolved`: `Status != Conflict` + `LastError` con marcador `Resolved:*` — persiste en SQLite tras reinicio.  
+- `Cancelled` **no** bloquea futuras mutaciones legítimas del mismo EntityId (`ListBlockingOpsAsync` ignora Cancelled).  
+- Toda mutación nueva: **nuevo** `ClientOperationId`; el de la op conflictiva **nunca** se reutiliza.  
+- KeepServer no genera ClientOperationId nuevo (no hay mutación).
+
+### Autorización
+
+| Acción | Local | Servidor |
+|--------|-------|----------|
+| Keep Server | Autor de la op **o** SeesAll (RoleCode UX) | N/A (sin Push) |
+| Keep Local / Edit&Retry | Autor o SeesAll + permiso Edit/Delete UX | Revalida al Push → `Forbidden` / ownership / SeesAll real |
+
+Permiso perdido **antes** de resolver: `Unauthorized` local; Conflict **intacta**.  
+Permiso perdido **después** de encolar Keep Local: Push → `Forbidden` → `SyncError` en la nueva op (Conflict original ya Cancelled; intención recuperable en Payload/local + SyncError).
+
+SeesAll UX usa RoleCode de `LocalSession`; la autoridad real de mutación es el cookie/servidor en Push.
+
+### ConcurrencyStamp
+
+Keep Local / Edit&Retry: `ExpectedConcurrencyStamp = ConflictServerConcurrencyStamp` (stamp servidor al conflictar / Pull). Si el servidor avanza otra vez → nuevo Conflict. Test: `UpdateUpdate_KeepLocal_Second_Conflict_When_Server_Moves_To_Z`.
+
+### Tombstones / Quality
+
+- UpdateDelete KeepServer → `IsDeleted=true`, Synced, sin Pending Update, sin Restore.  
+- QualityLabel no es autoridad: se deriva de Neps (`AlertEvaluator` / `NepsQualityCriteria`).
+
+### Limitaciones cerradas
+
+- Sin Restore / Create-recovery / merge / LWW / change type `ConflictResolved`.  
+- KeepServer sin ChangeLog servidor (por diseño).  
+- SQL Server físico y Android E2E: warnings de entorno.
+
+---
+
+*Cierre semántico 2D.7. No avanzar a 2D.8 automáticamente.*

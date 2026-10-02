@@ -727,6 +727,184 @@ public sealed class OfflineConflictResolutionTests : IAsyncLifetime
         Assert.True(view.AllowedActions.HasFlag(ConflictResolutionActions.EditAndRetry));
     }
 
+    /// <summary>
+    /// KeepServer es resolución local (tipo A): cancela Outbox conflictiva, alinea réplica,
+    /// no encola mutación y no llama Push → no puede generar SyncChangeLog servidor.
+    /// </summary>
+    [Fact]
+    public async Task KeepServer_Is_Local_Only_No_New_Mutation_No_Push()
+    {
+        await using var db = CreateContext();
+        var (capture, _, resolver, engine, api) = await BootAsync(db);
+        var (record, serverId) = await SeedSyncedAsync(capture, db, stamp: "X");
+        var conflictOp = await ForceUpdateConflictAsync(
+            capture, engine, api, db, record.Id, serverId,
+            "LOCAL", 55, "SERVER", 30, "Y");
+        var originalClientOp = conflictOp.ClientOperationId;
+        var snapshotJson = conflictOp.ConflictServerSnapshotJson;
+        Assert.False(string.IsNullOrWhiteSpace(snapshotJson));
+
+        api.PushCalls = 0;
+        await resolver.KeepServerAsync(conflictOp.Id);
+        await engine.SyncAsync();
+
+        Assert.Equal(0, api.PushCalls);
+        Assert.Equal(0, await db.PendingOperations.CountAsync(o =>
+            o.Status == PendingOperationStatus.Pending
+            || o.Status == PendingOperationStatus.Sending
+            || o.Status == PendingOperationStatus.Conflict));
+        // Create Synced + Update Cancelled; ninguna mutación nueva de resolución.
+        Assert.Equal(0, await db.PendingOperations.CountAsync(o =>
+            o.OperationType == OfflineOperationType.UpdateRecord
+            && o.Id != conflictOp.Id
+            && o.Status != PendingOperationStatus.Synced));
+
+        var closed = await db.PendingOperations.SingleAsync(o => o.Id == conflictOp.Id);
+        Assert.Equal(PendingOperationStatus.Cancelled, closed.Status);
+        Assert.Equal(originalClientOp, closed.ClientOperationId);
+        Assert.Equal(snapshotJson, closed.ConflictServerSnapshotJson);
+        Assert.Equal("Y", closed.ConflictServerConcurrencyStamp);
+        Assert.Contains("by=user-a", closed.LastError);
+        Assert.Contains("at=", closed.LastError);
+        Assert.Contains("kind=UpdateUpdate", closed.LastError);
+        Assert.False(string.IsNullOrWhiteSpace(closed.PayloadJson));
+    }
+
+    [Fact]
+    public async Task AlreadyResolved_Persists_After_Restart_And_Does_Not_Block_Entity()
+    {
+        Guid conflictId;
+        Guid localId;
+        Guid serverId;
+        await using (var db = CreateContext())
+        {
+            var (capture, _, resolver, engine, api) = await BootAsync(db);
+            var (record, sid) = await SeedSyncedAsync(capture, db, stamp: "X");
+            localId = record.Id;
+            serverId = sid;
+            var conflictOp = await ForceUpdateConflictAsync(
+                capture, engine, api, db, record.Id, serverId,
+                "LOCAL", 55, "SERVER", 30, "Y");
+            conflictId = conflictOp.Id;
+            await resolver.KeepServerAsync(conflictId);
+        }
+
+        await using (var db2 = CreateContext())
+        {
+            var sessions = new OfflineSessionService(db2, new MemorySecureAuthMaterialStore());
+            var devices = new FileDeviceIdStore(Path.Combine(_dir, "dev-ar"));
+            var resolver = new ConflictResolutionService(db2, sessions, devices);
+            await sessions.UpsertUxSnapshotAsync(
+                "user-a",
+                "alice",
+                "Operario",
+                [
+                    OfflineStoreConstants.CaptureRecordsPermission,
+                    OfflineStoreConstants.EditRecordsPermission,
+                    OfflineStoreConstants.DeleteRecordsPermission,
+                    "ViewRecords"
+                ],
+                "http://localhost:5080",
+                TimeSpan.FromHours(72));
+
+            var again = await resolver.KeepServerAsync(conflictId);
+            Assert.Equal(ConflictResolutionOutcome.AlreadyResolved, again.Outcome);
+
+            // Cancelled no bloquea nueva mutación legítima sobre el mismo EntityId.
+            var capture = new OfflineCaptureService(db2, sessions, devices);
+            var update = await capture.UpdateRecordAsync(new OfflineUpdateRecordRequest
+            {
+                LocalRecordId = localId,
+                Telar = "AFTER",
+                Neps = 19,
+                Tela = "Denim",
+                LoteTrama = "63E26401",
+                Turno = "A"
+            });
+            Assert.Equal(PendingOperationStatus.Pending, update.Operation.Status);
+            Assert.NotEqual(
+                (await db2.PendingOperations.SingleAsync(o => o.Id == conflictId)).ClientOperationId,
+                update.Operation.ClientOperationId);
+            Assert.Equal(serverId, update.Operation.TargetServerRecordId);
+        }
+    }
+
+    [Fact]
+    public async Task NonSeesAll_Cannot_Resolve_Other_Users_Conflict()
+    {
+        await using var db = CreateContext();
+        var (capture, sessions, resolver, engine, api) = await BootAsync(db, userId: "user-a");
+        var (record, serverId) = await SeedSyncedAsync(capture, db, stamp: "X");
+        var conflictOp = await ForceUpdateConflictAsync(
+            capture, engine, api, db, record.Id, serverId,
+            "LOCAL", 55, "SERVER", 30, "Y");
+
+        await sessions.UpsertUxSnapshotAsync(
+            "user-b",
+            "bob",
+            "Operario",
+            [
+                OfflineStoreConstants.EditRecordsPermission,
+                OfflineStoreConstants.DeleteRecordsPermission,
+                "ViewRecords"
+            ],
+            "http://localhost:5080",
+            TimeSpan.FromHours(72));
+
+        Assert.Null(await resolver.GetViewAsync(conflictOp.Id));
+        var result = await resolver.KeepServerAsync(conflictOp.Id);
+        Assert.Equal(ConflictResolutionOutcome.Unauthorized, result.Outcome);
+        Assert.Equal(PendingOperationStatus.Conflict,
+            (await db.PendingOperations.SingleAsync(o => o.Id == conflictOp.Id)).Status);
+    }
+
+    [Fact]
+    public async Task EditAndRetry_Differs_From_KeepLocal_On_Payload_Fields()
+    {
+        await using var db = CreateContext();
+        var (capture, _, resolver, engine, api) = await BootAsync(db);
+        var (record, serverId) = await SeedSyncedAsync(capture, db, stamp: "X");
+        var conflictOp = await ForceUpdateConflictAsync(
+            capture, engine, api, db, record.Id, serverId,
+            "LOCAL", 55, "SERVER", 30, "Y");
+
+        // Keep Local reaplica intención local; Edit&Retry parte de servidor y cambia Telar.
+        // Se valida en dos conflictos independientes (mismo stamp Y).
+        var keepLocal = await resolver.KeepLocalAsync(conflictOp.Id);
+        Assert.Equal(ConflictResolutionOutcome.Success, keepLocal.Outcome);
+        Assert.Contains("LOCAL", (await db.PendingOperations.SingleAsync(o => o.Id == keepLocal.NewOperationId)).PayloadJson);
+        Assert.Equal("Y", keepLocal.ExpectedConcurrencyStamp);
+
+        // Limpia Pending para poder forzar otro Conflict sobre el mismo EntityId.
+        var pending = await db.PendingOperations.SingleAsync(o => o.Id == keepLocal.NewOperationId);
+        pending.Status = PendingOperationStatus.Synced;
+        var local = await db.LocalNepRecords.SingleAsync();
+        local.SyncStatus = LocalSyncStatus.Synced;
+        local.ConcurrencyStamp = "Y";
+        local.Telar = "SERVER";
+        local.Neps = 30;
+        await db.SaveChangesAsync();
+
+        var conflict2 = await ForceUpdateConflictAsync(
+            capture, engine, api, db, local.Id, serverId,
+            "LOCAL2", 40, "SERVER", 30, "Y");
+        var edit = await resolver.EditAndRetryAsync(conflict2.Id, new ConflictEditFields
+        {
+            Telar = "FROM-SERVER-BASE",
+            Neps = 31,
+            Tela = "Denim",
+            LoteTrama = "63E26401",
+            Turno = "B"
+        });
+        Assert.Equal(ConflictResolutionOutcome.Success, edit.Outcome);
+        Assert.NotEqual(conflict2.ClientOperationId, edit.NewClientOperationId);
+        Assert.Equal("Y", edit.ExpectedConcurrencyStamp);
+        Assert.Contains("FROM-SERVER-BASE",
+            (await db.PendingOperations.SingleAsync(o => o.Id == edit.NewOperationId)).PayloadJson);
+        Assert.DoesNotContain("LOCAL2",
+            (await db.PendingOperations.SingleAsync(o => o.Id == edit.NewOperationId)).PayloadJson);
+    }
+
     private static JsonElement StableJson(object value)
     {
         var json = JsonSerializer.Serialize(value, ClientSyncJson.Options);

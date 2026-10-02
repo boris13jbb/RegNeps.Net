@@ -13,7 +13,7 @@ Diseño: `docs/FASE2D7_CONFLICT_DESIGN.md`
 | 1 | Update vs Delete | `KeepLocal`/`EditAndRetry` rechazados en `UpdateDelete`; Keep Server → tombstone local |
 | 2 | Cancel = Keep Server | Una sola API `KeepServerAsync`; textos UX: «Aceptar versión del servidor» / «Aceptar eliminación» / «Descartar mi eliminación» |
 | 3 | Persistencia | Sin migración; kind derivado de `OperationType` + `LastServerErrorCode` + forma JSON snapshot |
-| 4 | Auditoría | Keep Local Accepted → `SyncChangeLog` normal; Keep Server → `PendingOperationStatus.Cancelled` + `Resolved:KeepServer;…` |
+| 4 | Auditoría | Keep Local Accepted → `SyncChangeLog` (mutación servidor). Keep Server → **solo local** (`Cancelled` + `LastError` `Resolved:KeepServer;by=…;at=…;kind=…` + snapshot/stamp/Payload conservados). **No** es ChangeLog de resolución en servidor. |
 | 5 | Autorización | Autor **o** SeesAll (`Admin`/`Supervisor`/`SuperAdmin`/`SuperAdministrador`); Edit/Delete permission UX; Forbidden en Push → `SyncError` |
 | 6 | Delete/Delete | Sin pantalla artificial; clasificado `DeleteDelete`; solo Keep Server |
 
