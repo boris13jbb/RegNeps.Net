@@ -125,12 +125,16 @@ public sealed class OfflineCaptureService
             LocalNepRecordId = localId
         };
 
+        // Una sola transacción SQLite: si el Outbox falla tras el registro local, ambos se revierten.
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         try
         {
             _db.LocalNepRecords.Add(record);
+            await _db.SaveChangesAsync(ct);
+
             _db.PendingOperations.Add(operation);
             await _db.SaveChangesAsync(ct);
+
             await tx.CommitAsync(ct);
         }
         catch

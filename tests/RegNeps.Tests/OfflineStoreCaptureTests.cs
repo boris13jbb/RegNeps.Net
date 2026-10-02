@@ -164,19 +164,55 @@ public class OfflineStoreCaptureTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Failed_Save_Rolls_Back_Both_Entities()
+    public async Task Second_Insert_Failure_Rolls_Back_First_Insert_In_Same_Transaction()
     {
-        await using var db = CreateContext(new FailSavingInterceptor());
-        var (capture, _, _) = await CreateServicesAsync(db);
+        // El primer SaveChanges (LocalNepRecord) entra en la TX; el segundo (PendingOperation) falla.
+        // Tras rollback, la BD no debe conservar el registro local.
+        await using (var db = CreateContext(new FailOnPendingOperationInsertInterceptor()))
+        {
+            var (capture, _, _) = await CreateServicesAsync(db);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            capture.CreateRecordAsync(new OfflineCreateRecordRequest
-            {
-                Telar = "X",
-                Neps = 10
-            }));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                capture.CreateRecordAsync(new OfflineCreateRecordRequest
+                {
+                    Telar = "X",
+                    Neps = 10
+                }));
+        }
 
-        // Nuevo contexto limpio sobre el mismo archivo.
+        await using var verify = CreateContext();
+        Assert.Equal(0, await verify.LocalNepRecords.CountAsync());
+        Assert.Equal(0, await verify.PendingOperations.CountAsync());
+    }
+
+    [Fact]
+    public async Task DbTrigger_Rejecting_Outbox_Also_Rolls_Back_Local_Record()
+    {
+        await using (var setup = CreateContext())
+        {
+            await CreateServicesAsync(setup);
+            // Fuerza fallo del segundo INSERT a nivel SQLite (no solo interceptor).
+            await setup.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_reject_pending_ops
+                BEFORE INSERT ON PendingOperations
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced outbox reject');
+                END;
+                """);
+        }
+
+        await using (var db = CreateContext())
+        {
+            var (capture, _, _) = await CreateServicesAsync(db);
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                capture.CreateRecordAsync(new OfflineCreateRecordRequest
+                {
+                    Telar = "Y",
+                    Neps = 11
+                }));
+        }
+
         await using var verify = CreateContext();
         Assert.Equal(0, await verify.LocalNepRecords.CountAsync());
         Assert.Equal(0, await verify.PendingOperations.CountAsync());
@@ -251,17 +287,16 @@ public class OfflineStoreCaptureTests : IAsyncLifetime
             o => Assert.Equal(PendingOperationStatus.Pending, o.Status));
     }
 
-    private sealed class FailSavingInterceptor : SaveChangesInterceptor
+    /// <summary>Permite el SaveChanges del LocalNepRecord; falla al persistir PendingOperation.</summary>
+    private sealed class FailOnPendingOperationInsertInterceptor : SaveChangesInterceptor
     {
         public override InterceptionResult<int> SavingChanges(
             DbContextEventData eventData,
             InterceptionResult<int> result)
         {
-            // Fallar solo cuando hay captura (LocalNepRecord), no al guardar sesión.
-            if (eventData.Context?.ChangeTracker.Entries()
-                    .Any(e => e.Entity is RegNeps.OfflineStore.Entities.LocalNepRecord) == true)
+            if (HasAddedPendingOperation(eventData))
             {
-                throw new InvalidOperationException("forced persistence failure");
+                throw new InvalidOperationException("forced outbox insert failure");
             }
 
             return base.SavingChanges(eventData, result);
@@ -272,13 +307,17 @@ public class OfflineStoreCaptureTests : IAsyncLifetime
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            if (eventData.Context?.ChangeTracker.Entries()
-                    .Any(e => e.Entity is RegNeps.OfflineStore.Entities.LocalNepRecord) == true)
+            if (HasAddedPendingOperation(eventData))
             {
-                throw new InvalidOperationException("forced persistence failure");
+                throw new InvalidOperationException("forced outbox insert failure");
             }
 
             return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
+
+        private static bool HasAddedPendingOperation(DbContextEventData eventData) =>
+            eventData.Context?.ChangeTracker.Entries()
+                .Any(e => e.Entity is RegNeps.OfflineStore.Entities.PendingOperation
+                          && e.State == EntityState.Added) == true;
     }
 }
