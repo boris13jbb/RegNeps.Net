@@ -1,5 +1,6 @@
 using System.Globalization;
 using RegNeps.Application.Abstractions;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
@@ -60,9 +61,11 @@ public sealed class AnalyticsService
 
         var total = records.Count;
         var avg = total == 0 ? 0 : records.Average(r => r.Neps);
-        var criticos = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Critico);
-        var advertencias = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Advertencia);
-        var normales = Math.Max(0, total - criticos - advertencias);
+        var criticos = records.Count(r =>
+            NepsQualityCriteria.IsCriticalNotificationLevel(AlertEvaluator.GetLevel(r.Neps, config)));
+        var menciones = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Mention);
+        var ok = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Ok);
+        var normales = ok;
 
         var byPeriod = BuildTimeSeries(records, grouping);
 
@@ -102,7 +105,7 @@ public sealed class AnalyticsService
             TotalNeps = records.Sum(r => r.Neps),
             TotalMts = records.Sum(r => r.MtsCalculados),
             CriticalCount = criticos,
-            WarningCount = advertencias,
+            WarningCount = menciones,
             NormalCount = normales,
             QualityIndex = total == 0 ? 100 : 100 - (criticos * 100.0 / total),
             TimeGrouping = grouping,
@@ -138,8 +141,9 @@ public sealed class AnalyticsService
             list.Sum(x => x.MtsCalculados),
             list.Count,
             list.Average(x => x.Neps),
-            list.Count(x => AlertEvaluator.GetLevel(x.Neps, config) == AlertLevel.Critico),
-            list.Count(x => AlertEvaluator.GetLevel(x.Neps, config) == AlertLevel.Advertencia));
+            list.Count(x => NepsQualityCriteria.IsCriticalNotificationLevel(
+                AlertEvaluator.GetLevel(x.Neps, config))),
+            list.Count(x => AlertEvaluator.GetLevel(x.Neps, config) == AlertLevel.Mention));
     }
 
     private static List<TimeSeriesPoint> BuildTimeSeries(

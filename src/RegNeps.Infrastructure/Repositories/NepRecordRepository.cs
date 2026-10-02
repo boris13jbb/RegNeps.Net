@@ -176,36 +176,31 @@ public sealed class NepRecordRepository : INepRecordRepository
                 : query.Where(r => r.AccionCorrectiva == null || r.AccionCorrectiva == string.Empty);
         }
 
+        // Calificación oficial fija (NepsQualityCriteria). AlertasActivas no afecta filtros.
         if (filters.AlertLevel is not null || filters.SoloPendientes)
         {
-            var config = await db.AlertConfigs.AsNoTracking().FirstOrDefaultAsync(ct) ?? new AlertConfig();
-            if (config.AlertasActivas)
+            var okUpper = NepsQualityCriteria.OkNepsExclusiveUpper;
+            var mentionUpper = NepsQualityCriteria.MentionNepsExclusiveUpper;
+            var criticalUpper = NepsQualityCriteria.CriticalAdjustmentNepsExclusiveUpper;
+
+            if (filters.AlertLevel is not null)
             {
-                var normalExclusive = config.LimiteNormalMax + 0.5;
-                var warningExclusive = config.LimiteAdvertenciaMax + 0.5;
-
-                if (filters.AlertLevel is not null)
+                query = filters.AlertLevel.Value switch
                 {
-                    query = filters.AlertLevel.Value switch
-                    {
-                        AlertLevel.Normal => query.Where(r => r.Neps < normalExclusive),
-                        AlertLevel.Advertencia => query.Where(r =>
-                            r.Neps >= normalExclusive && r.Neps < warningExclusive),
-                        AlertLevel.Critico => query.Where(r => r.Neps >= warningExclusive),
-                        _ => query
-                    };
-                }
-
-                if (filters.SoloPendientes)
-                {
-                    query = query.Where(r =>
-                        !r.RevisadoPorSupervisor && r.Neps >= normalExclusive);
-                }
+                    AlertLevel.Ok => query.Where(r => r.Neps < okUpper),
+                    AlertLevel.Mention => query.Where(r =>
+                        r.Neps >= okUpper && r.Neps < mentionUpper),
+                    AlertLevel.CriticalAdjustment => query.Where(r =>
+                        r.Neps >= mentionUpper && r.Neps < criticalUpper),
+                    AlertLevel.SecondQuality => query.Where(r => r.Neps >= criticalUpper),
+                    _ => query
+                };
             }
-            else if (filters.AlertLevel is AlertLevel.Advertencia or AlertLevel.Critico
-                     || filters.SoloPendientes)
+
+            if (filters.SoloPendientes)
             {
-                return Array.Empty<NepRecord>();
+                query = query.Where(r =>
+                    !r.RevisadoPorSupervisor && r.Neps >= okUpper);
             }
         }
 

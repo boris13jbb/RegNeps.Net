@@ -26,7 +26,7 @@ public sealed class SpreadsheetFormulaGuardTests
     [Fact]
     public void Csv_Escapes_Formula_Text_But_Keeps_Negative_Neps()
     {
-        var config = new AlertConfig { LimiteNormalMax = 30, LimiteAdvertenciaMax = 60 };
+        var config = new AlertConfig { LimiteNormalMax = 18, LimiteAdvertenciaMax = 45 };
         var records = new List<NepRecord>
         {
             new()
@@ -68,7 +68,7 @@ public sealed class SpreadsheetFormulaGuardTests
     [Fact]
     public void Excel_Keeps_Negative_Neps_And_Mts_As_Numbers()
     {
-        var config = new AlertConfig { LimiteNormalMax = 30, LimiteAdvertenciaMax = 60 };
+        var config = new AlertConfig { LimiteNormalMax = 18, LimiteAdvertenciaMax = 45 };
         var records = new List<NepRecord>
         {
             new()

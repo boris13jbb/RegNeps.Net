@@ -255,7 +255,9 @@ public sealed class NepRecordService
             alertFailed = true;
         }
 
-        if (!alreadySaved && level == AlertLevel.Critico)
+        if (!alreadySaved
+            && level is not null
+            && NepsQualityCriteria.IsCriticalNotificationLevel(level.Value))
         {
             await TryPublishCriticalAlertAsync(saved, ct);
         }
@@ -274,7 +276,7 @@ public sealed class NepRecordService
         try
         {
             var eval = await EvaluateAsync(record.Neps, record.Telar, ct);
-            if (eval.Level == AlertLevel.Critico)
+            if (NepsQualityCriteria.IsCriticalNotificationLevel(eval.Level))
             {
                 await TryPublishCriticalAlertAsync(record, ct);
             }
@@ -407,7 +409,8 @@ public sealed class NepRecordService
         var config = await _alertConfig.GetAsync(ct);
         var level = AlertEvaluator.GetLevel(neps, config);
         var reincidencia = false;
-        if (!string.IsNullOrWhiteSpace(telar) && level == AlertLevel.Critico)
+        if (!string.IsNullOrWhiteSpace(telar)
+            && NepsQualityCriteria.IsCriticalNotificationLevel(level))
         {
             var recent = await _records.GetRecentAsync(500, ct);
             reincidencia = AlertEvaluator.HasCriticalRecurrence(recent, telar, config);
@@ -555,8 +558,9 @@ public sealed class NepRecordService
         var total = records.Count;
         var sumNeps = records.Sum(r => r.Neps);
         var sumMts = records.Sum(r => r.MtsCalculados);
-        var criticos = records.Count(r => r.GetAlertLevel(config) == AlertLevel.Critico);
-        var advertencias = records.Count(r => r.GetAlertLevel(config) == AlertLevel.Advertencia);
+        var criticos = records.Count(r =>
+            NepsQualityCriteria.IsCriticalNotificationLevel(r.GetAlertLevel(config)));
+        var menciones = records.Count(r => r.GetAlertLevel(config) == AlertLevel.Mention);
         var pendientes = records.Count(r => r.RequiereSeguimiento(config));
 
         return new DashboardSummary
@@ -565,7 +569,7 @@ public sealed class NepRecordService
             PromedioNeps = total == 0 ? 0 : sumNeps / total,
             TotalMts = sumMts,
             Criticos = criticos,
-            Advertencias = advertencias,
+            Advertencias = menciones,
             PendientesRevision = pendientes,
             Ultimos = records.Take(10).ToList()
         };
@@ -584,7 +588,7 @@ public sealed class NepRecordService
         var config = await _alertConfig.GetAsync(ct);
         var all = await QueryAsync(new RecordFilters(), actor, RecordQueryScope.Default, 1000, ct);
         return all
-            .Where(r => r.GetAlertLevel(config) != AlertLevel.Normal)
+            .Where(r => NepsQualityCriteria.RequiresFollowUp(r.GetAlertLevel(config)))
             .OrderByDescending(r => r.GetAlertLevel(config))
             .ThenByDescending(r => r.CreatedAt)
             .ToList();

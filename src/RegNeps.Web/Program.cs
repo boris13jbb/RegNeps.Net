@@ -279,7 +279,7 @@ app.MapGet("/api/export/analytics/{format}", async (
     };
 
     if (!string.IsNullOrWhiteSpace(alerta) &&
-        Enum.TryParse<AlertLevel>(alerta, ignoreCase: true, out var alertLevel))
+        AlertLevelExtensions.TryParseFilter(alerta, out var alertLevel))
     {
         filters.AlertLevel = alertLevel;
     }

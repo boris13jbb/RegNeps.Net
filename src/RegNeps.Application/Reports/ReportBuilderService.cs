@@ -100,10 +100,11 @@ public sealed class ReportBuilderService
         {
             switch (AlertEvaluator.GetLevel(r.Neps, config))
             {
-                case AlertLevel.Critico:
+                case AlertLevel.CriticalAdjustment:
+                case AlertLevel.SecondQuality:
                     critical++;
                     break;
-                case AlertLevel.Advertencia:
+                case AlertLevel.Mention:
                     warning++;
                     break;
                 default:
@@ -166,10 +167,11 @@ public sealed class ReportBuilderService
         {
             switch (AlertEvaluator.GetLevel(r.Neps, config))
             {
-                case AlertLevel.Critico:
+                case AlertLevel.CriticalAdjustment:
+                case AlertLevel.SecondQuality:
                     critical++;
                     break;
-                case AlertLevel.Advertencia:
+                case AlertLevel.Mention:
                     warning++;
                     break;
                 default:

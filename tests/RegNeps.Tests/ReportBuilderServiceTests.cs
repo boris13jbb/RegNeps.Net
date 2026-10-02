@@ -9,8 +9,8 @@ public class ReportBuilderServiceTests
 {
     private static AlertConfig DefaultConfig() => new()
     {
-        LimiteNormalMax = 30,
-        LimiteAdvertenciaMax = 60
+        LimiteNormalMax = 18,
+        LimiteAdvertenciaMax = 45
     };
 
     [Fact]
@@ -19,9 +19,9 @@ public class ReportBuilderServiceTests
         var config = DefaultConfig();
         var records = new List<NepRecord>
         {
-            MakeRecord("003", 30, AlertLevel.Normal),
-            MakeRecord("003", 50, AlertLevel.Advertencia),
-            MakeRecord("104", 70, AlertLevel.Critico),
+            MakeRecord("003", 18, AlertLevel.Ok),
+            MakeRecord("003", 30, AlertLevel.Mention),
+            MakeRecord("104", 70, AlertLevel.SecondQuality),
         };
 
         var result = ReportBuilderService.Build(records, config, new ReportBuilderOptions
@@ -34,8 +34,8 @@ public class ReportBuilderServiceTests
 
         var g003 = result.Groups.Single(g => g.PrimaryKey == "003");
         Assert.Equal(2, g003.Count);
-        Assert.Equal(80, g003.SumNeps);
-        Assert.Equal(40, g003.AverageNeps);
+        Assert.Equal(48, g003.SumNeps);
+        Assert.Equal(24, g003.AverageNeps);
         Assert.Equal(1, g003.NormalCount);
         Assert.Equal(1, g003.WarningCount);
         Assert.Equal(0, g003.CriticalCount);
@@ -54,9 +54,9 @@ public class ReportBuilderServiceTests
         var config = DefaultConfig();
         var records = new List<NepRecord>
         {
-            MakeRecord("003", 20, AlertLevel.Normal, turno: "A"),
-            MakeRecord("003", 40, AlertLevel.Advertencia, turno: "B"),
-            MakeRecord("104", 30, AlertLevel.Normal, turno: "A"),
+            MakeRecord("003", 18, AlertLevel.Ok, turno: "A"),
+            MakeRecord("003", 30, AlertLevel.Mention, turno: "B"),
+            MakeRecord("104", 10, AlertLevel.Ok, turno: "A"),
         };
 
         var result = ReportBuilderService.Build(records, config, new ReportBuilderOptions
@@ -77,10 +77,10 @@ public class ReportBuilderServiceTests
         var config = DefaultConfig();
         var records = new List<NepRecord>
         {
-            MakeRecord("003", 70, AlertLevel.Critico),
-            MakeRecord("003", 70, AlertLevel.Critico),
-            MakeRecord("104", 20, AlertLevel.Normal),
-            MakeRecord("104", 20, AlertLevel.Normal),
+            MakeRecord("003", 70, AlertLevel.SecondQuality),
+            MakeRecord("003", 50, AlertLevel.CriticalAdjustment),
+            MakeRecord("104", 18, AlertLevel.Ok),
+            MakeRecord("104", 10, AlertLevel.Ok),
         };
 
         var result = ReportBuilderService.Build(records, config, new ReportBuilderOptions
@@ -99,9 +99,9 @@ public class ReportBuilderServiceTests
         var config = DefaultConfig();
         var records = new List<NepRecord>
         {
-            MakeRecord("003", 18, AlertLevel.Normal),
-            MakeRecord("104", 54, AlertLevel.Advertencia),
-            MakeRecord("801", 36, AlertLevel.Normal),
+            MakeRecord("003", 18, AlertLevel.Ok),
+            MakeRecord("104", 54, AlertLevel.CriticalAdjustment),
+            MakeRecord("801", 36, AlertLevel.Mention),
         };
 
         var result = ReportBuilderService.Build(records, config, new ReportBuilderOptions { TelarRankingTake = 3 });
@@ -118,7 +118,7 @@ public class ReportBuilderServiceTests
     public void Build_Uses_MtsCalculados_From_Records()
     {
         var config = DefaultConfig();
-        var records = new List<NepRecord> { MakeRecord("003", 9, AlertLevel.Normal) };
+        var records = new List<NepRecord> { MakeRecord("003", 9, AlertLevel.Ok) };
 
         var result = ReportBuilderService.Build(records, config, new ReportBuilderOptions
         {
@@ -134,7 +134,7 @@ public class ReportBuilderServiceTests
     public void Build_Rejects_Duplicate_Dimensions()
     {
         var config = DefaultConfig();
-        var records = new List<NepRecord> { MakeRecord("003", 9, AlertLevel.Normal) };
+        var records = new List<NepRecord> { MakeRecord("003", 9, AlertLevel.Ok) };
 
         Assert.Throws<ArgumentException>(() =>
             ReportBuilderService.Build(records, config, new ReportBuilderOptions

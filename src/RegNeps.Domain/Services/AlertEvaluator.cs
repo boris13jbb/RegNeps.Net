@@ -1,30 +1,23 @@
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 
 namespace RegNeps.Domain.Services;
 
-/// <summary>Evalúa nivel de alerta (paridad AlertService Flutter).</summary>
+/// <summary>
+/// Evalúa calificación de calidad NEPS y reglas de reincidencia.
+/// La calificación usa <see cref="NepsQualityCriteria"/> (no lee umbrales legacy 30/60).
+/// </summary>
 public static class AlertEvaluator
 {
-    public static AlertLevel GetLevel(double neps, AlertConfig config)
+    /// <summary>
+    /// Calificación oficial del registro. <paramref name="config"/> se ignora para umbrales
+    /// (compatibilidad de firma); la fuente de verdad es <see cref="NepsQualityCriteria"/>.
+    /// </summary>
+    public static AlertLevel GetLevel(double neps, AlertConfig? config = null)
     {
-        if (!config.AlertasActivas)
-        {
-            return AlertLevel.Normal;
-        }
-
-        var value = (int)Math.Round(neps, MidpointRounding.AwayFromZero);
-        if (value <= config.LimiteNormalMax)
-        {
-            return AlertLevel.Normal;
-        }
-
-        if (value <= config.LimiteAdvertenciaMax)
-        {
-            return AlertLevel.Advertencia;
-        }
-
-        return AlertLevel.Critico;
+        _ = config;
+        return NepsQualityCriteria.ClassifyByNeps(neps);
     }
 
     public static IReadOnlyList<string> GetRecommendations(AlertLevel level, bool reincidencia = false)
@@ -32,19 +25,24 @@ public static class AlertEvaluator
         var list = new List<string>();
         switch (level)
         {
-            case AlertLevel.Advertencia:
+            case AlertLevel.Mention:
                 list.Add("Verificar tensión y alimentación de trama.");
                 list.Add("Revisar limpieza del telar y zona de trama.");
                 list.Add("Registrar observación y notificar al supervisor si persiste.");
                 break;
-            case AlertLevel.Critico:
+            case AlertLevel.CriticalAdjustment:
                 list.Add("Detener o reducir velocidad según procedimiento de planta.");
                 list.Add("Inspeccionar trama, peines y zona de inserción.");
                 list.Add("Aplicar acción correctiva y marcar revisión de supervisor.");
                 list.Add("Notificar al supervisor de inmediato.");
                 break;
+            case AlertLevel.SecondQuality:
+                list.Add("Clasificar producción según procedimiento de 2da calidad.");
+                list.Add("Detener o aislar el telar según procedimiento de planta.");
+                list.Add("Aplicar acción correctiva y notificar al supervisor de inmediato.");
+                break;
             default:
-                list.Add("Medición dentro de rango normal. Continuar monitoreo rutinario.");
+                list.Add("Medición dentro de rango OK. Continuar monitoreo rutinario.");
                 break;
         }
 
@@ -72,7 +70,7 @@ public static class AlertEvaluator
         var criticals = records
             .Where(r => string.Equals(r.Telar, telar, StringComparison.OrdinalIgnoreCase))
             .Where(r => r.CreatedAt >= windowStart && r.CreatedAt <= now)
-            .Where(r => GetLevel(r.Neps, config) == AlertLevel.Critico)
+            .Where(r => NepsQualityCriteria.IsCriticalNotificationLevel(GetLevel(r.Neps, config)))
             .OrderBy(r => r.CreatedAt)
             .ToList();
 

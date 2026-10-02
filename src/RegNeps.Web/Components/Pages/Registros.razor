@@ -107,9 +107,10 @@ else
                 <label class="rn-field-label" for="filter-alerta">Alerta</label>
                 <select id="filter-alerta" class="form-select form-select-sm" @bind="_filterAlert">
                     <option value="">Todas</option>
-                    <option value="Normal">Normal</option>
-                    <option value="Advertencia">Advertencia</option>
-                    <option value="Critico">Crítico</option>
+                    <option value="Ok">OK</option>
+                    <option value="Mention">Mención</option>
+                    <option value="CriticalAdjustment">Crítico - Realizar Ajuste</option>
+                    <option value="SecondQuality">2da Calidad</option>
                 </select>
             </div>
             <div class="col-6 col-md-1">
@@ -281,7 +282,7 @@ else
                                 {
                                     <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenEdit(r)">Editar</button>
                                 }
-                                @if (_canCorrectInUi && level != AlertLevel.Normal)
+                                @if (_canCorrectInUi && level != AlertLevel.Ok)
                                 {
                                     <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenCorrective(r)">Acción</button>
                                 }
@@ -886,7 +887,7 @@ else
             _config = await AlertConfigRepository.GetAsync();
             AlertLevel? alert = null;
             if (!string.IsNullOrEmpty(_filterAlert) &&
-                Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
+                AlertLevelExtensions.TryParseFilter(_filterAlert, out var parsed))
             {
                 alert = parsed;
             }
@@ -1212,9 +1213,10 @@ else
 
     private static string BadgeTone(AlertLevel level) => level switch
     {
-        AlertLevel.Normal => "normal",
-        AlertLevel.Advertencia => "warning",
-        AlertLevel.Critico => "critical",
+        AlertLevel.Ok => "normal",
+        AlertLevel.Mention => "warning",
+        AlertLevel.CriticalAdjustment => "critical",
+        AlertLevel.SecondQuality => "critical",
         _ => "muted"
     };
 }

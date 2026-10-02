@@ -47,8 +47,9 @@ public sealed class NepRecord
     public double MtsCalculados => Neps / NepsConstants.TestLengthM;
 
     public AlertLevel GetAlertLevel(AlertConfig? config = null) =>
-        AlertEvaluator.GetLevel(Neps, config ?? new AlertConfig());
+        AlertEvaluator.GetLevel(Neps, config);
 
     public bool RequiereSeguimiento(AlertConfig? config = null) =>
-        GetAlertLevel(config) != AlertLevel.Normal && !RevisadoPorSupervisor;
+        NepsQualityCriteria.RequiresFollowUp(GetAlertLevel(config)) && !RevisadoPorSupervisor;
 }
+

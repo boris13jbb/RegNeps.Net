@@ -16,7 +16,7 @@ public sealed class AnalyticsReportBuilderParityTests
     [Fact]
     public async Task Same_Dataset_Yields_Same_Global_Totals()
     {
-        var config = new AlertConfig { LimiteNormalMax = 30, LimiteAdvertenciaMax = 60 };
+        var config = new AlertConfig { LimiteNormalMax = 18, LimiteAdvertenciaMax = 45 };
         var records = new List<NepRecord>
         {
             Make("003", 20),
