@@ -257,6 +257,71 @@ window.regnepsUi = (function () {
             } catch (_) {
                 /* storage no disponible */
             }
+        },
+
+        /** Toast breve para alertas en tiempo real (centro de notificaciones). */
+        showToast: function (message, durationMs) {
+            var text = message || '';
+            var ms = typeof durationMs === 'number' && durationMs > 0 ? durationMs : 5000;
+            var host = document.getElementById('rn-toast-host');
+            if (!host) {
+                host = document.createElement('div');
+                host.id = 'rn-toast-host';
+                host.className = 'rn-toast-host';
+                host.setAttribute('aria-live', 'polite');
+                host.setAttribute('aria-atomic', 'true');
+                document.body.appendChild(host);
+            }
+
+            var el = document.createElement('div');
+            el.className = 'rn-toast';
+            el.setAttribute('role', 'status');
+            el.textContent = text;
+            host.appendChild(el);
+
+            window.setTimeout(function () {
+                try {
+                    el.classList.add('is-hiding');
+                    window.setTimeout(function () {
+                        if (el.parentNode) {
+                            el.parentNode.removeChild(el);
+                        }
+                    }, 280);
+                } catch (_) {
+                    /* ignore */
+                }
+            }, ms);
+        },
+
+        getAnalyticsPreferences: function (userId) {
+            if (!userId) {
+                return null;
+            }
+            try {
+                var raw = localStorage.getItem('regneps.analytics.prefs.' + userId);
+                if (!raw) {
+                    return null;
+                }
+                return JSON.parse(raw);
+            } catch (_) {
+                return null;
+            }
+        },
+
+        setAnalyticsPreferences: function (userId, prefs) {
+            if (!userId) {
+                return;
+            }
+            try {
+                var key = 'regneps.analytics.prefs.' + userId;
+                if (!prefs) {
+                    localStorage.removeItem(key);
+                    return;
+                }
+                localStorage.setItem(key, JSON.stringify(prefs));
+            } catch (_) {
+                /* storage lleno o modo privado */
+            }
         }
     };
 })();

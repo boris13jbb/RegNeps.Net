@@ -1,3 +1,4 @@
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
 
@@ -13,10 +14,19 @@ public sealed record RecordActor(
     string DisplayName,
     AppUserRole Role,
     bool IsSuperAdmin,
-    string? ExternalUserId = null)
+    string? ExternalUserId = null,
+    string? RoleCode = null,
+    bool? SeesAllRecordsOverride = null)
 {
     public AppUserRole EffectiveRole =>
         IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
+
+    public string EffectiveRoleCode =>
+        IsSuperAdmin
+            ? SystemRoleCodes.SuperAdmin
+            : string.IsNullOrWhiteSpace(RoleCode)
+                ? SystemRoleCodes.FromEnum(Role)
+                : RoleCode.Trim();
 
     /// <summary>
     /// Consulta la matriz inicial. Los servicios de aplicación deben validar con
@@ -25,9 +35,9 @@ public sealed record RecordActor(
     public bool Has(AppPermission permission) =>
         RolePermissions.Has(Role, IsSuperAdmin, true, permission);
 
-    /// <summary>Operario solo ve sus registros; el resto ve el workspace.</summary>
     public bool SeesAllRecords =>
-        EffectiveRole is not AppUserRole.Operario;
+        SeesAllRecordsOverride
+        ?? EffectiveRole is not AppUserRole.Operario;
 
     public static RecordActor Create(
         string? userId,
@@ -35,7 +45,9 @@ public sealed record RecordActor(
         string displayName,
         AppUserRole role,
         bool isSuperAdmin,
-        string? externalUserId = null)
+        string? externalUserId = null,
+        string? roleCode = null,
+        bool? seesAllRecords = null)
     {
         if (string.IsNullOrWhiteSpace(userId))
         {
@@ -49,7 +61,9 @@ public sealed record RecordActor(
             displayName ?? username ?? "",
             role,
             isSuperAdmin,
-            string.IsNullOrWhiteSpace(externalUserId) ? null : externalUserId.Trim());
+            string.IsNullOrWhiteSpace(externalUserId) ? null : externalUserId.Trim(),
+            string.IsNullOrWhiteSpace(roleCode) ? null : roleCode.Trim(),
+            seesAllRecords);
     }
 }
 

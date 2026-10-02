@@ -293,6 +293,18 @@ else
                                 disabled="@(_saving || _sharing || _sessionReportBusy || _selectedRecordIds.Count == 0)">
                             Compartir seleccionados (@_selectedRecordIds.Count)
                         </button>
+                        <button type="button"
+                                class="capture-action-btn"
+                                @onclick="ShareTodayAsync"
+                                disabled="@(_saving || _sharing || _sessionReportBusy)">
+                            Compartir hoy
+                        </button>
+                        <button type="button"
+                                class="capture-action-btn"
+                                @onclick="SelectAllTodayAsync"
+                                disabled="@(_saving || _sharing || _sessionReportBusy)">
+                            Seleccionar todos los de hoy
+                        </button>
                     </div>
                 }
             </div>
@@ -434,7 +446,10 @@ else
                            @bind="_sessionReportName"
                            maxlength="120"
                            disabled="@_sessionReportBusy" />
-                    <p class="capture-hint mb-0 mt-2">Se guardará solo la sesión de captura actual (@_sessionRecords.Count registros).</p>
+                    <p class="capture-hint mb-0 mt-2">
+                        Se guardarán solo los registros pendientes de esta sesión
+                        (@PendingReportCount pendientes; no se reincluyen los ya guardados en un informe).
+                    </p>
                 </ChildContent>
                 <Footer>
                     <button type="button" class="capture-action-btn" @onclick="CloseSaveSessionModal" disabled="@_sessionReportBusy">
@@ -459,7 +474,12 @@ else
         {
             <AppModal Title="Compartir sesión" OnClose="CloseShareSessionModal" CloseOnBackdrop="true">
                 <ChildContent>
-                    <p class="mb-3">Exporte los registros de esta sesión de captura (@_sessionRecords.Count).</p>
+                    <p class="mb-2">Exporte los registros de esta sesión de captura (@_sessionRecords.Count).</p>
+                    <label class="capture-label" for="cap-share-session-style">Estilo</label>
+                    <select id="cap-share-session-style" class="form-select capture-input mb-3" @bind="_shareStyle" disabled="@_sessionReportBusy">
+                        <option value="completo">Completo</option>
+                        <option value="clasico">Clásico</option>
+                    </select>
                     <div class="capture-share-format-grid">
                         <button type="button" class="capture-record-action" @onclick='() => ShareSessionExportAsync("csv")' disabled="@_sessionReportBusy">CSV</button>
                         <button type="button" class="capture-record-action" @onclick='() => ShareSessionExportAsync("excel")' disabled="@_sessionReportBusy">Excel</button>
@@ -482,7 +502,7 @@ else
         {
             <AppModal Title="@_shareExportTitle" OnClose="CloseShareExportModal" CloseOnBackdrop="true">
                 <ChildContent>
-                    <p class="mb-3">
+                    <p class="mb-2">
                         @if (_shareExportIds.Count == 1)
                         {
                             <span>Elija el formato del archivo. Se incluirá solo este registro.</span>
@@ -492,6 +512,11 @@ else
                             <span>Elija el formato del archivo. Se incluirán exactamente @_shareExportIds.Count registros seleccionados.</span>
                         }
                     </p>
+                    <label class="capture-label" for="cap-share-export-style">Estilo</label>
+                    <select id="cap-share-export-style" class="form-select capture-input mb-3" @bind="_shareStyle" disabled="@_sharing">
+                        <option value="completo">Completo</option>
+                        <option value="clasico">Clásico</option>
+                    </select>
                     <div class="capture-share-format-grid">
                         <button type="button" class="capture-record-action" @onclick='() => ShareExportByIdsAsync("pdf")' disabled="@_sharing">PDF</button>
                         <button type="button" class="capture-record-action" @onclick='() => ShareExportByIdsAsync("excel")' disabled="@_sharing">Excel</button>
@@ -506,6 +531,35 @@ else
                     <button type="button" class="capture-action-btn" @onclick="CloseShareExportModal" disabled="@_sharing">
                         Cerrar
                     </button>
+                </Footer>
+            </AppModal>
+        }
+
+        @if (_confirmHighNeps)
+        {
+            <AppModal Title="Valor inusualmente alto" OnClose="() => _confirmHighNeps = false" CloseOnBackdrop="true">
+                <ChildContent>
+                    <p class="mb-0">El valor @_pendingNeps.ToString("0.##") es inusualmente alto. ¿Registrar de todos modos?</p>
+                </ChildContent>
+                <Footer>
+                    <button type="button" class="capture-action-btn" @onclick="() => _confirmHighNeps = false">Cancelar</button>
+                    <button type="button" class="capture-submit capture-submit--modal" @onclick="ConfirmHighNepsAndContinueAsync">Registrar de todos modos</button>
+                </Footer>
+            </AppModal>
+        }
+
+        @if (_confirmDuplicate)
+        {
+            <AppModal Title="Posible duplicado reciente" OnClose="() => _confirmDuplicate = false" CloseOnBackdrop="true">
+                <ChildContent>
+                    <p class="mb-0">
+                        Ya registró una medición igual (mismo telar, tela, lote y neps) en los últimos
+                        @CaptureValidationConstants.DuplicateWindowMinutes minutos. ¿Registrar de todos modos?
+                    </p>
+                </ChildContent>
+                <Footer>
+                    <button type="button" class="capture-action-btn" @onclick="() => _confirmDuplicate = false">Cancelar</button>
+                    <button type="button" class="capture-submit capture-submit--modal" @onclick="ConfirmDuplicateAndContinueAsync">Registrar de todos modos</button>
                 </Footer>
             </AppModal>
         }
@@ -618,6 +672,7 @@ else
     private IReadOnlyList<LoteTramaItem> _lotes = [];
     private IReadOnlyList<NepRecord> _sessionRecords = [];
     private readonly HashSet<Guid> _selectedRecordIds = new();
+    private readonly HashSet<Guid> _savedCaptureRecordIds = new();
     private Guid? _lastSavedRecordId;
     private AlertLevel? _previewLevel;
     private string? _success;
@@ -634,6 +689,7 @@ else
     private bool _showShareExportModal;
     private IReadOnlyList<Guid> _shareExportIds = Array.Empty<Guid>();
     private string _shareExportTitle = "Compartir registro";
+    private string _shareStyle = "completo";
     private string _sessionReportName = "";
     private bool _allowed;
     private bool _canEdit;
@@ -642,6 +698,17 @@ else
     private bool _showAdditional;
     private bool _confirmNewRecord;
     private bool _confirmNewSession;
+    private bool _confirmHighNeps;
+    private bool _confirmDuplicate;
+    private bool _highNepsConfirmed;
+    private bool _duplicateConfirmed;
+    private double _pendingNeps;
+
+    private int PendingReportCount =>
+        CaptureValidationRules.PendingCaptureReportIds(
+            _sessionRecords.Select(r => r.Id),
+            _savedCaptureRecordIds,
+            _lastSavedRecordId).Count;
     private bool _focusTelarPending;
     private UserSession? _session;
     private RecordActor? _actor;
@@ -879,7 +946,10 @@ else
         _confirmNewRecord = false;
         _confirmNewSession = false;
         _selectedRecordIds.Clear();
+        _savedCaptureRecordIds.Clear();
         _lastSavedRecordId = null;
+        _highNepsConfirmed = false;
+        _duplicateConfirmed = false;
         _error = null;
         _success = "Nueva sesión iniciada. La tabla solo muestra mediciones de esta captura.";
         _focusTelarPending = true;
@@ -1068,6 +1138,14 @@ else
                 return outcome;
             }
 
+            if (!_highNepsConfirmed
+                && CaptureValidationRules.RequiresHighNepsConfirmation(_form.Neps.Value))
+            {
+                _pendingNeps = _form.Neps.Value;
+                _confirmHighNeps = true;
+                return null;
+            }
+
             var tela = ResolveTelaForSave();
             if (string.IsNullOrWhiteSpace(tela))
             {
@@ -1133,7 +1211,16 @@ else
                 CaptureSessionId = _captureSessionId
             };
 
+            if (!_duplicateConfirmed
+                && await RecordService.HasRecentDuplicateAsync(request, _actor))
+            {
+                _confirmDuplicate = true;
+                return null;
+            }
+
             outcome = await RecordService.CreateWithOutcomeAsync(request, _actor);
+            _highNepsConfirmed = false;
+            _duplicateConfirmed = false;
 
             if (!outcome.IsSuccess)
             {
@@ -1421,7 +1508,7 @@ else
                 _shareExportIds,
                 _session.UserId,
                 viewerSeesAll: false,
-                style: "completo");
+                style: string.IsNullOrWhiteSpace(_shareStyle) ? "completo" : _shareStyle);
 
             var id = TempExports.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
             var url = $"/api/export/temp/{id}";
@@ -1465,14 +1552,95 @@ else
 
     private void OpenSaveSessionModal()
     {
-        if (_sessionRecords.Count == 0)
+        if (PendingReportCount == 0)
         {
+            _error = "No hay registros pendientes de esta sesión para guardar.";
             return;
         }
 
         _error = null;
         _sessionReportName = $"Informe {DateTime.Now:yyyyMMdd_HHmmss}";
         _showSaveSessionModal = true;
+    }
+
+    private async Task ConfirmHighNepsAndContinueAsync()
+    {
+        _confirmHighNeps = false;
+        _highNepsConfirmed = true;
+        await SaveAsync();
+    }
+
+    private async Task ConfirmDuplicateAndContinueAsync()
+    {
+        _confirmDuplicate = false;
+        _duplicateConfirmed = true;
+        _highNepsConfirmed = true; // ya pasó umbral si aplicaba
+        await SaveAsync();
+    }
+
+    private async Task ShareTodayAsync()
+    {
+        if (_session is null || _sharing || _actor is null)
+        {
+            return;
+        }
+
+        var today = DateTime.Today;
+        var todayTuples = _sessionRecords
+            .Where(r => r.CreatedAt.ToLocalTime().Date == today)
+            .Select(r => (r.Id, r.CreatedAt))
+            .ToList();
+
+        var ids = CaptureValidationRules.ResolveShareTodayIds(
+            _lastSavedRecordId,
+            _selectedRecordIds,
+            todayTuples);
+
+        if (ids.Count == 0)
+        {
+            var filters = new RecordFilters();
+            ReportDateRange.FromLocalCalendarDates(today, today).ApplyTo(filters);
+            var todayRecords = await RecordService.QueryAsync(
+                filters, _actor, RecordQueryScope.PersonalOnly, 500);
+            todayTuples = todayRecords.Select(r => (r.Id, r.CreatedAt)).ToList();
+            ids = CaptureValidationRules.ResolveShareTodayIds(null, [], todayTuples);
+        }
+
+        if (ids.Count == 0)
+        {
+            _error = "No hay registros de hoy para compartir.";
+            return;
+        }
+
+        _error = null;
+        _shareExportIds = ids;
+        _shareExportTitle = ids.Count == 1 ? "Compartir hoy (1 registro)" : $"Compartir hoy ({ids.Count} registros)";
+        _showShareExportModal = true;
+    }
+
+    private async Task SelectAllTodayAsync()
+    {
+        if (_actor is null)
+        {
+            return;
+        }
+
+        var today = DateTime.Today;
+        foreach (var r in _sessionRecords.Where(r => r.CreatedAt.ToLocalTime().Date == today))
+        {
+            _selectedRecordIds.Add(r.Id);
+        }
+
+        var filters = new RecordFilters();
+        ReportDateRange.FromLocalCalendarDates(today, today).ApplyTo(filters);
+        var todayRecords = await RecordService.QueryAsync(
+            filters, _actor, RecordQueryScope.PersonalOnly, 500);
+        foreach (var r in todayRecords)
+        {
+            _selectedRecordIds.Add(r.Id);
+        }
+
+        _success = $"{_selectedRecordIds.Count} registro(s) de hoy seleccionados.";
     }
 
     private void CloseSaveSessionModal()
@@ -1546,10 +1714,13 @@ else
             return;
         }
 
-        var filters = BuildSessionFilters();
-        if (filters is null)
+        var pendingIds = CaptureValidationRules.PendingCaptureReportIds(
+            _sessionRecords.Select(r => r.Id),
+            _savedCaptureRecordIds,
+            _lastSavedRecordId);
+        if (pendingIds.Count == 0)
         {
-            _error = "No hay registros de sesión para guardar.";
+            _error = "No hay registros pendientes de esta sesión para guardar.";
             _showSaveSessionModal = false;
             return;
         }
@@ -1562,14 +1733,20 @@ else
                 ? $"Informe {DateTime.Now:yyyyMMdd_HHmmss}"
                 : _sessionReportName.Trim();
 
-            await ExportService.SaveReportAsync(
+            var report = await ExportService.SaveReportByIdsAsync(
                 name,
-                filters,
+                pendingIds,
                 _session.UserId,
                 _session.DisplayName,
-                viewerSeesAll: false);
+                viewerSeesAll: false,
+                hasManageReports: true);
 
-            _success = $"Informe «{name}» guardado. Puede abrirlo en Informes.";
+            foreach (var id in pendingIds)
+            {
+                _savedCaptureRecordIds.Add(id);
+            }
+
+            _success = $"Informe «{report.Name}» guardado con {report.RecordCount} pendientes. Puede abrirlo en Informes.";
             _showSaveSessionModal = false;
         }
         catch (Exception ex)
@@ -1614,7 +1791,7 @@ else
                 filters,
                 _session.UserId,
                 viewerSeesAll: false,
-                style: "completo");
+                style: string.IsNullOrWhiteSpace(_shareStyle) ? "completo" : _shareStyle);
 
             var id = TempExports.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
             var url = $"/api/export/temp/{id}";

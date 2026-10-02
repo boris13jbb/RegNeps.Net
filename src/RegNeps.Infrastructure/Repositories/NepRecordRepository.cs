@@ -294,6 +294,40 @@ public sealed class NepRecordRepository : INepRecordRepository
                 r.CreatedByUserId == userId && r.ClientOperationId == clientOperationId, ct);
     }
 
+    public async Task<IReadOnlyList<NepRecord>> FindRecentByUserAsync(
+        string userId,
+        string? externalUserId,
+        DateTime sinceUtc,
+        int take = 100,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Array.Empty<NepRecord>();
+        }
+
+        take = Math.Clamp(take, 1, 500);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = db.NepRecords.AsNoTracking()
+            .Where(r => r.CreatedAt >= sinceUtc);
+
+        if (!string.IsNullOrWhiteSpace(externalUserId))
+        {
+            query = query.Where(r =>
+                r.CreatedByUserId == userId || r.CreatedByUserId == externalUserId);
+        }
+        else
+        {
+            query = query.Where(r => r.CreatedByUserId == userId);
+        }
+
+        return await query
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(take)
+            .ToListAsync(ct);
+    }
+
     public async Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(record.ConcurrencyStamp))
