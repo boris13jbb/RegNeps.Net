@@ -39,6 +39,18 @@ public interface IAtomicNepRecordCreateStore
         RecordActor actor,
         string? deviceId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Mutación online ApplyCorrective + RecordUpserted en la misma transacción.
+    /// Sin ClientOperationId (no forma parte del Push sync v1).
+    /// </summary>
+    Task<AtomicNepRecordMutationResult> ApplyCorrectiveWithChangeLogAsync(
+        Guid entityId,
+        string accion,
+        string responsable,
+        bool marcarRevisado,
+        RecordActor actor,
+        CancellationToken ct = default);
 }
 
 public sealed class AtomicNepRecordCreateResult

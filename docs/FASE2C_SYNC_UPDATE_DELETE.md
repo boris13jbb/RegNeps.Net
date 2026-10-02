@@ -112,28 +112,63 @@ Clave actual (sin columna `OperationType` en ChangeLog): `(ActorUserId, ClientOp
 
 ## Pendientes de consistencia sync
 
-| Ruta | Estado 2C |
-|------|-----------|
+| Ruta | Estado |
+|------|--------|
 | Create online | ChangeLog (2B.1) |
-| Update/Delete online | ChangeLog / tombstone |
+| Update/Delete online | ChangeLog / tombstone (2C) |
 | DeleteMany | Delega en DeleteAsync → tombstone |
 | Importación productiva (`RecordImportService`) | ChangeLog por fila vía store atómico (DI) |
+| ApplyCorrective | ChangeLog atómico (2C.1) |
+| ClearAll | Bloqueado si existen SyncChangeLogs (2C.1); sin tombstones |
 | Migración histórica Firestore | **Sin ChangeLog** (herramienta admin) |
-| ApplyCorrective | **Brecha crítica sync**: muta + cambia stamp/UpdatedAt **sin** ChangeLog |
-| ClearAll | **Incompatible con sync fina**: `ExecuteDelete` sin tombstones |
 | Backfill históricos | **No ejecutado** (política B) |
 
-### ApplyCorrective
+## 2C.1 — Cierre de coherencia de mutaciones
 
-Campos: `AccionCorrectiva`, `ResponsableRevision`, `RevisadoPorSupervisor`, `FechaRevision`, historial `CorrectiveActions`.  
-`NepRecordRepository.UpdateAsync` **sí** regenera `ConcurrencyStamp` y `UpdatedAt`.  
-Punto de integración recomendado (futuro): escritura atómica `RecordUpserted` tras mutación correctiva (ampliar payload canónico con campos de revisión). **No mezclar con ClearAll.**
+### ApplyCorrective y ChangeLog
 
-### ClearAll — decisión
+- Ruta online (UI Alertas/Registros), **no** forma parte de `POST /api/sync/push`.
+- `IAtomicNepRecordCreateStore.ApplyCorrectiveWithChangeLogAsync`: mutación + historial + `RecordUpserted` en **una** TX.
+- Sin `ClientOperationId` artificial (mutación online; no inventar idempotencia Push).
+- Fallback sin store (tests unitarios): `NepRecordRepository.UpdateAsync` como antes.
 
-**Opción C (recomendada):** operación administrativa **incompatible** con clientes offline activos.  
-Precondición operativa: no ejecutar ClearAll mientras existan dispositivos offline-first sincronizando.  
-Si en el futuro debe coexistir: Opción A (tombstone por registro, costoso) o B (`RecordsCleared` + epoch de generación).
+### Contrato de payload (réplica v1)
+
+Incluidos en `RecordUpserted` (además del snapshot de captura):
+
+- `accionCorrectiva`, `responsableRevision`, `revisadoPorSupervisor`, `fechaRevisionUtc`
+- `updatedAtUtc`, `concurrencyStamp` (ya existían)
+
+**Fuera de alcance** de la réplica v1:
+
+- `HistorialAcciones` completo (auditoría server-side; el cliente usa los escalares de última revisión).
+
+Calidad NEPS: sigue siendo `NepsQualityCriteria` / `AlertEvaluator` (no umbrales 30/60).
+
+### ClearAll — contrato operativo
+
+- Entry points: solo UI `Registros.razor` → `NepRecordService.ClearAllAsync` (permiso `ClearAllRecords`). **No hay API REST** dedicada.
+- Roles típicos: Admin / SuperAdmin (matriz).
+- Implementación: `ExecuteDelete` de CorrectiveActions + NepRecords; **no** genera tombstones ni ChangeLog.
+- **Protección 2C.1:** si `SyncChangeLogs` tiene filas, `ClearAll` lanza `InvalidOperationException` (incompatible con offline-first).
+- Confirmación UI advierte la incompatibilidad.
+- Futuro (si debe coexistir con offline): Opción A (tombstone/N) o B (`RecordsCleared` + epoch) — **no** en 2C.1.
+
+### Históricos
+
+Política B intacta: registros sin ChangeLog no aparecen en Pull hasta mutación soportada o backfill admin separado. No ejecutado en 2C.1.
+
+### Limitación SQL Server
+
+La suite sync corre en SQLite. La implementación usa TX EF + token `ConcurrencyStamp` + índices filtrados portables; no hay harness SQL Server de sync en CI.
+
+### Deliberadamente posterior (no 2D aquí)
+
+- SyncEngine MAUI / LocalSession / bridge
+- SignalR recovery, paginación 2F, catálogos
+- `RecordsCleared` / tombstones masivos ClearAll
+- Backfill histórico ejecutable
+- Columna `OperationType` en ChangeLog (Create vs Update mismo opId)
 
 ## Endpoints
 

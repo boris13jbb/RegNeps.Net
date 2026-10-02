@@ -25,19 +25,22 @@ public sealed class NepRecordService
     private readonly IPermissionService? _permissions;
     private readonly IAlertCriticalPublisher? _criticalPublisher;
     private readonly IAtomicNepRecordCreateStore? _atomicCreate;
+    private readonly ISyncPersistence? _syncPersistence;
 
     public NepRecordService(
         INepRecordRepository records,
         IAlertConfigRepository alertConfig,
         IPermissionService? permissions = null,
         IAlertCriticalPublisher? criticalPublisher = null,
-        IAtomicNepRecordCreateStore? atomicCreate = null)
+        IAtomicNepRecordCreateStore? atomicCreate = null,
+        ISyncPersistence? syncPersistence = null)
     {
         _records = records;
         _alertConfig = alertConfig;
         _permissions = permissions;
         _criticalPublisher = criticalPublisher;
         _atomicCreate = atomicCreate;
+        _syncPersistence = syncPersistence;
     }
 
     /// <summary>
@@ -485,6 +488,20 @@ public sealed class NepRecordService
 
         EnsureCanMutate(actor, record, requireEditPermission: false);
 
+        // FASE 2C.1: correctivo online observable por sync (mutación + RecordUpserted atómicos).
+        if (_atomicCreate is not null)
+        {
+            var outcome = await _atomicCreate.ApplyCorrectiveWithChangeLogAsync(
+                request.RecordId,
+                request.Accion,
+                request.Responsable ?? string.Empty,
+                request.MarcarRevisado,
+                actor,
+                ct);
+            EnsureMutationSucceeded(outcome);
+            return;
+        }
+
         var entry = new CorrectiveActionEntry
         {
             NepRecordId = record.Id,
@@ -625,12 +642,29 @@ public sealed class NepRecordService
         };
     }
 
+    /// <summary>
+    /// Vacía todos los NepRecord. <b>Incompatible</b> con sincronización offline-first:
+    /// no genera tombstones. Bloqueado si ya existen entradas en SyncChangeLogs.
+    /// </summary>
     public async Task ClearAllAsync(RecordActor actor, CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
         if (!ActorHas(actor, AppPermission.ClearAllRecords))
         {
             throw new UnauthorizedRecordAccessException("No tiene permiso para vaciar registros.");
+        }
+
+        // FASE 2C.1: ClearAll fuera del protocolo fino de sync.
+        if (_syncPersistence is not null)
+        {
+            var changeLogCount = await _syncPersistence.CountChangeLogsAsync(ct);
+            if (changeLogCount > 0)
+            {
+                throw new InvalidOperationException(
+                    "ClearAll no es compatible con sincronización offline-first: existen cambios en SyncChangeLogs. " +
+                    "No ejecute esta operación mientras haya (o haya habido) clientes sincronizando. " +
+                    "Use eliminaciones individuales/tombstones o un mantenimiento de BD controlado.");
+            }
         }
 
         await _records.ClearAllAsync(ct);

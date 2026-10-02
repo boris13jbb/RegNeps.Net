@@ -30,7 +30,7 @@ else
             }
             @if (_canClearAllInUi)
             {
-                <button class="btn btn-outline-danger btn-sm" @onclick="ClearAllAsync" disabled="@_loading">
+                <button class="btn btn-outline-danger btn-sm" @onclick="() => _confirmClearAll = true" disabled="@_loading">
                     Vaciar todos
                 </button>
             }
@@ -401,6 +401,24 @@ else
         </AppModal>
     }
 
+    @if (_confirmClearAll)
+    {
+        <AppModal Title="Vaciar todos los registros" OnClose="() => _confirmClearAll = false">
+            <ChildContent>
+                <p>¿Eliminar <strong>todas</strong> las mediciones? Esta acción no se puede deshacer.</p>
+                <p class="small text-danger mb-0">
+                    ClearAll no es compatible con sincronización offline-first: no genera tombstones.
+                    Si ya hubo sync (SyncChangeLogs), el servidor rechazará la operación.
+                    No ejecute esto mientras existan clientes offline activos.
+                </p>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="() => _confirmClearAll = false">Cancelar</button>
+                <button class="btn btn-danger" @onclick="ClearAllAsync" disabled="@_loading">Vaciar todos</button>
+            </Footer>
+        </AppModal>
+    }
+
     @if (_showSaveReportModal)
     {
         <AppModal Title="Guardar informe de la selección" OnClose="() => _showSaveReportModal = false">
@@ -459,6 +477,7 @@ else
     private readonly HashSet<Guid> _selectedIds = [];
     private int _page = 1;
     private bool _confirmDeleteSelected;
+    private bool _confirmClearAll;
     private bool _deletingSelected;
     private bool _showSaveReportModal;
     private string _saveReportName = "";
@@ -1157,6 +1176,7 @@ else
     {
         if (_isReadOnlyView)
         {
+            _confirmClearAll = false;
             _error = "No puede vaciar registros mientras visualiza un informe guardado.";
             return;
         }
@@ -1164,6 +1184,7 @@ else
         if (!await CurrentUser.HasAsync(AppPermission.ClearAllRecords))
         {
             await RefreshAccessAsync();
+            _confirmClearAll = false;
             _error = "No tiene permiso para vaciar registros.";
             return;
         }
@@ -1177,10 +1198,12 @@ else
             _message =
                 "Todas las mediciones fueron eliminadas. Los informes guardados siguen existiendo, " +
                 "pero al abrirlos la tabla saldrá vacía hasta que capture o migre datos de nuevo.";
+            _confirmClearAll = false;
             await LoadAsync();
         }
         catch (Exception ex)
         {
+            _confirmClearAll = false;
             _error = ex.Message;
         }
     }

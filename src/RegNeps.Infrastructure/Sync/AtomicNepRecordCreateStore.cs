@@ -10,8 +10,8 @@ using RegNeps.Infrastructure.Persistence;
 namespace RegNeps.Infrastructure.Sync;
 
 /// <summary>
-/// Escritura atómica NepRecord + SyncChangeLog (Create/Update/Delete) para online y Push.
-/// Idempotencia de mutaciones: índice único (ActorUserId, ClientOperationId) en SyncChangeLogs.
+/// Escritura atómica NepRecord + SyncChangeLog (Create/Update/Delete/ApplyCorrective) para online y Push.
+/// Idempotencia de mutaciones Push: índice único (ActorUserId, ClientOperationId) en SyncChangeLogs.
 /// </summary>
 public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
 {
@@ -460,6 +460,122 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
     /// Duplicate solo si el ChangeLog previo es el mismo upsert (mismo EntityId + RecordUpserted).
     /// Reutilizar ClientOperationId tras un Delete u otra entidad → Invalid (no fingir éxito).
     /// </summary>
+    public async Task<AtomicNepRecordMutationResult> ApplyCorrectiveWithChangeLogAsync(
+        Guid entityId,
+        string accion,
+        string responsable,
+        bool marcarRevisado,
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(accion);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var entity = await db.NepRecords
+                .FirstOrDefaultAsync(r => r.Id == entityId, ct);
+
+            if (entity is null)
+            {
+                await tx.CommitAsync(ct);
+                return new AtomicNepRecordMutationResult
+                {
+                    Result = SyncOperationResult.Invalid,
+                    ErrorCode = "ENTITY_NOT_FOUND",
+                    Message = "Registro no encontrado.",
+                    EntityId = entityId
+                };
+            }
+
+            if (!CanMutate(actor, entity))
+            {
+                await tx.RollbackAsync(ct);
+                return new AtomicNepRecordMutationResult
+                {
+                    Result = SyncOperationResult.Forbidden,
+                    ErrorCode = "OWNERSHIP",
+                    Message = "No puede aplicar correctivos a registros de otro usuario.",
+                    EntityId = entity.Id
+                };
+            }
+
+            var now = DateTime.UtcNow;
+            var entry = new CorrectiveActionEntry
+            {
+                Id = Guid.NewGuid(),
+                NepRecordId = entity.Id,
+                Accion = accion.Trim(),
+                Responsable = (responsable ?? string.Empty).Trim(),
+                Fecha = now
+            };
+            // Insertar historial por DbSet (evita rarezas de concurrencia con Include + colección).
+            db.CorrectiveActions.Add(entry);
+            entity.AccionCorrectiva = entry.Accion;
+            entity.ResponsableRevision = entry.Responsable;
+            if (marcarRevisado)
+            {
+                entity.RevisadoPorSupervisor = true;
+                entity.FechaRevision = now;
+            }
+
+            entity.UpdatedAt = now;
+            entity.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+
+            // Mutación online: sin ClientOperationId (no es Push sync).
+            var change = SyncNepRecordPayloadMapper.CreateRecordUpsertedEntry(
+                entity, actor.UserId, deviceId: null, clientOperationId: null, entity.UpdatedAt);
+
+            db.SyncChangeLogs.Add(change);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            return new AtomicNepRecordMutationResult
+            {
+                Result = SyncOperationResult.Accepted,
+                Record = entity,
+                EntityId = entity.Id,
+                ChangeSequence = change.Sequence,
+                ServerConcurrencyStamp = entity.ConcurrencyStamp
+            };
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await tx.RollbackAsync(ct);
+            await using var read = await _factory.CreateDbContextAsync(ct);
+            var current = await read.NepRecords.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == entityId, ct);
+            if (current is null)
+            {
+                return new AtomicNepRecordMutationResult
+                {
+                    Result = SyncOperationResult.Invalid,
+                    ErrorCode = "ENTITY_NOT_FOUND",
+                    Message = "Registro no encontrado.",
+                    EntityId = entityId
+                };
+            }
+
+            return new AtomicNepRecordMutationResult
+            {
+                Result = SyncOperationResult.Conflict,
+                ErrorCode = "CONCURRENCY",
+                Message = "El registro fue modificado por otro usuario.",
+                EntityId = current.Id,
+                Record = current,
+                ServerConcurrencyStamp = current.ConcurrencyStamp,
+                ServerSnapshotJson = SyncNepRecordPayloadMapper.ToPayloadJson(current)
+            };
+        }
+        catch
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            throw;
+        }
+    }
+
     private static async Task<AtomicNepRecordMutationResult> ResolveIdempotentUpsertAsync(
         RegNepsDbContext db,
         SyncChangeLog processed,

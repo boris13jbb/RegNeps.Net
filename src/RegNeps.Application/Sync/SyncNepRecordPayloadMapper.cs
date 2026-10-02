@@ -38,7 +38,12 @@ public static class SyncNepRecordPayloadMapper
             ClientOperationId = record.ClientOperationId,
             CaptureSessionId = record.CaptureSessionId,
             OwnerUserId = record.CreatedByUserId,
-            QualityLabel = level.ToDisplayLabel()
+            QualityLabel = level.ToDisplayLabel(),
+            // Escalares de revisión (ApplyCorrective). HistorialAcciones queda fuera de réplica v1.
+            AccionCorrectiva = record.AccionCorrectiva,
+            ResponsableRevision = record.ResponsableRevision,
+            RevisadoPorSupervisor = record.RevisadoPorSupervisor,
+            FechaRevisionUtc = record.FechaRevision
         };
         return JsonSerializer.Serialize(snapshot, JsonOptions);
     }
@@ -139,6 +144,13 @@ public sealed class SyncNepRecordPayload
     public string? CaptureSessionId { get; set; }
     public string? OwnerUserId { get; set; }
     public string QualityLabel { get; set; } = string.Empty;
+
+    /// <summary>Última acción correctiva (escalar). Historial completo no se replica en v1.</summary>
+    public string AccionCorrectiva { get; set; } = string.Empty;
+
+    public string ResponsableRevision { get; set; } = string.Empty;
+    public bool RevisadoPorSupervisor { get; set; }
+    public DateTime? FechaRevisionUtc { get; set; }
 }
 
 public sealed class SyncNepRecordDeletedPayload

@@ -782,8 +782,10 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         Assert.True(p.TryGetProperty("createdAtUtc", out _));
         Assert.True(p.TryGetProperty("captureSessionId", out _));
         Assert.True(p.TryGetProperty("clientOperationId", out _));
-        // Campos correctivos no forman parte del snapshot canónico de réplica 2C.
-        Assert.False(p.TryGetProperty("accionCorrectiva", out _));
+        // Escalares de revisión forman parte de la réplica 2C.1; historial completo no.
+        Assert.True(p.TryGetProperty("accionCorrectiva", out _));
+        Assert.True(p.TryGetProperty("revisadoPorSupervisor", out _));
+        Assert.False(p.TryGetProperty("historialAcciones", out _));
     }
 
     [Fact]
