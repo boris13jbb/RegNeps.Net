@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="RegNeps.Mobile.OfflineEditRecordPage"
+             Title="Editar offline"
+             BackgroundColor="#F4F5F2">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="12">
+            <Label x:Name="BannerLabel"
+                   FontSize="13"
+                   Padding="10"
+                   BackgroundColor="#DBEAFE"
+                   TextColor="#1E3A5F"
+                   Text="Edición offline — los cambios quedan pendientes de sincronización." />
+
+            <Label x:Name="IdsLabel" FontSize="11" TextColor="#6B7280" />
+
+            <Label Text="Telar *" FontAttributes="Bold" />
+            <Entry x:Name="TelarEntry" />
+
+            <Label Text="Neps (Q) *" FontAttributes="Bold" />
+            <Entry x:Name="NepsEntry" Keyboard="Numeric" TextChanged="OnNepsChanged" />
+
+            <Label x:Name="QualityLabel" FontSize="16" FontAttributes="Bold" Text="Calidad: —" />
+
+            <Label Text="Tela" />
+            <Entry x:Name="TelaEntry" />
+
+            <Label Text="Lote/trama" />
+            <Entry x:Name="LoteEntry" />
+
+            <Label Text="Turno" />
+            <Entry x:Name="TurnoEntry" />
+
+            <Label Text="Operario" />
+            <Entry x:Name="OperarioEntry" />
+
+            <Label Text="Línea de producción" />
+            <Entry x:Name="LineaEntry" />
+
+            <Label Text="Observación" />
+            <Editor x:Name="ObservacionEditor" AutoSize="TextChanges" HeightRequest="80" />
+
+            <Button x:Name="SaveButton"
+                    Text="Guardar cambios offline"
+                    Clicked="OnSaveClicked"
+                    BackgroundColor="#294D1E"
+                    TextColor="White" />
+
+            <Label x:Name="MessageLabel" FontSize="13" />
+
+            <Button Text="Cancelar" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

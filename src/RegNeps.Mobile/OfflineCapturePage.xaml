@@ -133,6 +133,35 @@
                 </CollectionView.ItemTemplate>
             </CollectionView>
 
+            <Label Text="Editables (sincronizados)" FontAttributes="Bold" Margin="0,12,0,0" FontSize="15" />
+            <Label x:Name="EditableEmptyLabel"
+                   FontSize="12"
+                   TextColor="#6B7280"
+                   Text="No hay registros editables. Sincroniza un Create primero." />
+            <CollectionView x:Name="EditableList"
+                            HeightRequest="140"
+                            SelectionMode="Single"
+                            SelectionChanged="OnEditableSelectionChanged">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Border Stroke="#D1D5DB" Padding="10" Margin="0,0,0,6" BackgroundColor="White">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <VerticalStackLayout Grid.Column="0" Spacing="2">
+                                    <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="13" />
+                                    <Label Text="{Binding Subtitle}" FontSize="11" TextColor="#6B7280" />
+                                </VerticalStackLayout>
+                                <Label Grid.Column="1"
+                                       Text="Editar"
+                                       VerticalOptions="Center"
+                                       TextColor="#1E3A5F"
+                                       FontAttributes="Bold"
+                                       FontSize="12" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+
             <Label Text="Recientes" FontAttributes="Bold" Margin="0,12,0,0" />
             <CollectionView x:Name="RecentList" HeightRequest="200">
                 <CollectionView.ItemTemplate>

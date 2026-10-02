@@ -10,4 +10,7 @@ public static class OfflineStoreConstants
     public static readonly TimeSpan DefaultSessionTtl = TimeSpan.FromHours(72);
 
     public const string CaptureRecordsPermission = "CaptureRecords";
+
+    /// <summary>Permiso UX para editar; el servidor revalida EditRecords.</summary>
+    public const string EditRecordsPermission = "EditRecords";
 }

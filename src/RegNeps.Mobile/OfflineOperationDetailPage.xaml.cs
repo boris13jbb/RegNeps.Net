@@ -95,6 +95,49 @@ public partial class OfflineOperationDetailPage : ContentPage
         ReloginButton.IsVisible = d.PrimaryAction == OfflineOperationUxAction.Relogin;
         ReviewButton.IsVisible = d.PrimaryAction == OfflineOperationUxAction.RequiresReview;
         MessageLabel.Text = string.Empty;
+
+        _ = RefreshEditButtonAsync(d.LocalNepRecordId);
+    }
+
+    private async Task RefreshEditButtonAsync(Guid? localNepRecordId)
+    {
+        EditRecordButton.IsVisible = false;
+        if (localNepRecordId is null || localNepRecordId == Guid.Empty)
+        {
+            return;
+        }
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
+            var elig = await capture.GetEditEligibilityAsync(localNepRecordId.Value);
+            EditRecordButton.IsVisible = elig.CanEdit;
+            EditRecordButton.CommandParameter = localNepRecordId.Value;
+        }
+        catch
+        {
+            EditRecordButton.IsVisible = false;
+        }
+    }
+
+    private async void OnEditRecordClicked(object? sender, EventArgs e)
+    {
+        if (_detail?.LocalNepRecordId is not Guid localId || localId == Guid.Empty)
+        {
+            return;
+        }
+
+        var services = Handler?.MauiContext?.Services
+                       ?? Application.Current?.Handler?.MauiContext?.Services;
+        if (services is null)
+        {
+            return;
+        }
+
+        var page = services.GetRequiredService<OfflineEditRecordPage>();
+        page.Initialize(localId);
+        await Navigation.PushAsync(page);
     }
 
     private async void OnRetryClicked(object? sender, EventArgs e)

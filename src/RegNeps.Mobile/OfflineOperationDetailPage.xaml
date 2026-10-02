@@ -64,6 +64,13 @@
                     BackgroundColor="#F59E0B"
                     TextColor="White" />
 
+            <Button x:Name="EditRecordButton"
+                    Text="Editar registro offline"
+                    Clicked="OnEditRecordClicked"
+                    IsVisible="False"
+                    BackgroundColor="#294D1E"
+                    TextColor="White" />
+
             <Label x:Name="MessageLabel" FontSize="13" />
 
             <Button Text="Volver" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />

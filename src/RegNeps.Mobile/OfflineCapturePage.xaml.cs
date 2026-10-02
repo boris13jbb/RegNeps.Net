@@ -143,6 +143,15 @@ public partial class OfflineCapturePage : ContentPage
                 ErrorsEmptyLabel.IsVisible = errorRows.Count == 0;
             }
 
+            var editable = session is null
+                ? new List<EditableRow>()
+                : (await capture.ListEditableAsync(20)).Select(r => new EditableRow(
+                    r.Id,
+                    $"Telar {r.Telar} · NEPS {r.Neps:0.##}",
+                    $"{r.GetQualityLabel()} · Servidor {r.ServerRecordId:N}")).ToList();
+            EditableList.ItemsSource = editable;
+            EditableEmptyLabel.IsVisible = editable.Count == 0;
+
             var recent = await capture.ListRecentAsync(30);
             RecentList.ItemsSource = recent.Select(r => new RecentRow(
                 r.Telar,
@@ -155,6 +164,26 @@ public partial class OfflineCapturePage : ContentPage
             MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message)
                                 ?? "No se pudo actualizar el estado.";
         }
+    }
+
+    private async void OnEditableSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.CurrentSelection.FirstOrDefault() is not EditableRow row)
+        {
+            return;
+        }
+
+        EditableList.SelectedItem = null;
+        var services = Handler?.MauiContext?.Services
+                       ?? Application.Current?.Handler?.MauiContext?.Services;
+        if (services is null)
+        {
+            return;
+        }
+
+        var page = services.GetRequiredService<OfflineEditRecordPage>();
+        page.Initialize(row.LocalRecordId);
+        await Navigation.PushAsync(page);
     }
 
     private void ApplyConnectivityBanner(SyncConnectivityUxKind kind)
@@ -406,6 +435,8 @@ public partial class OfflineCapturePage : ContentPage
     }
 
     private sealed record RecentRow(string Telar, string NepsText, string Quality);
+
+    private sealed record EditableRow(Guid LocalRecordId, string Title, string Subtitle);
 
     private sealed record ErrorRow(string Title, string Detail);
 }
