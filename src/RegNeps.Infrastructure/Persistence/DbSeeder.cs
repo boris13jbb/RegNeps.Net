@@ -60,6 +60,7 @@ public static class DbSeeder
                     DisplayName = "Administrador",
                     PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123!"),
                     Role = AppUserRole.SuperAdmin,
+                    RoleCode = Domain.Constants.SystemRoleCodes.SuperAdmin,
                     IsSuperAdmin = true,
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow
@@ -69,48 +70,8 @@ public static class DbSeeder
             // no lo resucitamos automáticamente: el operador debe restaurarlo manualmente.
         }
 
-        await EnsureDefaultRolePermissionsAsync(db);
+        await RoleBootstrap.EnsureSystemRolesAsync(db);
+        await RoleBootstrap.EnsureDefaultRolePermissionsAsync(db);
         await db.SaveChangesAsync();
-    }
-
-    /// <summary>
-    /// Inserta solo asignaciones que aún no existen. No pisa cambios hechos desde la aplicación.
-    /// </summary>
-    public static async Task EnsureDefaultRolePermissionsAsync(RegNepsDbContext db)
-    {
-        var existing = await db.RolePermissions
-            .Select(x => new { x.Role, x.Permission })
-            .ToListAsync();
-        var known = existing.Select(x => (x.Role, x.Permission)).ToHashSet();
-        var now = DateTime.UtcNow;
-
-        foreach (var role in ConfigurableRoles())
-        {
-            foreach (var definition in PermissionCatalog.All)
-            {
-                if (known.Contains((role, definition.Permission)))
-                {
-                    continue;
-                }
-
-                db.RolePermissions.Add(new RolePermission
-                {
-                    Role = role,
-                    Permission = definition.Permission,
-                    IsEnabled = RolePermissions.Has(role, definition.Permission),
-                    CreatedAt = now,
-                    UpdatedAt = now
-                });
-            }
-        }
-    }
-
-    private static IEnumerable<AppUserRole> ConfigurableRoles()
-    {
-        yield return AppUserRole.Operario;
-        yield return AppUserRole.Supervisor;
-        yield return AppUserRole.Admin;
-        yield return AppUserRole.Gerencia;
-        yield return AppUserRole.SuperAdmin;
     }
 }

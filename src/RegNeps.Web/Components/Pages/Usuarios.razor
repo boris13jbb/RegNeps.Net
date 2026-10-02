@@ -1,7 +1,10 @@
 @page "/usuarios"
 @rendermode InteractiveServer
 @inject UserAdminService Users
+@inject RoleAdminService RoleAdmin
 @inject CurrentUserService CurrentUser
+@using RegNeps.Domain.Constants
+@using RegNeps.Domain.Entities
 
 <PageTitle>Usuarios — RegNeps</PageTitle>
 <PermissionRefresh OnChanged="RefreshAccessAsync" />
@@ -32,15 +35,20 @@ else
                     <input id="usr-username" class="form-control" @bind="_newUsername" autocomplete="off" />
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label" for="usr-password">Contraseña *</label>
+                    <label class="form-label" for="usr-password">Contraseña * (mín. 8, letras y números)</label>
                     <input id="usr-password" class="form-control" type="password" @bind="_newPassword" autocomplete="new-password" />
                 </div>
                 <div class="col-md-4">
                     <label class="form-label" for="usr-role">Rol</label>
-                    <select id="usr-role" class="form-select" @bind="_newRole">
-                        @foreach (var role in _creatableRoles)
+                    <select id="usr-role" class="form-select" @bind="_newRoleCode">
+                        @foreach (var role in _assignableRoles)
                         {
-                            <option value="@role">@role.ToDisplayLabel()</option>
+                            if (SystemRoleCodes.IsSuperAdminCode(role.Code))
+                            {
+                                continue;
+                            }
+
+                            <option value="@role.Code">@role.Name</option>
                         }
                     </select>
                 </div>
@@ -73,22 +81,28 @@ else
                             {
                                 <select class="form-select form-select-sm" style="width: auto; min-width: 8rem;"
                                         @onchange="e => OnRoleChangedAsync(u, e)">
-                                    @foreach (var role in _creatableRoles)
+                                    @foreach (var role in _assignableRoles)
                                     {
-                                        if (u.EffectiveRole == role)
+                                        if (SystemRoleCodes.IsSuperAdminCode(role.Code))
                                         {
-                                            <option value="@role" selected>@role.ToDisplayLabel()</option>
+                                            continue;
+                                        }
+
+                                        var selected = string.Equals(u.EffectiveRoleCode, role.Code, StringComparison.OrdinalIgnoreCase);
+                                        if (selected)
+                                        {
+                                            <option value="@role.Code" selected>@role.Name</option>
                                         }
                                         else
                                         {
-                                            <option value="@role">@role.ToDisplayLabel()</option>
+                                            <option value="@role.Code">@role.Name</option>
                                         }
                                     }
                                 </select>
                             }
                             else
                             {
-                                @u.EffectiveRole.ToDisplayLabel()
+                                @RoleLabel(u)
                             }
                         </td>
                         <td>@(u.IsActive ? "Activo" : "Inactivo")</td>
@@ -112,8 +126,12 @@ else
     {
         <AppModal Title="@($"Reset contraseña — {_resetTarget.Username}")" OnClose="CloseReset">
             <ChildContent>
-            <label class="form-label" for="reset-password">Nueva contraseña (mín. 6)</label>
+            <label class="form-label" for="reset-password">Nueva contraseña (mín. 8, letras y números)</label>
             <input id="reset-password" class="form-control" type="password" @bind="_resetPassword" autocomplete="new-password" />
+            @if (!string.IsNullOrEmpty(_resetValidationError))
+            {
+                <div class="text-danger small mt-2" role="alert">@_resetValidationError</div>
+            }
             </ChildContent>
             <Footer>
                 <button class="btn btn-secondary" @onclick="CloseReset">Cancelar</button>
@@ -135,22 +153,34 @@ else
 
     private string _newUsername = "";
     private string _newPassword = "";
-    private AppUserRole _newRole = AppUserRole.Operario;
-    private readonly AppUserRole[] _creatableRoles =
-    [
-        AppUserRole.Operario,
-        AppUserRole.Supervisor,
-        AppUserRole.Admin,
-        AppUserRole.Gerencia
-    ];
+    private string _newRoleCode = SystemRoleCodes.Operario;
+    private IReadOnlyList<AppRole> _assignableRoles = [];
 
     private AppUser? _resetTarget;
     private string _resetPassword = "";
+    private string? _resetValidationError;
 
     private void CloseReset()
     {
         _resetTarget = null;
         _resetPassword = "";
+        _resetValidationError = null;
+    }
+
+    /// <summary>Misma regla que UserAdminService.ValidatePasswordStrength.</summary>
+    private static string? ValidatePasswordClient(string password)
+    {
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+        {
+            return "La contraseña debe tener al menos 8 caracteres.";
+        }
+
+        if (!password.Any(char.IsLetter) || !password.Any(char.IsDigit))
+        {
+            return "La contraseña debe incluir letras y números.";
+        }
+
+        return null;
     }
     private bool _usersReady;
 
@@ -179,7 +209,29 @@ else
     private CallerContext RequireCaller() =>
         _session?.ToCaller() ?? throw new UnauthorizedAccessException("No tiene permiso para gestionar usuarios.");
 
-    private async Task LoadAsync() => _list = await Users.ListAsync(RequireCaller());
+    private async Task LoadAsync()
+    {
+        _assignableRoles = await RoleAdmin.ListAssignableAsync();
+        _list = await Users.ListAsync(RequireCaller());
+    }
+
+    private string RoleLabel(AppUser user)
+    {
+        var code = user.EffectiveRoleCode;
+        var match = _assignableRoles.FirstOrDefault(r =>
+            string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            return match.Name;
+        }
+
+        if (SystemRoleCodes.TryParseEnum(code, out var enumRole))
+        {
+            return enumRole.ToDisplayLabel();
+        }
+
+        return code;
+    }
 
     private async Task CreateAsync()
     {
@@ -188,11 +240,11 @@ else
         _saving = true;
         try
         {
-            await Users.CreateAsync(_newUsername, _newPassword, _newRole, null, null, RequireCaller());
+            await Users.CreateAsync(_newUsername, _newPassword, _newRoleCode, null, null, RequireCaller());
             _message = "Usuario creado.";
             _newUsername = "";
             _newPassword = "";
-            _newRole = AppUserRole.Operario;
+            _newRoleCode = SystemRoleCodes.Operario;
             await LoadAsync();
         }
         catch (Exception ex)
@@ -207,20 +259,21 @@ else
 
     private async Task OnRoleChangedAsync(AppUser user, ChangeEventArgs e)
     {
-        if (e.Value is null || !Enum.TryParse<AppUserRole>(e.Value.ToString(), out var role))
+        var roleCode = e.Value?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(roleCode))
         {
             return;
         }
 
-        if (role == user.EffectiveRole)
+        if (string.Equals(roleCode, user.EffectiveRoleCode, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
         try
         {
-            await Users.UpdateRoleAsync(user.Id, role, RequireCaller());
-            _message = $"Rol de {user.Username} actualizado a {role.ToDisplayLabel()}.";
+            await Users.UpdateRoleAsync(user.Id, roleCode, RequireCaller());
+            _message = $"Rol de {user.Username} actualizado.";
             _error = null;
             await LoadAsync();
         }
@@ -248,11 +301,18 @@ else
     {
         _resetTarget = user;
         _resetPassword = "";
+        _resetValidationError = null;
     }
 
     private async Task ResetPasswordAsync()
     {
         if (_resetTarget is null)
+        {
+            return;
+        }
+
+        _resetValidationError = ValidatePasswordClient(_resetPassword);
+        if (_resetValidationError is not null)
         {
             return;
         }

@@ -1,3 +1,4 @@
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
 
@@ -12,6 +13,10 @@ public sealed class AppUser
     public string? Email { get; set; }
     public string PasswordHash { get; set; } = string.Empty;
     public AppUserRole Role { get; set; } = AppUserRole.Operario;
+
+    /// <summary>Código del rol en <see cref="AppRole"/>; si es nulo se usa <see cref="Role"/>.</summary>
+    public string? RoleCode { get; set; }
+
     public bool IsActive { get; set; } = true;
     public bool IsSuperAdmin { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -26,6 +31,23 @@ public sealed class AppUser
         string.IsNullOrWhiteSpace(DisplayName) ? Username : DisplayName;
 
     public AppUserRole EffectiveRole => IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
+
+    /// <summary>Código efectivo para permisos y visibilidad de registros.</summary>
+    public string EffectiveRoleCode =>
+        IsSuperAdmin
+            ? SystemRoleCodes.SuperAdmin
+            : string.IsNullOrWhiteSpace(RoleCode)
+                ? SystemRoleCodes.FromEnum(Role)
+                : RoleCode.Trim();
+
+    public void ApplyRoleCode(string roleCode)
+    {
+        RoleCode = roleCode.Trim();
+        if (SystemRoleCodes.TryParseEnum(RoleCode, out var parsed))
+        {
+            Role = parsed;
+        }
+    }
 
     /// <summary>
     /// Consulta la matriz inicial, no la configuración persistida.

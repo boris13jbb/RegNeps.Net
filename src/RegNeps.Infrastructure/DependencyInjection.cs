@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RegNeps.Application.Abstractions;
+using RegNeps.Application.Alerts;
 using RegNeps.Application.Analytics;
 using RegNeps.Application.Auth;
 using RegNeps.Application.Permissions;
@@ -51,6 +52,8 @@ public static class DependencyInjection
         services.AddScoped<IFabricRepository, FabricRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRolePermissionRepository, RolePermissionRepository>();
+        services.AddScoped<IRoleRepository, RoleRepository>();
+        services.AddScoped<RoleAdminService>();
         services.AddSingleton<IPermissionMatrix, PermissionMatrix>();
         services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<ISavedReportRepository, SavedReportRepository>();
@@ -59,10 +62,13 @@ public static class DependencyInjection
         services.AddScoped<IRecordImportService, RecordImportService>();
         services.AddScoped<IFabricImportService, FabricImportService>();
 
+        services.AddSingleton<IAlertRealtimeNotifier, NoOpAlertRealtimeNotifier>();
+        services.AddScoped<IAlertCriticalPublisher, AlertCriticalPublisher>();
         services.AddScoped<NepRecordService>();
         services.AddScoped<AuthService>();
         services.AddScoped<UserAdminService>();
         services.AddScoped<AnalyticsService>();
+        services.AddScoped<ReportBuilderService>();
         services.AddScoped<ReportExportAppService>();
         services.AddScoped<HistoricalDataMigrationService>();
         services.AddScoped<IReportSnapshotService>(sp =>

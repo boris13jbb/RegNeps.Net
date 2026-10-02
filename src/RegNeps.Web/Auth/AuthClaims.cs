@@ -16,6 +16,7 @@ public static class AuthClaims
     public const string DisplayName = "display_name";
     public const string Role = ClaimTypes.Role;
     public const string IsSuperAdmin = "is_super_admin";
+    public const string RoleCode = "role_code";
     public const string ExternalUserId = "external_user_id";
 
     public static ClaimsPrincipal CreatePrincipal(AppUser user)
@@ -27,6 +28,7 @@ public static class AuthClaims
             new(Username, user.Username),
             new(DisplayName, user.EffectiveDisplayName),
             new(Role, role),
+            new(RoleCode, user.EffectiveRoleCode),
             new(IsSuperAdmin, user.IsSuperAdmin || user.Role == AppUserRole.SuperAdmin ? "true" : "false")
         };
 
@@ -80,12 +82,13 @@ public sealed class CurrentUserService
         var display = user.FindFirstValue(AuthClaims.DisplayName) ?? username;
         var roleRaw = user.FindFirstValue(AuthClaims.Role) ?? nameof(AppUserRole.Operario);
         Enum.TryParse<AppUserRole>(roleRaw, out var role);
+        var roleCode = user.FindFirstValue(AuthClaims.RoleCode);
         var isSuper = string.Equals(user.FindFirstValue(AuthClaims.IsSuperAdmin), "true", StringComparison.OrdinalIgnoreCase)
                       || role == AppUserRole.SuperAdmin;
         var external = user.FindFirstValue(AuthClaims.ExternalUserId);
         await _permissions.EnsureLoadedAsync();
 
-        return new UserSession(id, username, display, role, isSuper, external, _permissions);
+        return new UserSession(id, username, display, role, roleCode, isSuper, external, _permissions);
     }
 
     /// <summary>Vuelve a leer la matriz vigente. No basta con el permiso que había al abrir la página.</summary>
@@ -101,27 +104,42 @@ public sealed record UserSession(
     string Username,
     string DisplayName,
     AppUserRole Role,
+    string? RoleCode,
     bool IsSuperAdmin,
     string? ExternalUserId = null,
     IPermissionService? Permissions = null)
 {
     public AppUserRole EffectiveRole => IsSuperAdmin ? AppUserRole.SuperAdmin : Role;
 
+    public string EffectiveRoleCode =>
+        IsSuperAdmin
+            ? Domain.Constants.SystemRoleCodes.SuperAdmin
+            : string.IsNullOrWhiteSpace(RoleCode)
+                ? Domain.Constants.SystemRoleCodes.FromEnum(Role)
+                : RoleCode.Trim();
+
     public bool Has(AppPermission permission) =>
-        Permissions?.HasPermission(Role, IsSuperAdmin, true, permission)
+        Permissions?.HasPermissionByRoleCode(EffectiveRoleCode, IsSuperAdmin, true, permission)
         ?? RolePermissions.Has(Role, IsSuperAdmin, true, permission);
 
     public CallerContext ToCaller()
     {
         Guid? id = Guid.TryParse(UserId, out var parsed) ? parsed : null;
-        return new CallerContext(id, Role, IsSuperAdmin);
+        return new CallerContext(id, Role, IsSuperAdmin, true, EffectiveRoleCode);
     }
 
-    /// <summary>Operario solo ve sus registros; el resto ve el workspace.</summary>
     public bool SeesAllRecords =>
-        EffectiveRole is not AppUserRole.Operario;
+        Permissions?.SeesAllRecords(EffectiveRoleCode, IsSuperAdmin)
+        ?? EffectiveRole is not AppUserRole.Operario;
 
     public Application.Records.RecordActor ToActor() =>
         Application.Records.RecordActor.Create(
-            UserId, Username, DisplayName, Role, IsSuperAdmin, ExternalUserId);
+            UserId, Username, DisplayName, Role, IsSuperAdmin, ExternalUserId, EffectiveRoleCode, SeesAllRecords);
+
+    public Application.Reports.ReportAccessActor ToReportAccessActor() =>
+        Application.Reports.ReportAccessActor.Create(
+            UserId,
+            SeesAllRecords,
+            Has(AppPermission.ManageReports),
+            Has(AppPermission.ExportReports));
 }

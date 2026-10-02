@@ -13,8 +13,10 @@ using RegNeps.Domain.Filters;
 using RegNeps.Domain.Permissions;
 using RegNeps.Infrastructure;
 using RegNeps.Infrastructure.Migration;
+using RegNeps.Application.Alerts;
 using RegNeps.Web.Auth;
 using RegNeps.Web.Components;
+using RegNeps.Web.Realtime;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -74,6 +76,7 @@ if (!useSqlServer && !string.IsNullOrWhiteSpace(connectionString) &&
 }
 
 builder.Services.AddRegNepsInfrastructure(connectionString, useSqlServer);
+builder.Services.AddSingleton<IAlertRealtimeNotifier, SignalRAlertRealtimeNotifier>();
 
 var urls = builder.Configuration["Urls"] ?? "http://0.0.0.0:5080";
 builder.WebHost.UseUrls(urls);
@@ -141,7 +144,8 @@ app.MapGet("/api/export/{format}", async (
     [FromQuery] string? tela,
     [FromQuery] string? from,
     [FromQuery] string? to,
-    [FromQuery] string? style) =>
+    [FromQuery] string? style,
+    [FromQuery] string[]? columns) =>
 {
     if (http.User.Identity?.IsAuthenticated != true)
     {
@@ -168,8 +172,14 @@ app.MapGet("/api/export/{format}", async (
 
     try
     {
+        var selectedColumns = ReportColumnIds.ParseQuerySelection(columns);
         var file = await export.ExportAsync(
-            format, filters, session.UserId, session.SeesAllRecords, style ?? "completo");
+            format,
+            filters,
+            session.UserId,
+            session.SeesAllRecords,
+            style ?? "completo",
+            selectedColumns);
         return Results.File(file.Bytes, file.ContentType, file.FileName);
     }
     catch (InvalidOperationException ex)
@@ -187,7 +197,9 @@ app.MapGet("/api/export/saved/{id:guid}/{format}", async (
     string format,
     HttpContext http,
     IPermissionService permissions,
-    ReportExportAppService export) =>
+    ReportExportAppService export,
+    [FromQuery] string? style,
+    [FromQuery] string[]? columns) =>
 {
     if (http.User.Identity?.IsAuthenticated != true)
     {
@@ -203,7 +215,20 @@ app.MapGet("/api/export/saved/{id:guid}/{format}", async (
     try
     {
         var session = SessionFrom(http.User);
-        var file = await export.ExportSavedAsync(id, format, session.UserId, session.SeesAllRecords);
+        await permissions.EnsureLoadedAsync();
+        var seesAll = permissions.SeesAllRecords(session.EffectiveRoleCode, session.IsSuperAdmin);
+        var hasManage = await HasPermissionAsync(http, permissions, AppPermission.ManageReports);
+        var hasExport = await HasPermissionAsync(http, permissions, AppPermission.ExportReports);
+        var selectedColumns = ReportColumnIds.ParseQuerySelection(columns);
+        var file = await export.ExportSavedAsync(
+            id,
+            format,
+            session.UserId,
+            seesAll,
+            style ?? "completo",
+            selectedColumns,
+            hasManage,
+            hasExport);
         return Results.File(file.Bytes, file.ContentType, file.FileName);
     }
     catch (InvalidOperationException ex)
@@ -436,6 +461,8 @@ app.MapPost("/api/migration/import", async (
     return Results.Json(result);
 }).DisableAntiforgery().RequireAuthorization();
 
+app.MapHub<AlertNotificationHub>("/hubs/alerts");
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
@@ -450,7 +477,14 @@ static async Task<bool> HasPermissionAsync(HttpContext http, IPermissionService 
     }
 
     Enum.TryParse<AppUserRole>(user.FindFirstValue(AuthClaims.Role), out var role);
-    return await permissions.HasPermissionAsync(role, IsSuperAdminUser(user), true, permission);
+    var roleCode = user.FindFirstValue(AuthClaims.RoleCode);
+    var isSuper = IsSuperAdminUser(user);
+    if (!string.IsNullOrWhiteSpace(roleCode))
+    {
+        return permissions.HasPermissionByRoleCode(roleCode, isSuper, true, permission);
+    }
+
+    return await permissions.HasPermissionAsync(role, isSuper, true, permission);
 }
 
 static bool IsSuperAdminUser(ClaimsPrincipal user) =>
@@ -462,7 +496,8 @@ static UserSession SessionFrom(ClaimsPrincipal user)
     var username = user.FindFirstValue(AuthClaims.Username) ?? "";
     var display = user.FindFirstValue(AuthClaims.DisplayName) ?? username;
     Enum.TryParse<AppUserRole>(user.FindFirstValue(AuthClaims.Role), out var role);
+    var roleCode = user.FindFirstValue(AuthClaims.RoleCode);
     var isSuper = IsSuperAdminUser(user);
     var external = user.FindFirstValue(AuthClaims.ExternalUserId);
-    return new UserSession(id, username, display, role, isSuper, external);
+    return new UserSession(id, username, display, role, roleCode, isSuper, external);
 }

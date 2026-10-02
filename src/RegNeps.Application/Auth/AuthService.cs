@@ -1,5 +1,6 @@
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Permissions;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Permissions;
@@ -68,7 +69,7 @@ public sealed class UserAdminService
     public async Task<AppUser> CreateAsync(
         string username,
         string password,
-        AppUserRole role,
+        string roleCode,
         string? displayName,
         string? email,
         CallerContext actor,
@@ -76,7 +77,8 @@ public sealed class UserAdminService
     {
         await _permissions.EnsureLoadedAsync(ct);
         Ensure(actor, AppPermission.ManageUsers);
-        if (role == AppUserRole.SuperAdmin)
+        roleCode = roleCode.Trim();
+        if (SystemRoleCodes.IsSuperAdminCode(roleCode))
         {
             throw new InvalidOperationException("No se puede crear un super_admin desde el panel.");
         }
@@ -99,18 +101,19 @@ public sealed class UserAdminService
             Username = username,
             DisplayName = displayName?.Trim() ?? username,
             Email = email?.Trim(),
-            Role = role,
             PasswordHash = AuthService.HashPassword(password),
             IsActive = true
         };
+        user.ApplyRoleCode(roleCode);
         return await _users.AddAsync(user, ct);
     }
 
-    public async Task UpdateRoleAsync(Guid userId, AppUserRole role, CallerContext actor, CancellationToken ct = default)
+    public async Task UpdateRoleAsync(Guid userId, string roleCode, CallerContext actor, CancellationToken ct = default)
     {
         await _permissions.EnsureLoadedAsync(ct);
         Ensure(actor, AppPermission.ChangeRoles);
-        if (role == AppUserRole.SuperAdmin)
+        roleCode = roleCode.Trim();
+        if (SystemRoleCodes.IsSuperAdminCode(roleCode))
         {
             throw new InvalidOperationException("No se puede promover a super_admin desde el panel.");
         }
@@ -123,7 +126,7 @@ public sealed class UserAdminService
             throw new InvalidOperationException("No se puede cambiar el rol de un super administrador.");
         }
 
-        user.Role = role;
+        user.ApplyRoleCode(roleCode);
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user, ct);
     }
@@ -196,7 +199,8 @@ public sealed class UserAdminService
 
     private void Ensure(CallerContext actor, AppPermission permission)
     {
-        if (!_permissions.HasPermission(actor.Role, actor.IsSuperAdmin, actor.IsActive, permission))
+        if (!_permissions.HasPermissionByRoleCode(
+                actor.EffectiveRoleCode, actor.IsSuperAdmin, actor.IsActive, permission))
         {
             throw new UnauthorizedAccessException("No tiene permiso para esta operación.");
         }

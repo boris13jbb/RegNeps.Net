@@ -1,4 +1,5 @@
 using RegNeps.Application.Analytics;
+using RegNeps.Application.Reports;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
@@ -20,6 +21,13 @@ public interface INepRecordRepository
         CancellationToken ct = default);
     Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<NepRecord?> FindByClientOperationAsync(string userId, string clientOperationId, CancellationToken ct = default);
+    /// <summary>Registros del usuario desde <paramref name="sinceUtc"/> (más recientes primero).</summary>
+    Task<IReadOnlyList<NepRecord>> FindRecentByUserAsync(
+        string userId,
+        string? externalUserId,
+        DateTime sinceUtc,
+        int take = 100,
+        CancellationToken ct = default);
     Task<NepRecord> AddAsync(NepRecord record, CancellationToken ct = default);
     Task UpdateAsync(NepRecord record, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
@@ -54,6 +62,19 @@ public interface IRolePermissionRepository
         IReadOnlyList<RolePermission> upserts,
         IReadOnlyList<RolePermissionAudit> audits,
         CancellationToken ct = default);
+}
+
+public interface IRoleRepository
+{
+    Task<IReadOnlyList<AppRole>> ListAsync(bool includeInactive = true, CancellationToken ct = default);
+    Task<AppRole?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<AppRole?> GetByCodeAsync(string code, CancellationToken ct = default);
+    Task<int> CountUsersForRoleAsync(string roleCode, CancellationToken ct = default);
+    Task<AppRole> AddAsync(AppRole role, CancellationToken ct = default);
+    Task UpdateAsync(AppRole role, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+    Task InitializeBaseRolesAsync(CancellationToken ct = default);
+    Task DeleteWithPermissionsAsync(Guid roleId, CancellationToken ct = default);
 }
 
 public interface IUserRepository
@@ -127,6 +148,15 @@ public interface IExportFileService
         AnalyticsSummary summary,
         string? periodDescription = null,
         IReadOnlyList<AnalyticsChartImage>? chartImages = null);
+    byte[] BuildReportBuilderExcel(
+        ReportBuilderResult result,
+        string? periodDescription = null,
+        string? filtersDescription = null);
+    byte[] BuildReportBuilderPdf(
+        ReportBuilderResult result,
+        string? periodDescription = null,
+        string? filtersDescription = null,
+        IReadOnlyList<AnalyticsChartImage>? chartImages = null);
 }
 
 /// <summary>Imagen PNG capturada de una gráfica Chart.js para incrustar en PDF.</summary>
@@ -134,7 +164,30 @@ public sealed record AnalyticsChartImage(string Title, byte[] PngBytes);
 
 public interface IRecordImportService
 {
-    Task<(int Imported, IReadOnlyList<string> Errors)> ImportExcelAsync(Stream stream, string? createdByUserId, string? createdByEmail, string? createdByRole, CancellationToken ct = default);
+    /// <summary>Importa Excel (.xlsx/.xls). Resultado por fila.</summary>
+    Task<RegNeps.Application.Records.RecordImportResult> ImportExcelAsync(
+        Stream stream,
+        string? createdByUserId,
+        string? createdByEmail,
+        string? createdByRole,
+        CancellationToken ct = default);
+
+    /// <summary>Importa CSV UTF-8 (BOM opcional, separador , o ;). Resultado por fila.</summary>
+    Task<RegNeps.Application.Records.RecordImportResult> ImportCsvAsync(
+        Stream stream,
+        string? createdByUserId,
+        string? createdByEmail,
+        string? createdByRole,
+        CancellationToken ct = default);
+
+    /// <summary>Detecta CSV vs Excel por nombre de archivo.</summary>
+    Task<RegNeps.Application.Records.RecordImportResult> ImportFileAsync(
+        Stream stream,
+        string fileName,
+        string? createdByUserId,
+        string? createdByEmail,
+        string? createdByRole,
+        CancellationToken ct = default);
 }
 
 public interface IFabricImportService
