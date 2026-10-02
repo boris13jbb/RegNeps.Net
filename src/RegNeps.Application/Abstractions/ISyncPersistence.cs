@@ -6,16 +6,28 @@ namespace RegNeps.Application.Abstractions;
 
 /// <summary>
 /// Persistencia atómica de sync sobre un único DbContext/transacción.
-/// Necesario porque el repositorio de registros usa factory (contexto por operación).
 /// </summary>
 public interface ISyncPersistence
 {
-    /// <summary>
-    /// Crea NepRecord + SyncChangeLog en una sola transacción, o devuelve Duplicate
-    /// si ya existe (CreatedByUserId, ClientOperationId).
-    /// </summary>
     Task<SyncCreatePersistResult> CreateRecordAtomicallyAsync(
         CreateNepRecordRequest request,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
+    Task<AtomicNepRecordMutationResult> UpdateRecordAtomicallyAsync(
+        SyncUpdateRecordPayload fields,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        string? captureSessionId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
+    Task<AtomicNepRecordMutationResult> DeleteRecordAtomicallyAsync(
+        Guid entityId,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
         RecordActor actor,
         string deviceId,
         CancellationToken ct = default);

@@ -10,7 +10,7 @@ using RegNeps.Infrastructure.Persistence;
 namespace RegNeps.Infrastructure.Sync;
 
 /// <summary>
-/// Push/Pull durable. CreateRecord delega en <see cref="IAtomicNepRecordCreateStore"/>
+/// Push/Pull durable. Create/Update/Delete delegan en <see cref="IAtomicNepRecordCreateStore"/>
 /// (mismo camino atómico que la captura online).
 /// </summary>
 public sealed class SyncPersistence : ISyncPersistence
@@ -130,6 +130,27 @@ public sealed class SyncPersistence : ISyncPersistence
             };
         }
     }
+
+    public Task<AtomicNepRecordMutationResult> UpdateRecordAtomicallyAsync(
+        SyncUpdateRecordPayload fields,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        string? captureSessionId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default) =>
+        _atomicCreate.UpdateWithChangeLogAsync(
+            fields, expectedConcurrencyStamp, clientOperationId, captureSessionId, actor, deviceId, ct);
+
+    public Task<AtomicNepRecordMutationResult> DeleteRecordAtomicallyAsync(
+        Guid entityId,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default) =>
+        _atomicCreate.DeleteWithTombstoneAsync(
+            entityId, expectedConcurrencyStamp, clientOperationId, actor, deviceId, ct);
 
     public async Task<SyncPullPersistResult> PullAuthorizedChangesAsync(
         RecordActor actor,

@@ -337,6 +337,34 @@ public sealed class NepRecordService
         if (request.Neps <= 0)
             throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
 
+        // FASE 2C: Update online observable por sync (mismo camino atómico que Push UpdateRecord).
+        if (_atomicCreate is not null)
+        {
+            var fields = new Sync.SyncUpdateRecordPayload
+            {
+                EntityId = request.Id,
+                Telar = request.Telar,
+                Neps = request.Neps,
+                Tela = request.Tela,
+                LoteTrama = request.LoteTrama,
+                Turno = request.Turno,
+                Operario = request.Operario,
+                LineaProduccion = request.LineaProduccion,
+                Observacion = request.Observacion
+            };
+
+            var outcome = await _atomicCreate.UpdateWithChangeLogAsync(
+                fields,
+                request.ExpectedConcurrencyStamp,
+                clientOperationId: null,
+                captureSessionId: null,
+                actor,
+                deviceId: null,
+                ct);
+
+            return MapMutationOrThrow(outcome);
+        }
+
         var record = await _records.GetByIdAsync(request.Id, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
 
@@ -484,11 +512,64 @@ public sealed class NepRecordService
             throw new UnauthorizedRecordAccessException("No tiene permiso para eliminar registros.");
         }
 
+        // FASE 2C: Delete online con tombstone atómico (mismo camino que Push DeleteRecord).
+        if (_atomicCreate is not null)
+        {
+            var current = await _records.GetByIdAsync(id, ct)
+                ?? throw new InvalidOperationException("Registro no encontrado.");
+            EnsureCanMutate(actor, current, requireEditPermission: false);
+
+            var outcome = await _atomicCreate.DeleteWithTombstoneAsync(
+                id,
+                expectedConcurrencyStamp: current.ConcurrencyStamp,
+                clientOperationId: null,
+                actor,
+                deviceId: null,
+                ct);
+
+            EnsureMutationSucceeded(outcome);
+            return;
+        }
+
         var record = await _records.GetByIdAsync(id, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
 
         EnsureCanMutate(actor, record, requireEditPermission: false);
         await _records.DeleteAsync(id, ct);
+    }
+
+    private static NepRecord MapMutationOrThrow(Abstractions.AtomicNepRecordMutationResult outcome)
+    {
+        EnsureMutationSucceeded(outcome);
+        return outcome.Record
+               ?? throw new InvalidOperationException("Actualización sin entidad.");
+    }
+
+    private static void EnsureMutationSucceeded(Abstractions.AtomicNepRecordMutationResult outcome)
+    {
+        if (outcome.Result is Sync.SyncOperationResult.Accepted or Sync.SyncOperationResult.Duplicate)
+        {
+            return;
+        }
+
+        if (outcome.Result == Sync.SyncOperationResult.Conflict)
+        {
+            throw new RecordConcurrencyConflictException(
+                "Este registro fue modificado por otro usuario. Recargue y revise antes de guardar.");
+        }
+
+        if (outcome.Result == Sync.SyncOperationResult.Forbidden)
+        {
+            throw new UnauthorizedRecordAccessException(
+                outcome.Message ?? "No autorizado.");
+        }
+
+        if (outcome.ErrorCode is "ENTITY_NOT_FOUND" or "ENTITY_DELETED")
+        {
+            throw new InvalidOperationException(outcome.Message ?? "Registro no encontrado.");
+        }
+
+        throw new InvalidOperationException(outcome.Message ?? "No se pudo completar la operación.");
     }
 
     /// <summary>
@@ -525,15 +606,8 @@ public sealed class NepRecordService
             ct.ThrowIfCancellationRequested();
             try
             {
-                var record = await _records.GetByIdAsync(id, ct);
-                if (record is null)
-                {
-                    failed.Add(id);
-                    continue;
-                }
-
-                EnsureCanMutate(actor, record, requireEditPermission: false);
-                await _records.DeleteAsync(id, ct);
+                // Reutiliza DeleteAsync (tombstone + ChangeLog cuando hay store atómico).
+                await DeleteAsync(id, actor, ct);
                 deleted.Add(id);
             }
             catch

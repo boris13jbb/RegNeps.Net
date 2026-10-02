@@ -1,21 +1,42 @@
+using RegNeps.Application.Records;
+using RegNeps.Application.Sync;
 using RegNeps.Domain.Entities;
 
 namespace RegNeps.Application.Abstractions;
 
 /// <summary>
-/// Persistencia atómica de creación observable por sync:
-/// NepRecord + SyncChangeLog (RecordUpserted) en el mismo DbContext/transacción.
+/// Persistencia atómica de mutaciones observables por sync
+/// (NepRecord + SyncChangeLog en el mismo DbContext/transacción).
 /// </summary>
 public interface IAtomicNepRecordCreateStore
 {
-    /// <summary>
-    /// Inserta el registro y su ChangeLog. Si ya existe la clave
-    /// (CreatedByUserId, ClientOperationId), retorna el existente con <c>Inserted=false</c>
-    /// sin crear un segundo ChangeLog.
-    /// </summary>
     Task<AtomicNepRecordCreateResult> CreateWithChangeLogAsync(
         NepRecord record,
         string actorUserId,
+        string? deviceId,
+        CancellationToken ct = default);
+
+    /// <param name="expectedConcurrencyStamp">
+    /// Si es null/vacío (ruta online sin stamp), no se aplica la comparación previa;
+    /// el token EF sigue protegiendo la escritura.
+    /// </param>
+    /// <param name="clientOperationId">
+    /// Obligatorio en Push sync; null en mutaciones online sin idempotencia de cliente.
+    /// </param>
+    Task<AtomicNepRecordMutationResult> UpdateWithChangeLogAsync(
+        SyncUpdateRecordPayload fields,
+        string? expectedConcurrencyStamp,
+        string? clientOperationId,
+        string? captureSessionId,
+        RecordActor actor,
+        string? deviceId,
+        CancellationToken ct = default);
+
+    Task<AtomicNepRecordMutationResult> DeleteWithTombstoneAsync(
+        Guid entityId,
+        string? expectedConcurrencyStamp,
+        string? clientOperationId,
+        RecordActor actor,
         string? deviceId,
         CancellationToken ct = default);
 }
@@ -25,4 +46,16 @@ public sealed class AtomicNepRecordCreateResult
     public required NepRecord Record { get; init; }
     public bool Inserted { get; init; }
     public long? ChangeSequence { get; init; }
+}
+
+public sealed class AtomicNepRecordMutationResult
+{
+    public SyncOperationResult Result { get; init; }
+    public string? ErrorCode { get; init; }
+    public string? Message { get; init; }
+    public NepRecord? Record { get; init; }
+    public long? ChangeSequence { get; init; }
+    public string? ServerConcurrencyStamp { get; init; }
+    public string? ServerSnapshotJson { get; init; }
+    public Guid? EntityId { get; init; }
 }

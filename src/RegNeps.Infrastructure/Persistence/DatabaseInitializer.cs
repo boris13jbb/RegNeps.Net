@@ -284,6 +284,17 @@ public static class DatabaseInitializer
                 ON "SyncChangeLogs" ("ClientOperationId")
                 """);
         }
+
+        // FASE 2C: idempotencia mutaciones sync (ActorUserId + ClientOperationId).
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_Actor_ClientOperation"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_SyncChangeLogs_Actor_ClientOperation"
+                ON "SyncChangeLogs" ("ActorUserId", "ClientOperationId")
+                WHERE "ClientOperationId" IS NOT NULL AND "ClientOperationId" <> ''
+                """);
+        }
     }
 
     private static async Task EnsureSyncChangeLogsSqlServerAsync(RegNepsDbContext db)
@@ -332,6 +343,16 @@ public static class DatabaseInitializer
                 """
                 CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_ClientOperationId]
                 ON [SyncChangeLogs] ([ClientOperationId])
+                """);
+        }
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_Actor_ClientOperation"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE UNIQUE NONCLUSTERED INDEX [IX_SyncChangeLogs_Actor_ClientOperation]
+                ON [SyncChangeLogs] ([ActorUserId], [ClientOperationId])
+                WHERE [ClientOperationId] IS NOT NULL AND [ClientOperationId] <> ''
                 """);
         }
     }

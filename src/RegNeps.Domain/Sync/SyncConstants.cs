@@ -10,6 +10,7 @@ public static class SyncConstants
     public const string EntityCatalogItem = "CatalogItem";
 
     public const string ChangeRecordUpserted = "RecordUpserted";
+    public const string ChangeRecordDeleted = "RecordDeleted";
 
     public const string OperationCreateRecord = "CreateRecord";
     public const string OperationUpdateRecord = "UpdateRecord";

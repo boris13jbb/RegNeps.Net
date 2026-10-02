@@ -12,8 +12,8 @@ using RegNeps.Domain.Sync;
 namespace RegNeps.Application.Sync;
 
 /// <summary>
-/// Orquestación Push/Pull v1. Autorización siempre desde claims + matriz de permisos.
-/// No confía en UserId/Role/permisos enviados por el cliente.
+/// Orquestación Push/Pull v1: CreateRecord, UpdateRecord, DeleteRecord.
+/// Autorización siempre desde claims + matriz de permisos.
 /// </summary>
 public sealed class SyncAppService
 {
@@ -88,8 +88,7 @@ public sealed class SyncAppService
 
         foreach (var op in request.Operations)
         {
-            var result = await ProcessOperationAsync(op, actor, deviceId, correlationId, ct);
-            response.Results.Add(result);
+            response.Results.Add(await ProcessOperationAsync(op, actor, deviceId, correlationId, ct));
         }
 
         LogPush(actor, deviceId, null, null, sw.ElapsedMilliseconds, correlationId,
@@ -119,7 +118,6 @@ public sealed class SyncAppService
             _logger.LogWarning(
                 "Sync Pull protocolo inválido. UserId={UserId} DeviceId={DeviceId} CorrelationId={CorrelationId}",
                 actor.UserId, request.DeviceId, correlationId);
-            // No rebobinar el cursor del cliente ante error de protocolo.
             return EmptyPull(serverTime, safeCursor);
         }
 
@@ -136,7 +134,6 @@ public sealed class SyncAppService
             _logger.LogInformation(
                 "Sync Pull Forbidden. UserId={UserId} DeviceId={DeviceId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
                 actor.UserId, deviceId, correlationId, sw.ElapsedMilliseconds);
-            // Sin permiso de consulta: cursor no avanza; lista vacía (no filtrar datos ajenos).
             return new SyncPullResponse
             {
                 ProtocolVersion = SyncProtocol.Version,
@@ -147,15 +144,13 @@ public sealed class SyncAppService
             };
         }
 
-        var cursor = safeCursor;
-        var pageSize = SyncProtocol.NormalizePageSize(request.PageSize);
-
-        var page = await _persistence.PullAuthorizedChangesAsync(actor, cursor, pageSize, ct);
+        var page = await _persistence.PullAuthorizedChangesAsync(
+            actor, safeCursor, SyncProtocol.NormalizePageSize(request.PageSize), ct);
         var changes = page.AuthorizedChanges.Select(MapChange).ToList();
 
         _logger.LogInformation(
             "Sync Pull. UserId={UserId} DeviceId={DeviceId} Cursor={Cursor} NextCursor={NextCursor} Returned={Returned} HasMore={HasMore} CorrelationId={CorrelationId} DurationMs={DurationMs}",
-            actor.UserId, deviceId, cursor, page.NextCursor, changes.Count, page.HasMore, correlationId, sw.ElapsedMilliseconds);
+            actor.UserId, deviceId, safeCursor, page.NextCursor, changes.Count, page.HasMore, correlationId, sw.ElapsedMilliseconds);
 
         return new SyncPullResponse
         {
@@ -197,113 +192,25 @@ public sealed class SyncAppService
             }
 
             var opType = (op.OperationType ?? string.Empty).Trim();
-            if (!string.Equals(opType, SyncConstants.OperationCreateRecord, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(opType, SyncConstants.OperationCreateRecord, StringComparison.OrdinalIgnoreCase))
             {
-                var unsupported = new SyncOperationResultDto
-                {
-                    ClientOperationId = clientOpId,
-                    Result = nameof(SyncOperationResult.Invalid),
-                    ErrorCode = "OPERATION_TYPE_UNSUPPORTED",
-                    Message = $"OperationType '{opType}' no soportado en protocolo v1 (solo CreateRecord)."
-                };
-                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, opType);
-                return unsupported;
+                return await ProcessCreateAsync(op, clientOpId, actor, deviceId, correlationId, sw, ct);
             }
 
-            if (!CanCapture(actor))
+            if (string.Equals(opType, SyncConstants.OperationUpdateRecord, StringComparison.OrdinalIgnoreCase))
             {
-                var forbidden = new SyncOperationResultDto
-                {
-                    ClientOperationId = clientOpId,
-                    Result = nameof(SyncOperationResult.Forbidden),
-                    ErrorCode = "CAPTURE_FORBIDDEN",
-                    Message = "No tiene permiso para capturar registros."
-                };
-                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Forbidden, sw.ElapsedMilliseconds, correlationId, null);
-                return forbidden;
+                return await ProcessUpdateAsync(op, clientOpId, actor, deviceId, correlationId, sw, ct);
             }
 
-            if (op.Payload is null || op.Payload.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            if (string.Equals(opType, SyncConstants.OperationDeleteRecord, StringComparison.OrdinalIgnoreCase))
             {
-                return Invalid(clientOpId, "PAYLOAD_REQUIRED", "Payload es obligatorio.");
+                return await ProcessDeleteAsync(op, clientOpId, actor, deviceId, correlationId, sw, ct);
             }
 
-            SyncCreateRecordPayload? payload;
-            try
-            {
-                payload = op.Payload.Value.Deserialize<SyncCreateRecordPayload>(JsonOptions);
-            }
-            catch (JsonException)
-            {
-                return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
-            }
-
-            if (payload is null)
-            {
-                return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
-            }
-
-            // Ignorar cualquier intento de enviar identidad/permisos en el payload.
-            var createRequest = new CreateNepRecordRequest
-            {
-                Telar = payload.Telar ?? string.Empty,
-                Neps = payload.Neps,
-                Tela = payload.Tela ?? string.Empty,
-                LoteTrama = payload.LoteTrama ?? string.Empty,
-                Turno = payload.Turno ?? string.Empty,
-                Operario = payload.Operario ?? string.Empty,
-                LineaProduccion = payload.LineaProduccion ?? string.Empty,
-                Observacion = payload.Observacion ?? string.Empty,
-                ClientOperationId = clientOpId,
-                CaptureSessionId = string.IsNullOrWhiteSpace(op.CaptureSessionId)
-                    ? null
-                    : op.CaptureSessionId.Trim()
-            };
-
-            if (createRequest.CaptureSessionId?.Length > SyncConstants.MaxCaptureSessionIdLength)
-            {
-                return Invalid(clientOpId, "CAPTURE_SESSION_ID", "CaptureSessionId demasiado largo.");
-            }
-
-            try
-            {
-                NepRecordService.ValidateCreateRequest(createRequest);
-            }
-            catch (ArgumentException ex)
-            {
-                var invalid = Invalid(clientOpId, "VALIDATION", ex.Message);
-                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, null);
-                return invalid;
-            }
-
-            // ClientCreatedAtUtc / ExpectedConcurrencyStamp: no se usan como fuente de verdad en Create v1.
-            var persist = await _persistence.CreateRecordAtomicallyAsync(createRequest, actor, deviceId, ct);
-
-            if (persist.Result is SyncOperationResult.Accepted or SyncOperationResult.Duplicate)
-            {
-                var level = AlertEvaluator.GetLevel(persist.Record!.Neps);
-                var dto = new SyncOperationResultDto
-                {
-                    ClientOperationId = clientOpId,
-                    Result = persist.Result.ToString(),
-                    EntityId = persist.Record.Id,
-                    ConcurrencyStamp = persist.Record.ConcurrencyStamp,
-                    QualityLabel = level.ToDisplayLabel(),
-                    ChangeSequence = persist.ChangeSequence
-                };
-                LogPush(actor, deviceId, clientOpId, persist.Result, sw.ElapsedMilliseconds, correlationId, null);
-                return dto;
-            }
-
-            var mapped = new SyncOperationResultDto
-            {
-                ClientOperationId = clientOpId,
-                Result = persist.Result.ToString(),
-                ErrorCode = persist.ErrorCode,
-                Message = persist.Message
-            };
-            LogPush(actor, deviceId, clientOpId, persist.Result, sw.ElapsedMilliseconds, correlationId, persist.ErrorCode);
-            return mapped;
+            var unsupported = Invalid(clientOpId, "OPERATION_TYPE_UNSUPPORTED",
+                $"OperationType '{opType}' no soportado en protocolo v1 (CreateRecord/UpdateRecord/DeleteRecord).");
+            LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, opType);
+            return unsupported;
         }
         catch (Exception ex)
         {
@@ -320,8 +227,349 @@ public sealed class SyncAppService
         }
     }
 
+    private async Task<SyncOperationResultDto> ProcessCreateAsync(
+        SyncOperationDto op,
+        string clientOpId,
+        RecordActor actor,
+        string deviceId,
+        string? correlationId,
+        Stopwatch sw,
+        CancellationToken ct)
+    {
+        if (!CanCapture(actor))
+        {
+            var forbidden = new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = nameof(SyncOperationResult.Forbidden),
+                ErrorCode = "CAPTURE_FORBIDDEN",
+                Message = "No tiene permiso para capturar registros."
+            };
+            LogPush(actor, deviceId, clientOpId, SyncOperationResult.Forbidden, sw.ElapsedMilliseconds, correlationId, null);
+            return forbidden;
+        }
+
+        if (op.Payload is null || op.Payload.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return Invalid(clientOpId, "PAYLOAD_REQUIRED", "Payload es obligatorio.");
+        }
+
+        SyncCreateRecordPayload? payload;
+        try
+        {
+            payload = op.Payload.Value.Deserialize<SyncCreateRecordPayload>(JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+        }
+
+        if (payload is null)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+        }
+
+        var createRequest = new CreateNepRecordRequest
+        {
+            Telar = payload.Telar ?? string.Empty,
+            Neps = payload.Neps,
+            Tela = payload.Tela ?? string.Empty,
+            LoteTrama = payload.LoteTrama ?? string.Empty,
+            Turno = payload.Turno ?? string.Empty,
+            Operario = payload.Operario ?? string.Empty,
+            LineaProduccion = payload.LineaProduccion ?? string.Empty,
+            Observacion = payload.Observacion ?? string.Empty,
+            ClientOperationId = clientOpId,
+            CaptureSessionId = string.IsNullOrWhiteSpace(op.CaptureSessionId)
+                ? null
+                : op.CaptureSessionId.Trim()
+        };
+
+        if (createRequest.CaptureSessionId?.Length > SyncConstants.MaxCaptureSessionIdLength)
+        {
+            return Invalid(clientOpId, "CAPTURE_SESSION_ID", "CaptureSessionId demasiado largo.");
+        }
+
+        try
+        {
+            NepRecordService.ValidateCreateRequest(createRequest);
+        }
+        catch (ArgumentException ex)
+        {
+            var invalid = Invalid(clientOpId, "VALIDATION", ex.Message);
+            LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, null);
+            return invalid;
+        }
+
+        var persist = await _persistence.CreateRecordAtomicallyAsync(createRequest, actor, deviceId, ct);
+        if (persist.Result is SyncOperationResult.Accepted or SyncOperationResult.Duplicate)
+        {
+            var level = AlertEvaluator.GetLevel(persist.Record!.Neps);
+            var dto = new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = persist.Result.ToString(),
+                EntityId = persist.Record.Id,
+                ConcurrencyStamp = persist.Record.ConcurrencyStamp,
+                QualityLabel = level.ToDisplayLabel(),
+                ChangeSequence = persist.ChangeSequence
+            };
+            LogPush(actor, deviceId, clientOpId, persist.Result, sw.ElapsedMilliseconds, correlationId, null);
+            return dto;
+        }
+
+        var mapped = new SyncOperationResultDto
+        {
+            ClientOperationId = clientOpId,
+            Result = persist.Result.ToString(),
+            ErrorCode = persist.ErrorCode,
+            Message = persist.Message
+        };
+        LogPush(actor, deviceId, clientOpId, persist.Result, sw.ElapsedMilliseconds, correlationId, persist.ErrorCode);
+        return mapped;
+    }
+
+    private async Task<SyncOperationResultDto> ProcessUpdateAsync(
+        SyncOperationDto op,
+        string clientOpId,
+        RecordActor actor,
+        string deviceId,
+        string? correlationId,
+        Stopwatch sw,
+        CancellationToken ct)
+    {
+        if (!CanEdit(actor))
+        {
+            var forbidden = new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = nameof(SyncOperationResult.Forbidden),
+                ErrorCode = "EDIT_FORBIDDEN",
+                Message = "No tiene permiso para editar registros."
+            };
+            LogPush(actor, deviceId, clientOpId, SyncOperationResult.Forbidden, sw.ElapsedMilliseconds, correlationId, null);
+            return forbidden;
+        }
+
+        if (op.Payload is null || op.Payload.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return Invalid(clientOpId, "PAYLOAD_REQUIRED", "Payload es obligatorio.");
+        }
+
+        SyncUpdateRecordPayload? payload;
+        try
+        {
+            payload = op.Payload.Value.Deserialize<SyncUpdateRecordPayload>(JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+        }
+
+        if (payload is null || payload.EntityId == Guid.Empty)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "EntityId es obligatorio.");
+        }
+
+        var expectedStamp = FirstNonEmpty(op.ExpectedConcurrencyStamp, payload.ExpectedConcurrencyStamp);
+        if (string.IsNullOrWhiteSpace(expectedStamp))
+        {
+            return Invalid(clientOpId, "CONCURRENCY_STAMP", "ExpectedConcurrencyStamp es obligatorio.");
+        }
+
+        var fields = new SyncUpdateRecordPayload
+        {
+            EntityId = payload.EntityId,
+            Telar = payload.Telar ?? string.Empty,
+            Neps = payload.Neps,
+            Tela = payload.Tela ?? string.Empty,
+            LoteTrama = payload.LoteTrama ?? string.Empty,
+            Turno = payload.Turno ?? string.Empty,
+            Operario = payload.Operario ?? string.Empty,
+            LineaProduccion = payload.LineaProduccion ?? string.Empty,
+            Observacion = payload.Observacion ?? string.Empty
+        };
+
+        try
+        {
+            NepRecordService.ValidateCreateRequest(new CreateNepRecordRequest
+            {
+                Telar = fields.Telar,
+                Neps = fields.Neps,
+                Tela = fields.Tela,
+                LoteTrama = fields.LoteTrama,
+                Turno = fields.Turno,
+                Operario = fields.Operario,
+                LineaProduccion = fields.LineaProduccion,
+                Observacion = fields.Observacion,
+                ClientOperationId = clientOpId
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return Invalid(clientOpId, "VALIDATION", ex.Message);
+        }
+
+        var captureSessionId = string.IsNullOrWhiteSpace(op.CaptureSessionId)
+            ? null
+            : op.CaptureSessionId.Trim();
+
+        var outcome = await _persistence.UpdateRecordAtomicallyAsync(
+            fields, expectedStamp, clientOpId, captureSessionId, actor, deviceId, ct);
+
+        var dto = MapMutationDto(clientOpId, outcome);
+        LogPush(actor, deviceId, clientOpId, outcome.Result, sw.ElapsedMilliseconds, correlationId, outcome.ErrorCode);
+        return dto;
+    }
+
+    private async Task<SyncOperationResultDto> ProcessDeleteAsync(
+        SyncOperationDto op,
+        string clientOpId,
+        RecordActor actor,
+        string deviceId,
+        string? correlationId,
+        Stopwatch sw,
+        CancellationToken ct)
+    {
+        if (!CanDelete(actor))
+        {
+            var forbidden = new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = nameof(SyncOperationResult.Forbidden),
+                ErrorCode = "DELETE_FORBIDDEN",
+                Message = "No tiene permiso para eliminar registros."
+            };
+            LogPush(actor, deviceId, clientOpId, SyncOperationResult.Forbidden, sw.ElapsedMilliseconds, correlationId, null);
+            return forbidden;
+        }
+
+        if (op.Payload is null || op.Payload.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return Invalid(clientOpId, "PAYLOAD_REQUIRED", "Payload es obligatorio.");
+        }
+
+        SyncDeleteRecordPayload? payload;
+        try
+        {
+            payload = op.Payload.Value.Deserialize<SyncDeleteRecordPayload>(JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+        }
+
+        if (payload is null || payload.EntityId == Guid.Empty)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "EntityId es obligatorio.");
+        }
+
+        var expectedStamp = FirstNonEmpty(op.ExpectedConcurrencyStamp, payload.ExpectedConcurrencyStamp);
+        if (string.IsNullOrWhiteSpace(expectedStamp))
+        {
+            return Invalid(clientOpId, "CONCURRENCY_STAMP", "ExpectedConcurrencyStamp es obligatorio.");
+        }
+
+        var outcome = await _persistence.DeleteRecordAtomicallyAsync(
+            payload.EntityId, expectedStamp, clientOpId, actor, deviceId, ct);
+
+        var dto = MapMutationDto(clientOpId, outcome);
+        LogPush(actor, deviceId, clientOpId, outcome.Result, sw.ElapsedMilliseconds, correlationId, outcome.ErrorCode);
+        return dto;
+    }
+
+    private static SyncOperationResultDto MapMutationDto(
+        string clientOpId,
+        AtomicNepRecordMutationResult outcome)
+    {
+        if (outcome.Result is SyncOperationResult.Accepted or SyncOperationResult.Duplicate)
+        {
+            string? quality = null;
+            if (outcome.Record is not null)
+            {
+                quality = AlertEvaluator.GetLevel(outcome.Record.Neps).ToDisplayLabel();
+            }
+
+            return new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = outcome.Result.ToString(),
+                EntityId = outcome.EntityId ?? outcome.Record?.Id,
+                ConcurrencyStamp = outcome.Record?.ConcurrencyStamp ?? outcome.ServerConcurrencyStamp,
+                QualityLabel = quality,
+                ChangeSequence = outcome.ChangeSequence,
+                Message = outcome.Result == SyncOperationResult.Duplicate
+                    ? (outcome.Message ?? "Operación ya procesada.")
+                    : outcome.Message,
+                ErrorCode = outcome.Result == SyncOperationResult.Duplicate ? outcome.ErrorCode : null
+            };
+        }
+
+        if (outcome.Result == SyncOperationResult.Conflict)
+        {
+            return new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = nameof(SyncOperationResult.Conflict),
+                EntityId = outcome.EntityId,
+                ServerConcurrencyStamp = outcome.ServerConcurrencyStamp,
+                ServerSnapshot = ParseSnapshot(outcome.ServerSnapshotJson),
+                ChangeSequence = outcome.ChangeSequence,
+                ErrorCode = outcome.ErrorCode ?? "CONFLICT",
+                Message = outcome.Message ?? "Conflicto de concurrencia."
+            };
+        }
+
+        return new SyncOperationResultDto
+        {
+            ClientOperationId = clientOpId,
+            Result = outcome.Result.ToString(),
+            EntityId = outcome.EntityId,
+            ErrorCode = outcome.ErrorCode,
+            Message = outcome.Message,
+            ChangeSequence = outcome.ChangeSequence
+        };
+    }
+
+    private static JsonElement? ParseSnapshot(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v))
+            {
+                return v.Trim();
+            }
+        }
+
+        return null;
+    }
+
     private bool CanCapture(RecordActor actor) =>
         _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.CaptureRecords);
+
+    private bool CanEdit(RecordActor actor) =>
+        _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.EditRecords);
+
+    private bool CanDelete(RecordActor actor) =>
+        _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.DeleteRecords);
 
     private bool CanViewRecords(RecordActor actor) =>
         _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.ViewRecords)

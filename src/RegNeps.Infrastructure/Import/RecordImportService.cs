@@ -11,8 +11,15 @@ namespace RegNeps.Infrastructure.Import;
 public sealed class RecordImportService : IRecordImportService
 {
     private readonly INepRecordRepository _records;
+    private readonly IAtomicNepRecordCreateStore? _atomicCreate;
 
-    public RecordImportService(INepRecordRepository records) => _records = records;
+    public RecordImportService(
+        INepRecordRepository records,
+        IAtomicNepRecordCreateStore? atomicCreate = null)
+    {
+        _records = records;
+        _atomicCreate = atomicCreate;
+    }
 
     public Task<RecordImportResult> ImportFileAsync(
         Stream stream,
@@ -189,6 +196,7 @@ public sealed class RecordImportService : IRecordImportService
 
             var record = new NepRecord
             {
+                Id = Guid.NewGuid(),
                 Telar = telar.Trim(),
                 Neps = neps,
                 Tela = (tela ?? string.Empty).Trim(),
@@ -202,10 +210,26 @@ public sealed class RecordImportService : IRecordImportService
                     : createdAt.ToUniversalTime(),
                 CreatedByUserId = createdByUserId,
                 CreatedByEmail = createdByEmail,
-                CreatedByRole = createdByRole
+                CreatedByRole = createdByRole,
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                // Idempotencia por fila de importación (reintento de la misma fila en la misma corrida).
+                ClientOperationId = $"imp-{rowNum}-{Guid.NewGuid():N}"
             };
 
-            await _records.AddAsync(record, ct);
+            // FASE 2C: cada fila importada genera SyncChangeLog atómico cuando el store está registrado.
+            if (_atomicCreate is not null && !string.IsNullOrWhiteSpace(createdByUserId))
+            {
+                await _atomicCreate.CreateWithChangeLogAsync(
+                    record,
+                    createdByUserId,
+                    deviceId: null,
+                    ct);
+            }
+            else
+            {
+                await _records.AddAsync(record, ct);
+            }
+
             return new RecordImportRowResult { RowNumber = rowNum, Success = true };
         }
         catch (Exception ex)

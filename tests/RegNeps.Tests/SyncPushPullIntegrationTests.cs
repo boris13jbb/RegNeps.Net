@@ -222,7 +222,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
                 new SyncOperationDto
                 {
                     ClientOperationId = Guid.NewGuid().ToString("N"),
-                    OperationType = SyncConstants.OperationUpdateRecord,
+                    OperationType = SyncConstants.OperationApplyCorrective,
                     Payload = JsonSerializer.SerializeToElement(new { telar = "1", neps = 1 })
                 }
             ]

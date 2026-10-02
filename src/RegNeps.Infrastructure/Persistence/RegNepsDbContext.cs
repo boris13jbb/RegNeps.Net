@@ -172,6 +172,15 @@ public sealed class RegNepsDbContext : DbContext
                 .HasDatabaseName("IX_SyncChangeLogs_Owner_Sequence");
             e.HasIndex(x => x.ClientOperationId)
                 .HasDatabaseName("IX_SyncChangeLogs_ClientOperationId");
+
+            // FASE 2C: idempotencia Update/Delete (y Create vía ChangeLog) por actor + ClientOperationId.
+            var clientOpFilter = Database.IsSqlServer()
+                ? "[ClientOperationId] IS NOT NULL AND [ClientOperationId] <> ''"
+                : "\"ClientOperationId\" IS NOT NULL AND \"ClientOperationId\" <> ''";
+            e.HasIndex(x => new { x.ActorUserId, x.ClientOperationId })
+                .IsUnique()
+                .HasFilter(clientOpFilter)
+                .HasDatabaseName("IX_SyncChangeLogs_Actor_ClientOperation");
         });
     }
 }

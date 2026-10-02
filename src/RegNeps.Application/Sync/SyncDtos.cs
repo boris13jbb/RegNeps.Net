@@ -8,7 +8,8 @@ public enum SyncOperationResult
     Duplicate = 1,
     Forbidden = 2,
     Invalid = 3,
-    TransientError = 4
+    TransientError = 4,
+    Conflict = 5
 }
 
 public sealed class SyncPushRequest
@@ -45,6 +46,12 @@ public sealed class SyncOperationResultDto
     public string? ConcurrencyStamp { get; set; }
     public string? QualityLabel { get; set; }
     public long? ChangeSequence { get; set; }
+
+    /// <summary>Stamp actual del servidor en Conflict.</summary>
+    public string? ServerConcurrencyStamp { get; set; }
+
+    /// <summary>Snapshot canónico del servidor en Conflict (mismo shape que Pull).</summary>
+    public JsonElement? ServerSnapshot { get; set; }
 }
 
 public sealed class SyncPullRequest
@@ -74,7 +81,7 @@ public sealed class SyncChangeDto
     public JsonElement Payload { get; set; }
 }
 
-/// <summary>Payload CreateRecord en el contrato HTTP (no es entidad EF).</summary>
+/// <summary>Payload CreateRecord (no es entidad EF).</summary>
 public sealed class SyncCreateRecordPayload
 {
     public string Telar { get; set; } = string.Empty;
@@ -85,4 +92,30 @@ public sealed class SyncCreateRecordPayload
     public string Operario { get; set; } = string.Empty;
     public string LineaProduccion { get; set; } = string.Empty;
     public string Observacion { get; set; } = string.Empty;
+}
+
+/// <summary>Payload UpdateRecord (campos de negocio; stamp también puede ir en la operación).</summary>
+public sealed class SyncUpdateRecordPayload
+{
+    public Guid EntityId { get; set; }
+    public string Telar { get; set; } = string.Empty;
+    public double Neps { get; set; }
+    public string Tela { get; set; } = string.Empty;
+    public string LoteTrama { get; set; } = string.Empty;
+    public string Turno { get; set; } = string.Empty;
+    public string Operario { get; set; } = string.Empty;
+    public string LineaProduccion { get; set; } = string.Empty;
+    public string Observacion { get; set; } = string.Empty;
+
+    /// <summary>Opcional si ya viene en SyncOperationDto.ExpectedConcurrencyStamp.</summary>
+    public string? ExpectedConcurrencyStamp { get; set; }
+}
+
+/// <summary>Payload DeleteRecord.</summary>
+public sealed class SyncDeleteRecordPayload
+{
+    public Guid EntityId { get; set; }
+
+    /// <summary>Opcional si ya viene en SyncOperationDto.ExpectedConcurrencyStamp.</summary>
+    public string? ExpectedConcurrencyStamp { get; set; }
 }

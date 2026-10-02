@@ -6,7 +6,8 @@
 - Tabla `SyncChangeLogs` con secuencia monotónica
 - Idempotencia CreateRecord (`ClientOperationId` por usuario)
 - Autorización en servidor (claims + matriz de permisos)
-- **No** incluye: SyncEngine MAUI, LocalSession bridge, Update/Delete sync, tombstones, SignalR recovery
+- **No** incluye: SyncEngine MAUI, LocalSession bridge, SignalR recovery
+- Update/Delete/tombstones: ver `docs/FASE2C_SYNC_UPDATE_DELETE.md`
 
 Base revisada 2A: `aa5f0c5`.
 
