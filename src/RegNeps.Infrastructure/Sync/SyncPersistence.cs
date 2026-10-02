@@ -152,11 +152,13 @@ public sealed class SyncPersistence : ISyncPersistence
                 ChangeSequence = change.Sequence
             };
         }
-        catch (DbUpdateException ex) when (IsUniqueClientOperationViolation(ex))
+        catch (DbUpdateException)
         {
             await tx.RollbackAsync(ct);
 
-            // Carrera: otro hilo insertó la misma operación. Releer y tratar como Duplicate.
+            // Tras cualquier fallo de persistencia: si la fila ya existe por la clave única
+            // (CreatedByUserId, ClientOperationId), es Duplicate determinista (carrera o retry).
+            // No dependemos de parsear mensajes UNIQUE genéricos (podrían ser de otro índice).
             await using var read = await _factory.CreateDbContextAsync(ct);
             var raced = await read.NepRecords.AsNoTracking()
                 .FirstOrDefaultAsync(r =>
@@ -166,7 +168,7 @@ public sealed class SyncPersistence : ISyncPersistence
                 return new SyncCreatePersistResult
                 {
                     Result = SyncOperationResult.TransientError,
-                    ErrorCode = "RACE",
+                    ErrorCode = "PERSISTENCE",
                     Message = "Error temporal al procesar la operación."
                 };
             }
@@ -270,10 +272,15 @@ public sealed class SyncPersistence : ISyncPersistence
         var hasMore = await db.SyncChangeLogs.AsNoTracking()
             .AnyAsync(c => c.Sequence > nextCursor, ct);
 
-        // Sin filas nuevas: NextCursor permanece en el cursor solicitado.
         if (!scannedAny)
         {
-            nextCursor = cursor;
+            // Cursor por delante del máximo real (cliente corrupto/malicioso): anclar al max
+            // para no perder inserts futuros con Sequence <= cursor fantasma.
+            var maxSeq = await db.SyncChangeLogs.AsNoTracking()
+                .Select(c => (long?)c.Sequence)
+                .MaxAsync(ct) ?? 0L;
+            nextCursor = cursor > maxSeq ? maxSeq : cursor;
+            hasMore = false;
         }
 
         return new SyncPullPersistResult
@@ -322,13 +329,6 @@ public sealed class SyncPersistence : ISyncPersistence
         }
 
         return false;
-    }
-
-    private static bool IsUniqueClientOperationViolation(DbUpdateException ex)
-    {
-        var message = ex.InnerException?.Message ?? ex.Message;
-        return message.Contains("IX_NepRecords_CreatedBy_ClientOperation", StringComparison.OrdinalIgnoreCase)
-               || message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class SyncNepRecordSnapshot

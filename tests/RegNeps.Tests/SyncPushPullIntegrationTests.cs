@@ -475,6 +475,163 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         Assert.True(await DatabaseInitializer.SqliteTableExistsAsync(db, "SyncChangeLogs"));
     }
 
+    [Fact]
+    public async Task Push_Concurrent_Same_ClientOperationId_Yields_Single_Record()
+    {
+        var opId = Guid.NewGuid().ToString("N");
+        var actor = ActorA();
+        var sync = CreateSync();
+
+        var tasks = Enumerable.Range(0, 8)
+            .Select(i => sync.PushAsync(PushCreate($"dev-{i}", opId, 15, "T-PAR"), actor, $"c-{i}"))
+            .ToArray();
+
+        var responses = await Task.WhenAll(tasks);
+        var results = responses.Select(r => r.Results[0].Result).ToList();
+
+        Assert.Contains(nameof(SyncOperationResult.Accepted), results);
+        Assert.All(results, r =>
+            Assert.True(r is nameof(SyncOperationResult.Accepted)
+                or nameof(SyncOperationResult.Duplicate)
+                or nameof(SyncOperationResult.TransientError)));
+
+        // Reintentos tras TransientError de carrera deben converger a Duplicate.
+        var final = await sync.PushAsync(PushCreate("dev-final", opId, 15, "T-PAR"), actor, "final");
+        Assert.True(final.Results[0].Result is nameof(SyncOperationResult.Accepted)
+            or nameof(SyncOperationResult.Duplicate));
+
+        await using var db = _factory.CreateDbContext();
+        Assert.Equal(1, await db.NepRecords.CountAsync(r => r.ClientOperationId == opId));
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c => c.ClientOperationId == opId));
+    }
+
+    [Fact]
+    public async Task Pull_Cursor_Ahead_Of_Max_Is_Clamped()
+    {
+        var sync = CreateSync();
+        var push = await sync.PushAsync(PushCreate("dev-a", Guid.NewGuid().ToString("N")), ActorA(), "ahead");
+        var maxSeq = push.Results[0].ChangeSequence!.Value;
+
+        var pull = await sync.PullAsync(new SyncPullRequest
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            DeviceId = "dev-a",
+            Cursor = maxSeq + 10_000,
+            PageSize = 10
+        }, ActorA(), "cursor-ahead");
+
+        Assert.Empty(pull.Changes);
+        Assert.Equal(maxSeq, pull.NextCursor);
+        Assert.False(pull.HasMore);
+
+        // Un insert posterior debe ser visible desde el cursor anclado.
+        var later = await sync.PushAsync(PushCreate("dev-a", Guid.NewGuid().ToString("N"), 16, "T-L"), ActorA(), "later");
+        var pull2 = await sync.PullAsync(new SyncPullRequest
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            DeviceId = "dev-a",
+            Cursor = pull.NextCursor,
+            PageSize = 10
+        }, ActorA(), "after-clamp");
+
+        Assert.Contains(pull2.Changes, c => c.EntityId == later.Results[0].EntityId);
+    }
+
+    [Fact]
+    public async Task Pull_Invalid_DeviceId_Does_Not_Rewind_Cursor()
+    {
+        var sync = CreateSync();
+        var pull = await sync.PullAsync(new SyncPullRequest
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            DeviceId = "",
+            Cursor = 42,
+            PageSize = 10
+        }, ActorA(), "bad-device");
+
+        Assert.Empty(pull.Changes);
+        Assert.Equal(42, pull.NextCursor);
+        Assert.False(pull.HasMore);
+    }
+
+    [Fact]
+    public async Task Pull_Only_Unauthorized_Advances_Cursor_Without_Leaking_Payloads()
+    {
+        var sync = CreateSync();
+        await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "TB1"), ActorB(), "b1");
+        await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 11, "TB2"), ActorB(), "b2");
+
+        var pull = await sync.PullAsync(new SyncPullRequest
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            DeviceId = "dev-a",
+            Cursor = 0,
+            PageSize = 10
+        }, ActorA(), "only-foreign");
+
+        Assert.Empty(pull.Changes);
+        Assert.True(pull.NextCursor > 0);
+        Assert.False(pull.HasMore);
+        // No hay EntityId/Owner en Changes; el avance de cursor revela actividad global (limitación conocida).
+    }
+
+    [Fact]
+    public async Task Pull_Dense_Unauthorized_Then_Visible_Keeps_Examined_Cursor()
+    {
+        var sync = CreateSync();
+        // 100,101,102,103,104 conceptual: B,B,A,B,A
+        await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "U1"), ActorB(), "u1");
+        await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "U2"), ActorB(), "u2");
+        var a1 = await sync.PushAsync(PushCreate("dev-a", Guid.NewGuid().ToString("N"), 10, "V1"), ActorA(), "v1");
+        await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "U3"), ActorB(), "u3");
+        var a2 = await sync.PushAsync(PushCreate("dev-a", Guid.NewGuid().ToString("N"), 10, "V2"), ActorA(), "v2");
+
+        var seqA1 = a1.Results[0].ChangeSequence!.Value;
+        var seqA2 = a2.Results[0].ChangeSequence!.Value;
+
+        var page = await sync.PullAsync(new SyncPullRequest
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            DeviceId = "dev-a",
+            Cursor = 0,
+            PageSize = 1
+        }, ActorA(), "dense-1");
+
+        Assert.Single(page.Changes);
+        Assert.Equal(seqA1, page.Changes[0].Sequence);
+        Assert.Equal(seqA1, page.NextCursor);
+        Assert.True(page.HasMore);
+
+        var page2 = await sync.PullAsync(new SyncPullRequest
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            DeviceId = "dev-a",
+            Cursor = page.NextCursor,
+            PageSize = 1
+        }, ActorA(), "dense-2");
+
+        Assert.Single(page2.Changes);
+        Assert.Equal(seqA2, page2.Changes[0].Sequence);
+        Assert.Equal(seqA2, page2.NextCursor);
+    }
+
+    [Fact]
+    public async Task Different_Users_Same_ClientOperationId_Are_Independent()
+    {
+        var sync = CreateSync();
+        var sharedOp = Guid.NewGuid().ToString("N");
+        var a = await sync.PushAsync(PushCreate("dev-a", sharedOp), ActorA(), "a");
+        var b = await sync.PushAsync(PushCreate("dev-b", sharedOp), ActorB(), "b");
+
+        Assert.Equal(nameof(SyncOperationResult.Accepted), a.Results[0].Result);
+        Assert.Equal(nameof(SyncOperationResult.Accepted), b.Results[0].Result);
+        Assert.NotEqual(a.Results[0].EntityId, b.Results[0].EntityId);
+
+        await using var db = _factory.CreateDbContext();
+        Assert.Equal(2, await db.NepRecords.CountAsync(r => r.ClientOperationId == sharedOp));
+        Assert.Equal(2, await db.SyncChangeLogs.CountAsync(c => c.ClientOperationId == sharedOp));
+    }
+
     private sealed class TestDbFactory : IDbContextFactory<RegNepsDbContext>
     {
         private readonly DbContextOptions<RegNepsDbContext> _options;

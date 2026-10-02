@@ -109,15 +109,18 @@ public sealed class SyncAppService
         var serverTime = DateTime.UtcNow;
         if (request is null)
         {
-            return EmptyPull(serverTime);
+            return EmptyPull(serverTime, cursor: 0);
         }
+
+        var safeCursor = request.Cursor < 0 ? 0 : request.Cursor;
 
         if (request.ProtocolVersion != SyncProtocol.Version)
         {
             _logger.LogWarning(
                 "Sync Pull protocolo inválido. UserId={UserId} DeviceId={DeviceId} CorrelationId={CorrelationId}",
                 actor.UserId, request.DeviceId, correlationId);
-            return EmptyPull(serverTime);
+            // No rebobinar el cursor del cliente ante error de protocolo.
+            return EmptyPull(serverTime, safeCursor);
         }
 
         if (!TryNormalizeDeviceId(request.DeviceId, out var deviceId, out _))
@@ -125,7 +128,7 @@ public sealed class SyncAppService
             _logger.LogWarning(
                 "Sync Pull DeviceId inválido. UserId={UserId} CorrelationId={CorrelationId}",
                 actor.UserId, correlationId);
-            return EmptyPull(serverTime);
+            return EmptyPull(serverTime, safeCursor);
         }
 
         if (!CanViewRecords(actor))
@@ -138,13 +141,13 @@ public sealed class SyncAppService
             {
                 ProtocolVersion = SyncProtocol.Version,
                 ServerTimeUtc = serverTime,
-                NextCursor = Math.Max(0, request.Cursor),
+                NextCursor = safeCursor,
                 HasMore = false,
                 Changes = []
             };
         }
 
-        var cursor = request.Cursor < 0 ? 0 : request.Cursor;
+        var cursor = safeCursor;
         var pageSize = SyncProtocol.NormalizePageSize(request.PageSize);
 
         var page = await _persistence.PullAuthorizedChangesAsync(actor, cursor, pageSize, ct);
@@ -338,11 +341,11 @@ public sealed class SyncAppService
         };
     }
 
-    private static SyncPullResponse EmptyPull(DateTime serverTime) => new()
+    private static SyncPullResponse EmptyPull(DateTime serverTime, long cursor) => new()
     {
         ProtocolVersion = SyncProtocol.Version,
         ServerTimeUtc = serverTime,
-        NextCursor = 0,
+        NextCursor = cursor < 0 ? 0 : cursor,
         HasMore = false,
         Changes = []
     };
