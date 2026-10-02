@@ -1,11 +1,12 @@
 @page "/registros"
 @rendermode InteractiveServer
 @inject NepRecordService RecordService
+@inject ReportExportAppService ExportService
 @inject IAlertConfigRepository AlertConfigRepository
 @inject IRecordImportService ImportService
 @inject CurrentUserService CurrentUser
 @inject NavigationManager Nav
-@inject IReportSnapshotService Snapshots
+@using RegNeps.Application.Reports
 @implements IDisposable
 
 <PageTitle>Registros — RegNeps</PageTitle>
@@ -19,15 +20,15 @@ else
 {
     <PageHeader Title="Registros" Subtitle="Consulte, filtre e importe históricos de mediciones.">
         <Actions>
-            @if (_canEdit)
+            @if (_canEditInUi)
             {
                 <a class="btn btn-outline-secondary btn-sm" href="/api/import/template">Plantilla Excel</a>
                 <label class="btn btn-outline-primary btn-sm mb-0">
                     Importar
-                    <InputFile OnChange="OnImportAsync" accept=".xlsx,.xls" class="d-none" />
+                    <InputFile OnChange="OnImportAsync" accept=".xlsx,.xls,.csv" class="d-none" />
                 </label>
             }
-            @if (_canClearAll)
+            @if (_canClearAllInUi)
             {
                 <button class="btn btn-outline-danger btn-sm" @onclick="ClearAllAsync" disabled="@_loading">
                     Vaciar todos
@@ -36,8 +37,27 @@ else
             <button class="btn btn-outline-primary btn-sm" @onclick="LoadAsync" disabled="@_loading" aria-busy="@_loading">
                 @(_loading ? "Cargando…" : "Actualizar")
             </button>
+            @if (_isReadOnlyView)
+            {
+                <button type="button" class="btn btn-primary btn-sm" @onclick="CloseOpenedReportAsync">
+                    Cerrar informe
+                </button>
+            }
         </Actions>
     </PageHeader>
+
+    @if (_isReadOnlyView)
+    {
+        <div class="alert alert-info d-flex flex-wrap align-items-center gap-2" role="status" style="max-width: 1100px;">
+            <span>
+                Viendo informe guardado:
+                <strong>@(_openedReportName ?? "Informe")</strong> (solo lectura)
+            </span>
+            <button type="button" class="btn btn-sm btn-outline-primary ms-auto" @onclick="CloseOpenedReportAsync">
+                Cerrar informe
+            </button>
+        </div>
+    }
 
     @if (!string.IsNullOrEmpty(_message))
     {
@@ -112,6 +132,64 @@ else
         </div>
     </div>
 
+    @if (_selectedIds.Count > 0)
+    {
+        <div class="alert alert-secondary d-flex flex-wrap align-items-center gap-2 py-2" role="status" style="max-width: 1100px;">
+            <strong>@_selectedIds.Count seleccionados</strong>
+            @if (_canEditInUi)
+            {
+                <button class="btn btn-sm btn-outline-primary"
+                        disabled="@(!RecordSelectionRules.CanEditSelection(_selectedIds.Count))"
+                        @onclick="EditSelectedAsync">
+                    Editar
+                </button>
+            }
+            @if (_canDeleteInUi)
+            {
+                <button class="btn btn-sm btn-outline-danger" @onclick="ConfirmDeleteSelectedAsync">
+                    Eliminar seleccionados
+                </button>
+            }
+            @if (_canManageReportsInUi)
+            {
+                <button class="btn btn-sm btn-outline-secondary" @onclick="OpenSaveReportModal">
+                    Guardar informe de la selección
+                </button>
+            }
+            <button class="btn btn-sm btn-link" @onclick="ClearSelection">Limpiar selección</button>
+        </div>
+    }
+
+    @if (_importRows is { Count: > 0 })
+    {
+        <div class="card border-0 shadow-sm mb-3" style="max-width: 1100px;">
+            <div class="card-body">
+                <h2 class="h6">Resultado de importación</h2>
+                <div class="table-responsive" style="max-height: 220px; overflow:auto;">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Fila</th>
+                                <th>Estado</th>
+                                <th>Motivo</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in _importRows)
+                            {
+                                <tr>
+                                    <td>@row.RowNumber</td>
+                                    <td>@(row.Success ? "OK" : "Error")</td>
+                                    <td>@(row.Reason ?? "—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
     @if (_loading && _records.Count == 0)
     {
         <LoadingBlock Message="Cargando registros…" />
@@ -152,6 +230,15 @@ else
             <table class="table table-sm table-hover align-middle mb-0">
                 <thead>
                     <tr>
+                        @if (!_isReadOnlyView)
+                        {
+                            <th scope="col" style="width:2.5rem;">
+                                <input class="form-check-input" type="checkbox"
+                                       checked="@AllPageSelected"
+                                       @onchange="ToggleSelectAllPage"
+                                       aria-label="Seleccionar todos (página actual)" />
+                            </th>
+                        }
                         <th scope="col">Fecha</th>
                         <th scope="col">Telar</th>
                         <th scope="col">Neps</th>
@@ -165,10 +252,19 @@ else
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var r in _records)
+                    @foreach (var r in PageRecords)
                     {
                         var level = r.GetAlertLevel(_config);
                         <tr>
+                            @if (!_isReadOnlyView)
+                            {
+                                <td>
+                                    <input class="form-check-input" type="checkbox"
+                                           checked="@_selectedIds.Contains(r.Id)"
+                                           @onchange="e => ToggleRow(r.Id, e)"
+                                           aria-label="@($"Seleccionar {r.Telar}")" />
+                                </td>
+                            }
                             <td>@r.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td>
                             <td>@r.Telar</td>
                             <td>@r.Neps.ToString("0.##")</td>
@@ -181,23 +277,34 @@ else
                                 <StatusBadge Tone="@BadgeTone(level)">@level.ToDisplayLabel()</StatusBadge>
                             </td>
                             <td class="text-nowrap">
-                                @if (_canEdit)
+                                @if (_canEditInUi)
                                 {
                                     <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenEdit(r)">Editar</button>
                                 }
-                                @if (_canCorrect && level != AlertLevel.Normal)
+                                @if (_canCorrectInUi && level != AlertLevel.Normal)
                                 {
                                     <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenCorrective(r)">Acción</button>
                                 }
-                                @if (_canDelete)
+                                @if (_canDeleteInUi)
                                 {
                                     <button class="btn btn-link btn-sm text-danger p-0" @onclick="() => DeleteAsync(r.Id)">Eliminar</button>
+                                }
+                                @if (_isReadOnlyView)
+                                {
+                                    <span class="small text-muted">Solo lectura</span>
                                 }
                             </td>
                         </tr>
                     }
                 </tbody>
             </table>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-2 mb-3" style="max-width: 1100px;">
+            <span class="small text-muted">
+                Página @_page de @TotalPages · @_records.Count registros · @PageSize por página
+            </span>
+            <button class="btn btn-sm btn-outline-secondary" disabled="@(_page <= 1)" @onclick="() => GoToPageAsync(_page - 1)">Anterior</button>
+            <button class="btn btn-sm btn-outline-secondary" disabled="@(_page >= TotalPages)" @onclick="() => GoToPageAsync(_page + 1)">Siguiente</button>
         </div>
     }
 
@@ -279,9 +386,39 @@ else
             </Footer>
         </AppModal>
     }
+
+    @if (_confirmDeleteSelected)
+    {
+        <AppModal Title="Eliminar seleccionados" OnClose="() => _confirmDeleteSelected = false">
+            <ChildContent>
+                <p class="mb-0">¿Eliminar @_selectedIds.Count registro(s) seleccionados? Esta acción no se puede deshacer.</p>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="() => _confirmDeleteSelected = false">Cancelar</button>
+                <button class="btn btn-danger" @onclick="DeleteSelectedAsync" disabled="@_deletingSelected">Eliminar</button>
+            </Footer>
+        </AppModal>
+    }
+
+    @if (_showSaveReportModal)
+    {
+        <AppModal Title="Guardar informe de la selección" OnClose="() => _showSaveReportModal = false">
+            <ChildContent>
+                <label class="form-label" for="save-report-name">Nombre del informe</label>
+                <input id="save-report-name" class="form-control" @bind="_saveReportName" />
+                <p class="small text-muted mt-2 mb-0">Se guardarán @_selectedIds.Count registro(s) exactos.</p>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="() => _showSaveReportModal = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveReportFromSelectionAsync" disabled="@_savingReport">Guardar</button>
+            </Footer>
+        </AppModal>
+    }
 }
 
 @code {
+    private const int PageSize = 50;
+
     private IReadOnlyList<NepRecord> _records = [];
     private AlertConfig _config = new();
     private bool _loading = true;
@@ -290,6 +427,7 @@ else
     private bool _canDelete;
     private bool _canClearAll;
     private bool _canCorrect;
+    private bool _canManageReports;
     private UserSession? _session;
     private string? _message;
     private string? _error;
@@ -306,7 +444,25 @@ else
     private int _totalInDb;
     private int _informeSavedCount;
     private Guid? _openedReportId;
+    private string? _openedReportName;
     private bool _preferSnapshot;
+    private string? _lastSessionUserId;
+
+    private bool _isReadOnlyView => SavedReportViewMode.IsReadOnlyView(_openedReportId);
+    private bool _canEditInUi => _canEdit && !_isReadOnlyView;
+    private bool _canDeleteInUi => _canDelete && !_isReadOnlyView;
+    private bool _canClearAllInUi => _canClearAll && !_isReadOnlyView;
+    private bool _canCorrectInUi => _canCorrect && !_isReadOnlyView;
+    private bool _canManageReportsInUi => _canManageReports && !_isReadOnlyView;
+
+    private readonly HashSet<Guid> _selectedIds = [];
+    private int _page = 1;
+    private bool _confirmDeleteSelected;
+    private bool _deletingSelected;
+    private bool _showSaveReportModal;
+    private string _saveReportName = "";
+    private bool _savingReport;
+    private IReadOnlyList<RecordImportRowResult>? _importRows;
 
     private NepRecord? _editTarget;
     private string _editTelar = "";
@@ -327,16 +483,50 @@ else
 
     private bool _recordsReady;
 
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_records.Count / (double)PageSize));
+
+    private IReadOnlyList<NepRecord> PageRecords =>
+        _records.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+
+    private bool AllPageSelected
+    {
+        get
+        {
+            var page = PageRecords;
+            return page.Count > 0 && page.All(r => _selectedIds.Contains(r.Id));
+        }
+    }
+
     protected override async Task OnInitializedAsync() => await RefreshAccessAsync();
 
     private async Task RefreshAccessAsync()
     {
         _session = await CurrentUser.GetAsync();
+        var newUserId = _session?.UserId;
+        if (_recordsReady
+            && _lastSessionUserId is not null
+            && !string.Equals(_lastSessionUserId, newUserId, StringComparison.Ordinal))
+        {
+            _selectedIds.Clear();
+            _editTarget = null;
+            _correctiveTarget = null;
+            _confirmDeleteSelected = false;
+            _showSaveReportModal = false;
+            if (_openedReportId is not null)
+            {
+                ClearOpenedReportState(clearQuery: true);
+                _lastSessionUserId = newUserId;
+                return;
+            }
+        }
+
+        _lastSessionUserId = newUserId;
         var allowed = _session?.Has(AppPermission.ViewRecords) == true;
         _canEdit = _session?.Has(AppPermission.EditRecords) == true;
         _canDelete = _session?.Has(AppPermission.DeleteRecords) == true;
         _canClearAll = _session?.Has(AppPermission.ClearAllRecords) == true;
         _canCorrect = _session?.Has(AppPermission.ApplyCorrectiveAction) == true;
+        _canManageReports = _session?.Has(AppPermission.ManageReports) == true;
         if (!allowed || _session is null)
         {
             _allowed = false;
@@ -419,6 +609,12 @@ else
             _preferSnapshot = true;
             applied = true;
         }
+        else if (!query.ContainsKey("reportId") && query.Count > 0)
+        {
+            _openedReportId = null;
+            _openedReportName = null;
+            _preferSnapshot = false;
+        }
 
         if (query.TryGetValue("saved", out var savedRaw) &&
             int.TryParse(savedRaw.ToString(), out var savedCount))
@@ -458,6 +654,8 @@ else
 
     private async Task ClearDatesAndReloadAsync()
     {
+        RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
+        _page = 1;
         _filterFrom = null;
         _filterTo = null;
         _openedFromInforme = false;
@@ -468,6 +666,8 @@ else
 
     private async Task ClearAllFiltersAndReloadAsync()
     {
+        RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
+        _page = 1;
         _filterTelar = "";
         _filterTela = "";
         _filterLote = "";
@@ -478,10 +678,31 @@ else
         _soloPendientes = false;
         _openedFromInforme = false;
         _informeSavedCount = 0;
-        _openedReportId = null;
-        _preferSnapshot = false;
+        ClearOpenedReportState(clearQuery: false);
         _message = "Filtros limpiados. Mostrando las mediciones disponibles.";
         await LoadAsync();
+    }
+
+    private void ClearOpenedReportState(bool clearQuery)
+    {
+        _openedReportId = null;
+        _openedReportName = null;
+        _preferSnapshot = false;
+        _openedFromInforme = false;
+        _informeSavedCount = 0;
+        if (clearQuery)
+        {
+            Nav.NavigateTo("/registros", forceLoad: true);
+        }
+    }
+
+    private async Task CloseOpenedReportAsync()
+    {
+        RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
+        _page = 1;
+        ClearOpenedReportState(clearQuery: true);
+        _message = "Informe cerrado. Mostrando registros en vivo.";
+        await Task.CompletedTask;
     }
 
     private string BuildFilteredEmptyMessage()
@@ -503,7 +724,150 @@ else
     private Task FilterAsync()
     {
         _preferSnapshot = false;
+        RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
+        _page = 1;
         return LoadAsync();
+    }
+
+    private Task GoToPageAsync(int page)
+    {
+        RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
+        _page = Math.Clamp(page, 1, TotalPages);
+        return Task.CompletedTask;
+    }
+
+    private void ClearSelection() => _selectedIds.Clear();
+
+    private void ToggleRow(Guid id, ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b;
+        if (on)
+        {
+            _selectedIds.Add(id);
+        }
+        else
+        {
+            _selectedIds.Remove(id);
+        }
+    }
+
+    private void ToggleSelectAllPage(ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b;
+        var pageIds = PageRecords.Select(r => r.Id).ToList();
+        if (on)
+        {
+            foreach (var id in pageIds)
+            {
+                _selectedIds.Add(id);
+            }
+        }
+        else
+        {
+            foreach (var id in pageIds)
+            {
+                _selectedIds.Remove(id);
+            }
+        }
+    }
+
+    private void EditSelectedAsync()
+    {
+        if (_isReadOnlyView || !RecordSelectionRules.CanEditSelection(_selectedIds.Count) || !_canEdit)
+        {
+            return;
+        }
+
+        var id = _selectedIds.First();
+        var record = PageRecords.FirstOrDefault(r => r.Id == id)
+                     ?? _records.FirstOrDefault(r => r.Id == id);
+        if (record is not null)
+        {
+            OpenEdit(record);
+        }
+    }
+
+    private void ConfirmDeleteSelectedAsync()
+    {
+        if (_isReadOnlyView)
+        {
+            return;
+        }
+
+        _confirmDeleteSelected = true;
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (_isReadOnlyView || _session is null || !_canDelete)
+        {
+            return;
+        }
+
+        _deletingSelected = true;
+        _error = null;
+        try
+        {
+            var result = await RecordService.DeleteManyAsync(_selectedIds.ToList(), _session.ToActor());
+            foreach (var id in result.DeletedIds.Concat(result.FailedIds))
+            {
+                _selectedIds.Remove(id);
+            }
+
+            _message = result.SummaryText;
+            _confirmDeleteSelected = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _deletingSelected = false;
+        }
+    }
+
+    private void OpenSaveReportModal()
+    {
+        if (_isReadOnlyView)
+        {
+            return;
+        }
+
+        _saveReportName = $"Informe {DateTime.Now:yyyyMMdd_HHmmss}";
+        _showSaveReportModal = true;
+    }
+
+    private async Task SaveReportFromSelectionAsync()
+    {
+        if (_isReadOnlyView || _session is null || !_canManageReports || _selectedIds.Count == 0)
+        {
+            return;
+        }
+
+        _savingReport = true;
+        _error = null;
+        try
+        {
+            var report = await ExportService.SaveReportByIdsAsync(
+                _saveReportName,
+                _selectedIds.ToList(),
+                _session.UserId,
+                _session.DisplayName,
+                _session.SeesAllRecords,
+                hasManageReports: true);
+            _message = $"Informe «{report.Name}» guardado con {report.RecordCount} registros.";
+            _showSaveReportModal = false;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingReport = false;
+        }
     }
 
     private async Task LoadAsync()
@@ -527,17 +891,39 @@ else
                 alert = parsed;
             }
 
-            if (_preferSnapshot && _openedReportId is Guid reportId)
+            if (_openedReportId is Guid reportId)
             {
-                var snapshot = await Snapshots.LoadSnapshotRecordsAsync(reportId);
-                if (snapshot.Count > 0)
+                try
                 {
-                    _records = snapshot;
-                    _totalInDb = await RecordService.CountAllAsync();
-                    _message =
-                        $"Informe abierto: {snapshot.Count} mediciones restauradas y mostradas " +
-                        $"(el informe recordaba {(_informeSavedCount > 0 ? _informeSavedCount : snapshot.Count)} filas).";
-                    return;
+                    var access = _session.ToReportAccessActor();
+                    var saved = await ExportService.GetAccessibleSavedAsync(reportId, access);
+                    _openedReportName = saved.Name;
+
+                    if (_preferSnapshot)
+                    {
+                        var snapshot = await ExportService.LoadAccessibleSnapshotAsync(reportId, access);
+                        if (snapshot.Count > 0)
+                        {
+                            _records = snapshot;
+                            _totalInDb = await RecordService.CountAllAsync();
+                            if (_page > TotalPages)
+                            {
+                                _page = TotalPages;
+                            }
+
+                            RecordSelectionRules.PruneToVisible(_selectedIds, PageRecords.Select(r => r.Id));
+                            _message =
+                                $"Informe abierto: {snapshot.Count} mediciones restauradas y mostradas " +
+                                $"(el informe recordaba {(_informeSavedCount > 0 ? _informeSavedCount : snapshot.Count)} filas).";
+                            return;
+                        }
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Sin revelar existencia: limpiar modo informe y continuar con listado vivo.
+                    ClearOpenedReportState(clearQuery: false);
+                    _error = SavedReportAccess.NotFoundMessage;
                 }
             }
 
@@ -582,6 +968,12 @@ else
                 : 1_000;
             _records = await RecordService.QueryAsync(
                 filters, _session.ToActor(), RecordQueryScope.Default, take);
+            if (_page > TotalPages)
+            {
+                _page = TotalPages;
+            }
+
+            RecordSelectionRules.PruneToVisible(_selectedIds, PageRecords.Select(r => r.Id));
         }
         catch (Exception ex)
         {
@@ -596,6 +988,12 @@ else
 
     private async Task OnImportAsync(InputFileChangeEventArgs e)
     {
+        if (_isReadOnlyView)
+        {
+            _error = "No puede importar mientras visualiza un informe guardado (solo lectura).";
+            return;
+        }
+
         if (_session is null || !await CurrentUser.HasAsync(AppPermission.EditRecords))
         {
             await RefreshAccessAsync();
@@ -605,16 +1003,19 @@ else
 
         _message = null;
         _error = null;
+        _importRows = null;
         try
         {
             await using var stream = e.File.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
-            var result = await ImportService.ImportExcelAsync(
+            var result = await ImportService.ImportFileAsync(
                 stream,
+                e.File.Name,
                 _session.UserId,
                 _session.Username,
                 _session.EffectiveRole.ToString());
+            _importRows = result.Rows;
             _message = $"Importados: {result.Imported}." +
-                       (result.Errors.Count > 0 ? $" Errores: {string.Join("; ", result.Errors.Take(5))}" : "");
+                       (result.Errors.Count > 0 ? $" Errores: {result.Errors.Count}." : "");
             await LoadAsync();
         }
         catch (Exception ex)
@@ -625,6 +1026,11 @@ else
 
     private void OpenEdit(NepRecord record)
     {
+        if (_isReadOnlyView)
+        {
+            return;
+        }
+
         _editTarget = record;
         _editTelar = record.Telar;
         _editNeps = record.Neps;
@@ -641,6 +1047,12 @@ else
 
     private async Task SaveEditAsync()
     {
+        if (_isReadOnlyView)
+        {
+            _error = "No puede editar registros en modo solo lectura de informe.";
+            return;
+        }
+
         if (_editTarget is null || !await CurrentUser.HasAsync(AppPermission.EditRecords))
         {
             await RefreshAccessAsync();
@@ -681,6 +1093,11 @@ else
 
     private void OpenCorrective(NepRecord record)
     {
+        if (_isReadOnlyView)
+        {
+            return;
+        }
+
         _correctiveTarget = record;
         _accion = record.AccionCorrectiva;
         _responsable = string.IsNullOrWhiteSpace(record.ResponsableRevision)
@@ -695,6 +1112,12 @@ else
     {
         if (_correctiveTarget is null)
         {
+            return;
+        }
+
+        if (_isReadOnlyView)
+        {
+            _error = "No puede registrar acciones correctivas en modo solo lectura.";
             return;
         }
 
@@ -731,6 +1154,12 @@ else
 
     private async Task ClearAllAsync()
     {
+        if (_isReadOnlyView)
+        {
+            _error = "No puede vaciar registros mientras visualiza un informe guardado.";
+            return;
+        }
+
         if (!await CurrentUser.HasAsync(AppPermission.ClearAllRecords))
         {
             await RefreshAccessAsync();
@@ -757,6 +1186,12 @@ else
 
     private async Task DeleteAsync(Guid id)
     {
+        if (_isReadOnlyView)
+        {
+            _error = "No puede eliminar registros en modo solo lectura de informe.";
+            return;
+        }
+
         if (!await CurrentUser.HasAsync(AppPermission.DeleteRecords))
         {
             await RefreshAccessAsync();

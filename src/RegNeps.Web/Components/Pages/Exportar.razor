@@ -6,7 +6,6 @@
 @inject RegNeps.Web.Export.TempExportStore TempStore
 @inject NavigationManager Nav
 @inject IJSRuntime Js
-@inject IReportSnapshotService Snapshots
 
 <PageTitle>Informes — RegNeps</PageTitle>
 <PermissionRefresh OnChanged="RefreshAccessAsync" />
@@ -280,12 +279,14 @@ else
     private static readonly IReadOnlyList<(string Href, string Label)> InformesTabs =
     [
         ("/informes", "Guardados"),
-        ("/exportar", "Exportar")
+        ("/exportar", "Exportar"),
+        ("/constructor-informes", "Constructor")
     ];
 
     private static readonly IReadOnlyList<(string Href, string Label)> ExportOnlyTabs =
     [
-        ("/exportar", "Exportar")
+        ("/exportar", "Exportar"),
+        ("/constructor-informes", "Constructor")
     ];
 
     private bool _exportReady;
@@ -339,6 +340,17 @@ else
             _telar = telarRaw.ToString();
         if (query.TryGetValue("tela", out var telaRaw) && !string.IsNullOrWhiteSpace(telaRaw))
             _tela = telaRaw.ToString();
+
+        if (query.TryGetValue("style", out var styleRaw) && !string.IsNullOrWhiteSpace(styleRaw))
+        {
+            var s = styleRaw.ToString().Trim().ToLowerInvariant();
+            _style = s switch
+            {
+                "clasico" or "classic" => "clasico",
+                "completo" => "completo",
+                _ => _style
+            };
+        }
     }
 
     private void SetStyle(string style) => _style = style;
@@ -373,12 +385,21 @@ else
 
             if (_openedReportId is Guid reportId)
             {
-                var restored = await Snapshots.LoadSnapshotRecordsAsync(reportId);
-                if (restored.Count > 0)
+                try
                 {
-                    _visibleCount = restored.Count;
-                    _info = $"Informe abierto: {restored.Count} mediciones restauradas para exportar.";
-                    return;
+                    var restored = await ExportService.LoadAccessibleSnapshotAsync(
+                        reportId, _session.ToReportAccessActor());
+                    if (restored.Count > 0)
+                    {
+                        _visibleCount = restored.Count;
+                        _info = $"Informe abierto: {restored.Count} mediciones restauradas para exportar.";
+                        return;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    _openedReportId = null;
+                    _info = null;
                 }
             }
 
@@ -452,20 +473,31 @@ else
         _busyFormat = format;
         try
         {
+            (byte[] Bytes, string FileName, string ContentType) file;
             if (_openedReportId is Guid reportId)
             {
-                await Snapshots.LoadSnapshotRecordsAsync(reportId);
+                var access = _session.ToReportAccessActor();
+                file = await ExportService.ExportSavedAsync(
+                    reportId,
+                    format,
+                    _session.UserId,
+                    access.SeesAllRecords,
+                    _style,
+                    selectedColumns,
+                    access.HasManageReports,
+                    access.HasExportReports);
+                _info = "Informe guardado: descarga iniciada.";
+            }
+            else
+            {
+                var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
+                var filters = BuildFilters()!;
+                file = await ExportService.ExportAsync(
+                    format, filters, _session.UserId, _session.SeesAllRecords, _style, selectedColumns);
+                _info = $"Informe consolidado del {range.LabelLocal}: descarga iniciada.";
             }
 
-            var range = ReportDateRange.FromLocalCalendarDates(_fromLocal.Value, _toLocal.Value);
-            var filters = BuildFilters()!;
-
-            var file = await ExportService.ExportAsync(
-                format, filters, _session.UserId, _session.SeesAllRecords, _style, selectedColumns);
-
             var id = TempStore.Put(file.Bytes, file.ContentType, file.FileName, _session.UserId);
-            _info =
-                $"Informe consolidado del {range.LabelLocal}: descarga iniciada.";
             Nav.NavigateTo($"/api/export/temp/{id}", forceLoad: true);
             await RefreshCountAsync();
         }
@@ -555,7 +587,8 @@ else
                 : _reportName.Trim();
 
             await ExportService.SaveReportAsync(
-                name, filters, _session.UserId, _session.DisplayName, _session.SeesAllRecords);
+                name, filters, _session.UserId, _session.DisplayName, _session.SeesAllRecords,
+                hasManageReports: true);
 
             _info = $"Informe «{name}» guardado. Puede abrirlo en Informes.";
             _reportName = "";
