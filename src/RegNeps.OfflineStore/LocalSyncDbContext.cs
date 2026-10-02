@@ -29,9 +29,13 @@ public sealed class LocalSyncDbContext : DbContext
         pending.Property(x => x.CaptureSessionId).HasMaxLength(64);
         pending.Property(x => x.LastError).HasMaxLength(2000);
         pending.Property(x => x.ExpectedConcurrencyStamp).HasMaxLength(64);
+        pending.Property(x => x.LastServerErrorCode).HasMaxLength(64);
+        pending.Property(x => x.ConflictServerConcurrencyStamp).HasMaxLength(64);
+        pending.Property(x => x.ConflictServerSnapshotJson);
         pending.Property(x => x.OperationType).HasConversion<int>();
         pending.Property(x => x.Status).HasConversion<int>();
         pending.HasIndex(x => new { x.Status, x.CreatedAtUtc });
+        pending.HasIndex(x => new { x.UserId, x.Status, x.CreatedAtUtc });
         pending.HasOne(x => x.LocalNepRecord)
             .WithOne(x => x.PendingOperation)
             .HasForeignKey<PendingOperation>(x => x.LocalNepRecordId)
@@ -50,9 +54,13 @@ public sealed class LocalSyncDbContext : DbContext
         record.Property(x => x.LineaProduccion).HasMaxLength(64);
         record.Property(x => x.Observacion).HasMaxLength(1000);
         record.Property(x => x.UserId).HasMaxLength(64).IsRequired();
+        record.Property(x => x.ConcurrencyStamp).HasMaxLength(64);
+        record.Property(x => x.AccionCorrectiva).HasMaxLength(500);
+        record.Property(x => x.ResponsableRevision).HasMaxLength(128);
         record.Property(x => x.SyncStatus).HasConversion<int>();
         record.HasIndex(x => new { x.UserId, x.CreatedAtUtc });
         record.HasIndex(x => x.SyncStatus);
+        record.HasIndex(x => x.ServerRecordId);
 
         var catalog = modelBuilder.Entity<LocalCatalogItem>();
         catalog.HasKey(x => x.Id);

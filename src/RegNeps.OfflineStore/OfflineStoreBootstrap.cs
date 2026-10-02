@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RegNeps.OfflineStore.Abstractions;
 using RegNeps.OfflineStore.Device;
 using RegNeps.OfflineStore.Services;
+using RegNeps.OfflineStore.Sync;
 
 namespace RegNeps.OfflineStore;
 
@@ -10,6 +11,7 @@ public static class OfflineStoreBootstrap
 {
     /// <summary>
     /// Registra el store local SQLite. <paramref name="databasePath"/> debe ser una ruta de archivo.
+    /// El host debe registrar <see cref="ISyncApiClient"/> e <see cref="ISyncAuthCookieProvider"/>.
     /// </summary>
     public static IServiceCollection AddOfflineStore(
         this IServiceCollection services,
@@ -37,6 +39,7 @@ public static class OfflineStoreBootstrap
         services.AddScoped<OfflineSessionService>();
         services.AddScoped<OfflineCaptureService>();
         services.AddScoped<IOfflineOutboxQuery, OfflineOutboxQuery>();
+        services.AddScoped<ISyncEngine, SyncEngine>();
         return services;
     }
 }

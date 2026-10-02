@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using RegNeps.Mobile.Local;
 using RegNeps.OfflineStore;
 using RegNeps.OfflineStore.Services;
+using RegNeps.OfflineStore.Sync;
 
 namespace RegNeps.Mobile;
 
@@ -20,6 +21,14 @@ public static class MauiProgram
             dbPath,
             deviceDir,
             new MauiSecureAuthMaterialStore());
+
+        builder.Services.AddSingleton(_ =>
+        {
+            var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            return http;
+        });
+        builder.Services.AddSingleton<ISyncApiClient, HttpSyncApiClient>();
+        builder.Services.AddSingleton<ISyncAuthCookieProvider, MauiWebViewCookieProvider>();
 
         builder.Services.AddTransient<OfflineCapturePage>();
         // MainPage se resuelve desde App; registrar para DI explícito.

@@ -79,7 +79,9 @@ public class OfflineStoreCaptureTests : IAsyncLifetime
         Assert.True(await db.Database.CanConnectAsync());
         var pending = await db.Database.GetPendingMigrationsAsync();
         Assert.Empty(pending);
-        Assert.Contains("20261002180000_InitialLocalSync", await db.Database.GetAppliedMigrationsAsync());
+        var applied = await db.Database.GetAppliedMigrationsAsync();
+        Assert.Contains("20261002180000_InitialLocalSync", applied);
+        Assert.Contains("20261002211500_AddSyncEngineFields", applied);
     }
 
     [Fact]

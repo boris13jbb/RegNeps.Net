@@ -172,7 +172,7 @@ public sealed class OfflineCaptureService
         }
 
         return await _db.LocalNepRecords.AsNoTracking()
-            .Where(r => r.UserId == session.UserId)
+            .Where(r => r.UserId == session.UserId && !r.IsDeleted)
             .OrderByDescending(r => r.CreatedAtUtc)
             .Take(take)
             .ToListAsync(ct);

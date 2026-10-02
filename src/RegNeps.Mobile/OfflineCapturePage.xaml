@@ -47,9 +47,15 @@
                     BackgroundColor="#294D1E"
                     TextColor="White" />
 
+            <Button Text="Sincronizar ahora"
+                    Clicked="OnSyncClicked"
+                    BackgroundColor="#1E3A5F"
+                    TextColor="White" />
+
+            <Label x:Name="OutboxLabel" FontSize="13" TextColor="#444" />
             <Label x:Name="MessageLabel" FontSize="13" />
 
-            <Label Text="Recientes (pendientes)" FontAttributes="Bold" Margin="0,12,0,0" />
+            <Label Text="Recientes" FontAttributes="Bold" Margin="0,12,0,0" />
             <CollectionView x:Name="RecentList" HeightRequest="220">
                 <CollectionView.ItemTemplate>
                     <DataTemplate>

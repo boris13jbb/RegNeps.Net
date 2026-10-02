@@ -32,12 +32,28 @@ public sealed class LocalNepRecord
 
     public DateTime CreatedAtUtc { get; set; }
 
+    public DateTime? UpdatedAtUtc { get; set; }
+
+    /// <summary>Token de concurrencia del servidor (réplica). Vacío hasta el primer sync.</summary>
+    public string? ConcurrencyStamp { get; set; }
+
     public string UserId { get; set; } = string.Empty;
 
     public LocalSyncStatus SyncStatus { get; set; } = LocalSyncStatus.PendingSync;
 
-    /// <summary>Id del registro en el servidor tras sync exitoso (futuro).</summary>
+    /// <summary>Id del registro en el servidor tras Create Accepted/Duplicate (puede diferir del Id local).</summary>
     public Guid? ServerRecordId { get; set; }
+
+    /// <summary>Tombstone local: el registro fue eliminado en servidor; no debe reaparecer.</summary>
+    public bool IsDeleted { get; set; }
+
+    public string AccionCorrectiva { get; set; } = string.Empty;
+
+    public string ResponsableRevision { get; set; } = string.Empty;
+
+    public bool RevisadoPorSupervisor { get; set; }
+
+    public DateTime? FechaRevisionUtc { get; set; }
 
     public double MtsCalculados => Neps / NepsConstants.TestLengthM;
 

@@ -38,5 +38,14 @@ public sealed class PendingOperation
 
     public string? ExpectedConcurrencyStamp { get; set; }
 
+    /// <summary>Código de error del servidor (p. ej. CLIENT_OPERATION_REUSED, CONFLICT).</summary>
+    public string? LastServerErrorCode { get; set; }
+
+    /// <summary>Stamp del servidor en Conflict (no se aplica al forzar reintento).</summary>
+    public string? ConflictServerConcurrencyStamp { get; set; }
+
+    /// <summary>Snapshot JSON del servidor en Conflict (mismo shape que Pull RecordUpserted).</summary>
+    public string? ConflictServerSnapshotJson { get; set; }
+
     public LocalNepRecord? LocalNepRecord { get; set; }
 }
