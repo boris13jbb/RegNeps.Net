@@ -11,8 +11,8 @@ using RegNeps.OfflineStore.Models;
 namespace RegNeps.OfflineStore.Services;
 
 /// <summary>
-/// Captura offline: CreateRecord + UpdateRecord (FASE 2D.5).
-/// Delete offline no expuesto. Atómico LocalNepRecord + PendingOperation.
+/// Captura offline: CreateRecord + UpdateRecord + DeleteRecord (FASE 2D.5/2D.6).
+/// Atómico LocalNepRecord + PendingOperation. Sin HTTP directo desde UI.
 /// </summary>
 public sealed class OfflineCaptureService
 {
@@ -265,6 +265,88 @@ public sealed class OfflineCaptureService
         };
     }
 
+    /// <summary>
+    /// Delete offline de un registro ya sincronizado (ServerRecordId + ConcurrencyStamp).
+    /// Atómico: LocalNepRecord.IsDeleted + PendingOperation DeleteRecord.
+    /// </summary>
+    public async Task<OfflineCaptureResult> DeleteRecordAsync(
+        OfflineDeleteRecordRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var session = await _sessions.GetValidSessionAsync(ct)
+            ?? throw new InvalidOperationException(
+                "No hay sesión offline válida. Inicie sesión online en el dispositivo primero.");
+
+        var eligibility = await EvaluateDeleteEligibilityAsync(session, request.LocalRecordId, ct);
+        if (!eligibility.CanDelete)
+        {
+            throw eligibility.Reason switch
+            {
+                OfflineDeleteBlockReason.NoDeletePermission => new UnauthorizedAccessException(eligibility.Message),
+                OfflineDeleteBlockReason.NotOwner => new UnauthorizedAccessException(eligibility.Message),
+                _ => new InvalidOperationException(eligibility.Message)
+            };
+        }
+
+        var record = await _db.LocalNepRecords
+            .FirstAsync(r => r.Id == request.LocalRecordId, ct);
+
+        var serverId = record.ServerRecordId!.Value;
+        var expectedStamp = record.ConcurrencyStamp!;
+        var deviceId = await _deviceIds.GetOrCreateAsync(ct);
+        var clientOperationId = Guid.NewGuid().ToString("N");
+        var now = DateTime.UtcNow;
+
+        var payload = new DeleteRecordPayload { EntityId = serverId };
+        var operation = new PendingOperation
+        {
+            Id = Guid.NewGuid(),
+            ClientOperationId = clientOperationId,
+            OperationType = OfflineOperationType.DeleteRecord,
+            PayloadJson = JsonSerializer.Serialize(payload, JsonOptions),
+            ProtocolVersion = OfflineStoreConstants.ProtocolVersion,
+            CreatedAtUtc = now,
+            AttemptCount = 0,
+            Status = PendingOperationStatus.Pending,
+            UserId = session.UserId,
+            DeviceId = deviceId,
+            CaptureSessionId = record.CaptureSessionId,
+            LocalNepRecordId = record.Id,
+            TargetServerRecordId = serverId,
+            ExpectedConcurrencyStamp = expectedStamp
+        };
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            record.IsDeleted = true;
+            record.UpdatedAtUtc = now;
+            record.SyncStatus = LocalSyncStatus.PendingSync;
+            // ConcurrencyStamp local se mantiene hasta Accepted/Conflict.
+
+            _db.PendingOperations.Add(operation);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+
+        var level = AlertEvaluator.GetLevel(record.Neps);
+        return new OfflineCaptureResult
+        {
+            Record = record,
+            Operation = operation,
+            QualityLevel = level,
+            QualityLabel = level.ToDisplayLabel()
+        };
+    }
+
     public async Task<OfflineEditEligibility> GetEditEligibilityAsync(
         Guid localRecordId,
         CancellationToken ct = default)
@@ -272,10 +354,23 @@ public sealed class OfflineCaptureService
         var session = await _sessions.GetValidSessionAsync(ct);
         if (session is null)
         {
-            return Blocked(OfflineEditBlockReason.NoSession, "No hay sesión offline válida.", localRecordId);
+            return BlockedEdit(OfflineEditBlockReason.NoSession, "No hay sesión offline válida.", localRecordId);
         }
 
         return await EvaluateEditEligibilityAsync(session, localRecordId, ct);
+    }
+
+    public async Task<OfflineDeleteEligibility> GetDeleteEligibilityAsync(
+        Guid localRecordId,
+        CancellationToken ct = default)
+    {
+        var session = await _sessions.GetValidSessionAsync(ct);
+        if (session is null)
+        {
+            return BlockedDelete(OfflineDeleteBlockReason.NoSession, "No hay sesión offline válida.", localRecordId);
+        }
+
+        return await EvaluateDeleteEligibilityAsync(session, localRecordId, ct);
     }
 
     public async Task<IReadOnlyList<LocalNepRecord>> ListEditableAsync(
@@ -284,41 +379,28 @@ public sealed class OfflineCaptureService
     {
         take = Math.Clamp(take, 1, 200);
         var session = await _sessions.GetValidSessionAsync(ct);
-        if (session is null)
+        if (session is null
+            || !_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
         {
             return Array.Empty<LocalNepRecord>();
         }
 
-        if (!_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
+        return await ListEligibleAsync(session, take, EvaluateEditEligibilityAsync, e => e.CanEdit, ct);
+    }
+
+    public async Task<IReadOnlyList<LocalNepRecord>> ListDeletableAsync(
+        int take = 50,
+        CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 200);
+        var session = await _sessions.GetValidSessionAsync(ct);
+        if (session is null
+            || !_sessions.HasPermission(session, OfflineStoreConstants.DeleteRecordsPermission))
         {
             return Array.Empty<LocalNepRecord>();
         }
 
-        var candidates = await _db.LocalNepRecords.AsNoTracking()
-            .Where(r => !r.IsDeleted
-                        && r.ServerRecordId != null
-                        && r.ConcurrencyStamp != null
-                        && r.ConcurrencyStamp != "")
-            .Where(r => SeesAll(session) || r.UserId == session.UserId)
-            .OrderByDescending(r => r.UpdatedAtUtc ?? r.CreatedAtUtc)
-            .Take(take * 2)
-            .ToListAsync(ct);
-
-        var result = new List<LocalNepRecord>();
-        foreach (var r in candidates)
-        {
-            var elig = await EvaluateEditEligibilityAsync(session, r.Id, ct);
-            if (elig.CanEdit)
-            {
-                result.Add(r);
-                if (result.Count >= take)
-                {
-                    break;
-                }
-            }
-        }
-
-        return result;
+        return await ListEligibleAsync(session, take, EvaluateDeleteEligibilityAsync, e => e.CanDelete, ct);
     }
 
     public Task<IReadOnlyList<LocalNepRecord>> ListRecentAsync(
@@ -332,6 +414,40 @@ public sealed class OfflineCaptureService
     public Task<LocalNepRecord?> GetLocalRecordAsync(Guid localRecordId, CancellationToken ct = default) =>
         _db.LocalNepRecords.AsNoTracking()
             .FirstOrDefaultAsync(r => r.Id == localRecordId, ct);
+
+    private async Task<IReadOnlyList<LocalNepRecord>> ListEligibleAsync<TElig>(
+        LocalSession session,
+        int take,
+        Func<LocalSession, Guid, CancellationToken, Task<TElig>> evaluate,
+        Func<TElig, bool> canAct,
+        CancellationToken ct)
+    {
+        var candidates = await _db.LocalNepRecords.AsNoTracking()
+            .Where(r => !r.IsDeleted
+                        && r.ServerRecordId != null
+                        && r.ConcurrencyStamp != null
+                        && r.ConcurrencyStamp != "")
+            .Where(r => SeesAll(session) || r.UserId == session.UserId)
+            .OrderByDescending(r => r.UpdatedAtUtc ?? r.CreatedAtUtc)
+            .Take(take * 2)
+            .ToListAsync(ct);
+
+        var result = new List<LocalNepRecord>();
+        foreach (var r in candidates)
+        {
+            var elig = await evaluate(session, r.Id, ct);
+            if (canAct(elig))
+            {
+                result.Add(r);
+                if (result.Count >= take)
+                {
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
 
     private async Task<IReadOnlyList<LocalNepRecord>> ListRecentInternalAsync(int take, CancellationToken ct)
     {
@@ -355,7 +471,7 @@ public sealed class OfflineCaptureService
     {
         if (!_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
         {
-            return Blocked(
+            return BlockedEdit(
                 OfflineEditBlockReason.NoEditPermission,
                 "Tu sesión no incluye permiso para editar. El servidor lo revalidará al sincronizar.",
                 localRecordId);
@@ -365,18 +481,27 @@ public sealed class OfflineCaptureService
             .FirstOrDefaultAsync(r => r.Id == localRecordId, ct);
         if (record is null)
         {
-            return Blocked(OfflineEditBlockReason.NotFound, "Registro no encontrado.", localRecordId);
+            return BlockedEdit(OfflineEditBlockReason.NotFound, "Registro no encontrado.", localRecordId);
         }
 
         if (record.IsDeleted)
         {
-            return Blocked(OfflineEditBlockReason.Deleted, "El registro está eliminado localmente.", localRecordId);
+            return BlockedEdit(OfflineEditBlockReason.Deleted, "El registro está eliminado localmente.", localRecordId);
+        }
+
+        if (record.SyncStatus == LocalSyncStatus.Conflict)
+        {
+            return BlockedEdit(
+                OfflineEditBlockReason.ConflictRequiresReview,
+                "El registro requiere revisión de conflicto. No se puede editar todavía.",
+                localRecordId,
+                record.ServerRecordId);
         }
 
         if (!SeesAll(session)
             && !string.Equals(record.UserId, session.UserId, StringComparison.OrdinalIgnoreCase))
         {
-            return Blocked(
+            return BlockedEdit(
                 OfflineEditBlockReason.NotOwner,
                 "No puedes editar registros de otro usuario en este dispositivo.",
                 localRecordId);
@@ -384,7 +509,7 @@ public sealed class OfflineCaptureService
 
         if (record.ServerRecordId is null || record.ServerRecordId == Guid.Empty)
         {
-            return Blocked(
+            return BlockedEdit(
                 OfflineEditBlockReason.CreateStillPending,
                 "Pendiente de sincronización. Espera a que el Create se sincronice antes de editar.",
                 localRecordId);
@@ -392,27 +517,19 @@ public sealed class OfflineCaptureService
 
         if (string.IsNullOrWhiteSpace(record.ConcurrencyStamp))
         {
-            return Blocked(
+            return BlockedEdit(
                 OfflineEditBlockReason.MissingConcurrencyStamp,
                 "Falta la marca de concurrencia del servidor. Sincroniza primero.",
                 localRecordId,
                 record.ServerRecordId);
         }
 
-        // Create Pending / Update Pending|Sending|Conflict por EntityId (cualquier UserId en el dispositivo).
-        // Evita dos Updates concurrentes del mismo registro aunque cambie la sesión UX.
-        var blocking = await _db.PendingOperations.AsNoTracking()
-            .Where(o => o.LocalNepRecordId == localRecordId
-                        || o.TargetServerRecordId == record.ServerRecordId)
-            .Where(o => o.Status == PendingOperationStatus.Pending
-                        || o.Status == PendingOperationStatus.Sending
-                        || o.Status == PendingOperationStatus.Conflict)
-            .ToListAsync(ct);
+        var blocking = await ListBlockingOpsAsync(localRecordId, record.ServerRecordId, ct);
 
         if (blocking.Any(o => o.OperationType == OfflineOperationType.CreateRecord
                               && o.Status is PendingOperationStatus.Pending or PendingOperationStatus.Sending))
         {
-            return Blocked(
+            return BlockedEdit(
                 OfflineEditBlockReason.CreateStillPending,
                 "Pendiente de sincronización. Espera a que el Create se sincronice antes de editar.",
                 localRecordId,
@@ -421,9 +538,18 @@ public sealed class OfflineCaptureService
 
         if (blocking.Any(o => o.OperationType == OfflineOperationType.UpdateRecord))
         {
-            return Blocked(
+            return BlockedEdit(
                 OfflineEditBlockReason.UpdateAlreadyPending,
                 "Ya existe una modificación pendiente o en revisión para este registro.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (blocking.Any(o => o.OperationType == OfflineOperationType.DeleteRecord))
+        {
+            return BlockedEdit(
+                OfflineEditBlockReason.MutationAlreadyPending,
+                "Ya existe una eliminación pendiente o en revisión para este registro.",
                 localRecordId,
                 record.ServerRecordId);
         }
@@ -438,7 +564,118 @@ public sealed class OfflineCaptureService
         };
     }
 
-    private static OfflineEditEligibility Blocked(
+    private async Task<OfflineDeleteEligibility> EvaluateDeleteEligibilityAsync(
+        LocalSession session,
+        Guid localRecordId,
+        CancellationToken ct)
+    {
+        if (!_sessions.HasPermission(session, OfflineStoreConstants.DeleteRecordsPermission))
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.NoDeletePermission,
+                "Tu sesión no incluye permiso para eliminar. El servidor lo revalidará al sincronizar.",
+                localRecordId);
+        }
+
+        var record = await _db.LocalNepRecords.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == localRecordId, ct);
+        if (record is null)
+        {
+            return BlockedDelete(OfflineDeleteBlockReason.NotFound, "Registro no encontrado.", localRecordId);
+        }
+
+        if (record.IsDeleted)
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.Deleted,
+                "El registro ya está eliminado localmente (pendiente o sincronizado).",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (record.SyncStatus == LocalSyncStatus.Conflict)
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.ConflictRequiresReview,
+                "El registro requiere revisión de conflicto. No se puede eliminar todavía.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (!SeesAll(session)
+            && !string.Equals(record.UserId, session.UserId, StringComparison.OrdinalIgnoreCase))
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.NotOwner,
+                "No puedes eliminar registros de otro usuario en este dispositivo.",
+                localRecordId);
+        }
+
+        if (record.ServerRecordId is null || record.ServerRecordId == Guid.Empty)
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.CreateStillPending,
+                "Pendiente de sincronización. No se puede eliminar un Create aún no sincronizado.",
+                localRecordId);
+        }
+
+        if (string.IsNullOrWhiteSpace(record.ConcurrencyStamp))
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.MissingConcurrencyStamp,
+                "Falta la marca de concurrencia del servidor. Sincroniza primero.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        var blocking = await ListBlockingOpsAsync(localRecordId, record.ServerRecordId, ct);
+
+        if (blocking.Any(o => o.OperationType == OfflineOperationType.CreateRecord
+                              && o.Status is PendingOperationStatus.Pending or PendingOperationStatus.Sending))
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.CreateStillPending,
+                "Pendiente de sincronización. Espera a que el Create se sincronice antes de eliminar.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (blocking.Any(o => o.OperationType is OfflineOperationType.UpdateRecord
+                                or OfflineOperationType.DeleteRecord))
+        {
+            return BlockedDelete(
+                OfflineDeleteBlockReason.MutationAlreadyPending,
+                "Ya existe una modificación o eliminación pendiente/en revisión para este registro.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        return new OfflineDeleteEligibility
+        {
+            CanDelete = true,
+            Reason = OfflineDeleteBlockReason.None,
+            Message = string.Empty,
+            LocalRecordId = localRecordId,
+            ServerRecordId = record.ServerRecordId
+        };
+    }
+
+    /// <summary>
+    /// Operaciones activas por EntityId/local — sin filtrar por UserId (corrección 2D.5.1).
+    /// </summary>
+    private Task<List<PendingOperation>> ListBlockingOpsAsync(
+        Guid localRecordId,
+        Guid? serverRecordId,
+        CancellationToken ct) =>
+        _db.PendingOperations.AsNoTracking()
+            .Where(o => o.LocalNepRecordId == localRecordId
+                        || (serverRecordId != null && o.TargetServerRecordId == serverRecordId))
+            .Where(o => o.Status == PendingOperationStatus.Pending
+                        || o.Status == PendingOperationStatus.Sending
+                        || o.Status == PendingOperationStatus.Conflict)
+            .ToListAsync(ct);
+
+    private static OfflineEditEligibility BlockedEdit(
         OfflineEditBlockReason reason,
         string message,
         Guid? localId = null,
@@ -446,6 +683,20 @@ public sealed class OfflineCaptureService
         new()
         {
             CanEdit = false,
+            Reason = reason,
+            Message = message,
+            LocalRecordId = localId,
+            ServerRecordId = serverId
+        };
+
+    private static OfflineDeleteEligibility BlockedDelete(
+        OfflineDeleteBlockReason reason,
+        string message,
+        Guid? localId = null,
+        Guid? serverId = null) =>
+        new()
+        {
+            CanDelete = false,
             Reason = reason,
             Message = message,
             LocalRecordId = localId,

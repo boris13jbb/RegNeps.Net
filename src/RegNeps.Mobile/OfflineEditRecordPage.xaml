@@ -48,6 +48,13 @@
                     BackgroundColor="#294D1E"
                     TextColor="White" />
 
+            <Button x:Name="DeleteButton"
+                    Text="Eliminar offline"
+                    Clicked="OnDeleteClicked"
+                    IsVisible="False"
+                    BackgroundColor="#7C2D12"
+                    TextColor="White" />
+
             <Label x:Name="MessageLabel" FontSize="13" />
 
             <Button Text="Cancelar" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />

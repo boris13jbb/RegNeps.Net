@@ -13,4 +13,7 @@ public static class OfflineStoreConstants
 
     /// <summary>Permiso UX para editar; el servidor revalida EditRecords.</summary>
     public const string EditRecordsPermission = "EditRecords";
+
+    /// <summary>Permiso UX para eliminar; el servidor revalida DeleteRecords.</summary>
+    public const string DeleteRecordsPermission = "DeleteRecords";
 }

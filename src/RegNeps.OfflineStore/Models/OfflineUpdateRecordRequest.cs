@@ -29,7 +29,11 @@ public enum OfflineEditBlockReason
     CreateStillPending,
     MissingServerId,
     MissingConcurrencyStamp,
-    UpdateAlreadyPending
+    UpdateAlreadyPending,
+    /// <summary>Hay Delete Pending/Sending/Conflict u otra mutación en curso para el EntityId.</summary>
+    MutationAlreadyPending,
+    /// <summary>Registro en Conflict: no mutar hasta resolución (fase posterior).</summary>
+    ConflictRequiresReview
 }
 
 public sealed class OfflineEditEligibility

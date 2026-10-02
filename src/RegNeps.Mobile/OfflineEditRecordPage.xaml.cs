@@ -11,7 +11,7 @@ public partial class OfflineEditRecordPage : ContentPage
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private Guid _localRecordId;
-    private bool _saving;
+    private bool _busy;
 
     public OfflineEditRecordPage(IServiceScopeFactory scopeFactory)
     {
@@ -33,22 +33,15 @@ public partial class OfflineEditRecordPage : ContentPage
         {
             using var scope = _scopeFactory.CreateScope();
             var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
-            var elig = await capture.GetEditEligibilityAsync(_localRecordId);
-            if (!elig.CanEdit)
-            {
-                BannerLabel.Text = elig.Message;
-                BannerLabel.BackgroundColor = Color.FromArgb("#FEF3C7");
-                BannerLabel.TextColor = Color.FromArgb("#92400E");
-                SaveButton.IsEnabled = false;
-                MessageLabel.Text = elig.Message;
-                return;
-            }
+            var editElig = await capture.GetEditEligibilityAsync(_localRecordId);
+            var deleteElig = await capture.GetDeleteEligibilityAsync(_localRecordId);
 
             var record = await capture.GetLocalRecordAsync(_localRecordId);
             if (record is null)
             {
                 MessageLabel.Text = "Registro no encontrado.";
                 SaveButton.IsEnabled = false;
+                DeleteButton.IsVisible = false;
                 return;
             }
 
@@ -64,12 +57,38 @@ public partial class OfflineEditRecordPage : ContentPage
             QualityLabel.Text = $"Calidad: {record.GetQualityLabel()}";
             IdsLabel.Text =
                 $"ID local: {record.Id:N} · Servidor: {record.ServerRecordId:N}";
-            SaveButton.IsEnabled = true;
+
+            SaveButton.IsEnabled = editElig.CanEdit;
+            DeleteButton.IsVisible = deleteElig.CanDelete;
+            DeleteButton.IsEnabled = deleteElig.CanDelete;
+
+            if (!editElig.CanEdit && !deleteElig.CanDelete)
+            {
+                BannerLabel.Text = editElig.Message.Length > 0 ? editElig.Message : deleteElig.Message;
+                BannerLabel.BackgroundColor = Color.FromArgb("#FEF3C7");
+                BannerLabel.TextColor = Color.FromArgb("#92400E");
+                MessageLabel.Text = BannerLabel.Text;
+            }
+            else if (!editElig.CanEdit)
+            {
+                BannerLabel.Text = editElig.Message + (deleteElig.CanDelete
+                    ? " Puede eliminar si confirma."
+                    : string.Empty);
+                BannerLabel.BackgroundColor = Color.FromArgb("#FEF3C7");
+                BannerLabel.TextColor = Color.FromArgb("#92400E");
+            }
+            else
+            {
+                BannerLabel.Text = "Edición/eliminación offline — los cambios quedan pendientes de sincronización.";
+                BannerLabel.BackgroundColor = Color.FromArgb("#DBEAFE");
+                BannerLabel.TextColor = Color.FromArgb("#1E3A5F");
+            }
         }
         catch (Exception ex)
         {
             MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
             SaveButton.IsEnabled = false;
+            DeleteButton.IsVisible = false;
         }
     }
 
@@ -89,7 +108,7 @@ public partial class OfflineEditRecordPage : ContentPage
 
     private async void OnSaveClicked(object? sender, EventArgs e)
     {
-        if (_saving)
+        if (_busy)
         {
             return;
         }
@@ -103,8 +122,9 @@ public partial class OfflineEditRecordPage : ContentPage
             return;
         }
 
-        _saving = true;
+        _busy = true;
         SaveButton.IsEnabled = false;
+        DeleteButton.IsEnabled = false;
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -137,10 +157,61 @@ public partial class OfflineEditRecordPage : ContentPage
             MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
             MessageLabel.TextColor = Color.FromArgb("#7C2D12");
             SaveButton.IsEnabled = true;
+            DeleteButton.IsEnabled = DeleteButton.IsVisible;
         }
         finally
         {
-            _saving = false;
+            _busy = false;
+        }
+    }
+
+    private async void OnDeleteClicked(object? sender, EventArgs e)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        var confirm = await DisplayAlertAsync(
+            "Eliminar offline",
+            "¿Eliminar este registro? Quedará pendiente de sincronización. No se puede deshacer desde aquí.",
+            "Eliminar",
+            "Cancelar");
+        if (!confirm)
+        {
+            return;
+        }
+
+        _busy = true;
+        SaveButton.IsEnabled = false;
+        DeleteButton.IsEnabled = false;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
+            await capture.DeleteRecordAsync(new OfflineDeleteRecordRequest
+            {
+                LocalRecordId = _localRecordId
+            });
+
+            MessageLabel.Text = "Eliminación guardada offline. Pendiente de sincronización.";
+            MessageLabel.TextColor = Color.FromArgb("#14532D");
+
+            await Task.Delay(400);
+            if (Navigation.NavigationStack.Count > 1)
+            {
+                await Navigation.PopAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
+            MessageLabel.TextColor = Color.FromArgb("#7C2D12");
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
         }
     }
 

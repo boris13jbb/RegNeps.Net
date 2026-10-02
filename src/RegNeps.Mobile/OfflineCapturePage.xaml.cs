@@ -143,14 +143,43 @@ public partial class OfflineCapturePage : ContentPage
                 ErrorsEmptyLabel.IsVisible = errorRows.Count == 0;
             }
 
-            var editable = session is null
-                ? new List<EditableRow>()
-                : (await capture.ListEditableAsync(20)).Select(r => new EditableRow(
-                    r.Id,
-                    $"Telar {r.Telar} · NEPS {r.Neps:0.##}",
-                    $"{r.GetQualityLabel()} · Servidor {r.ServerRecordId:N}")).ToList();
-            EditableList.ItemsSource = editable;
-            EditableEmptyLabel.IsVisible = editable.Count == 0;
+            var mutableRows = new List<EditableRow>();
+            if (session is not null)
+            {
+                var editableIds = new HashSet<Guid>();
+                foreach (var r in await capture.ListEditableAsync(20))
+                {
+                    editableIds.Add(r.Id);
+                    mutableRows.Add(new EditableRow(
+                        r.Id,
+                        $"Telar {r.Telar} · NEPS {r.Neps:0.##}",
+                        $"{r.GetQualityLabel()} · Servidor {r.ServerRecordId:N}",
+                        "Editar"));
+                }
+
+                foreach (var r in await capture.ListDeletableAsync(20))
+                {
+                    if (editableIds.Contains(r.Id))
+                    {
+                        var idx = mutableRows.FindIndex(x => x.LocalRecordId == r.Id);
+                        if (idx >= 0)
+                        {
+                            mutableRows[idx] = mutableRows[idx] with { ActionHint = "Editar/Eliminar" };
+                        }
+
+                        continue;
+                    }
+
+                    mutableRows.Add(new EditableRow(
+                        r.Id,
+                        $"Telar {r.Telar} · NEPS {r.Neps:0.##}",
+                        $"{r.GetQualityLabel()} · Servidor {r.ServerRecordId:N}",
+                        "Eliminar"));
+                }
+            }
+
+            EditableList.ItemsSource = mutableRows;
+            EditableEmptyLabel.IsVisible = mutableRows.Count == 0;
 
             var recent = await capture.ListRecentAsync(30);
             RecentList.ItemsSource = recent.Select(r => new RecentRow(
@@ -436,7 +465,7 @@ public partial class OfflineCapturePage : ContentPage
 
     private sealed record RecentRow(string Telar, string NepsText, string Quality);
 
-    private sealed record EditableRow(Guid LocalRecordId, string Title, string Subtitle);
+    private sealed record EditableRow(Guid LocalRecordId, string Title, string Subtitle, string ActionHint);
 
     private sealed record ErrorRow(string Title, string Detail);
 }

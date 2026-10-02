@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using RegNeps.OfflineStore.Models;
 using RegNeps.OfflineStore.Services;
 using RegNeps.OfflineStore.Sync;
 using RegNeps.OfflineStore.Sync.Ux;
@@ -96,12 +97,13 @@ public partial class OfflineOperationDetailPage : ContentPage
         ReviewButton.IsVisible = d.PrimaryAction == OfflineOperationUxAction.RequiresReview;
         MessageLabel.Text = string.Empty;
 
-        _ = RefreshEditButtonAsync(d.LocalNepRecordId);
+        _ = RefreshMutationButtonsAsync(d.LocalNepRecordId);
     }
 
-    private async Task RefreshEditButtonAsync(Guid? localNepRecordId)
+    private async Task RefreshMutationButtonsAsync(Guid? localNepRecordId)
     {
         EditRecordButton.IsVisible = false;
+        DeleteRecordButton.IsVisible = false;
         if (localNepRecordId is null || localNepRecordId == Guid.Empty)
         {
             return;
@@ -111,13 +113,15 @@ public partial class OfflineOperationDetailPage : ContentPage
         {
             using var scope = _scopeFactory.CreateScope();
             var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
-            var elig = await capture.GetEditEligibilityAsync(localNepRecordId.Value);
-            EditRecordButton.IsVisible = elig.CanEdit;
-            EditRecordButton.CommandParameter = localNepRecordId.Value;
+            var editElig = await capture.GetEditEligibilityAsync(localNepRecordId.Value);
+            var deleteElig = await capture.GetDeleteEligibilityAsync(localNepRecordId.Value);
+            EditRecordButton.IsVisible = editElig.CanEdit;
+            DeleteRecordButton.IsVisible = deleteElig.CanDelete;
         }
         catch
         {
             EditRecordButton.IsVisible = false;
+            DeleteRecordButton.IsVisible = false;
         }
     }
 
@@ -138,6 +142,41 @@ public partial class OfflineOperationDetailPage : ContentPage
         var page = services.GetRequiredService<OfflineEditRecordPage>();
         page.Initialize(localId);
         await Navigation.PushAsync(page);
+    }
+
+    private async void OnDeleteRecordClicked(object? sender, EventArgs e)
+    {
+        if (_detail?.LocalNepRecordId is not Guid localId || localId == Guid.Empty)
+        {
+            return;
+        }
+
+        var confirm = await DisplayAlertAsync(
+            "Eliminar offline",
+            "¿Eliminar este registro? Quedará pendiente de sincronización.",
+            "Eliminar",
+            "Cancelar");
+        if (!confirm)
+        {
+            return;
+        }
+
+        DeleteRecordButton.IsEnabled = false;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
+            await capture.DeleteRecordAsync(new OfflineDeleteRecordRequest { LocalRecordId = localId });
+            MessageLabel.Text = "Eliminación guardada offline. Pendiente de sincronización.";
+            MessageLabel.TextColor = Color.FromArgb("#14532D");
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
+            MessageLabel.TextColor = Color.FromArgb("#7C2D12");
+            DeleteRecordButton.IsEnabled = true;
+        }
     }
 
     private async void OnRetryClicked(object? sender, EventArgs e)

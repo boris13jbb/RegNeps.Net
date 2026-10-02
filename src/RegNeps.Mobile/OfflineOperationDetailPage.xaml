@@ -71,6 +71,13 @@
                     BackgroundColor="#294D1E"
                     TextColor="White" />
 
+            <Button x:Name="DeleteRecordButton"
+                    Text="Eliminar registro offline"
+                    Clicked="OnDeleteRecordClicked"
+                    IsVisible="False"
+                    BackgroundColor="#7C2D12"
+                    TextColor="White" />
+
             <Label x:Name="MessageLabel" FontSize="13" />
 
             <Button Text="Volver" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />
