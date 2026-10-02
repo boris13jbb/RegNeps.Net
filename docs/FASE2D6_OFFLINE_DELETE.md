@@ -69,11 +69,13 @@ UI Confirmar Eliminar
 | Chequeo | Resultado |
 |---------|-----------|
 | `OfflineOfflineDeleteTests` | 15/15 |
-| Suite completa | ver commit / reporte |
-| Web Release | OK |
-| Android Debug | OK |
+| Suite completa | **409/409** Passed |
+| Web Release | OK, 0 warnings |
+| Android Debug | OK, 0 warnings |
 | SQL Server gate 2D.4.1 | no reejecutado en esta fase |
 | Android E2E runtime | no ejecutado |
+
+Commit: `a277eb5` en `feature/fase-2d5-offline-update` (sin push/PR).
 
 ## Pruebas no ejecutadas
 
