@@ -501,3 +501,6 @@ static UserSession SessionFrom(ClaimsPrincipal user)
     var external = user.FindFirstValue(AuthClaims.ExternalUserId);
     return new UserSession(id, username, display, role, roleCode, isSuper, external);
 }
+
+/// <summary>Ancla para <c>WebApplicationFactory&lt;Program&gt;</c> en pruebas de integración.</summary>
+public partial class Program;

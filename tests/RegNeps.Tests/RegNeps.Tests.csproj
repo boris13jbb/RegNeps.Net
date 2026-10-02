@@ -12,6 +12,8 @@
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.17" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.17" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.17" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.5.3" />
@@ -26,6 +28,7 @@
     <ProjectReference Include="..\..\src\RegNeps.Domain\RegNeps.Domain.csproj" />
     <ProjectReference Include="..\..\src\RegNeps.Application\RegNeps.Application.csproj" />
     <ProjectReference Include="..\..\src\RegNeps.Infrastructure\RegNeps.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\RegNeps.Web\RegNeps.Web.csproj" />
   </ItemGroup>
 
 </Project>
