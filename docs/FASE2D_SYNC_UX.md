@@ -153,3 +153,30 @@ Contrato existente (`OfflineSessionService.ClearUxSnapshotAsync`):
 ### No incluido
 
 Background sync, SignalR recovery, push automático, resolución de conflictos, cambio de TTL 72h, E2E APK obligatorio.
+
+---
+
+## FASE 2D.4 — Inventario operativo de operaciones offline
+
+### Qué aporta
+
+- Pantalla **Operaciones offline** con filtros Todos / Pendientes / Sincronizados / Errores / Conflictos.
+- **Detalle** con sección usuario vs técnica (ClientOperationId en secundaria).
+- **Reintentar** solo si SyncError es recuperable (`MISSING_RESULT`, etc.): reabre a `Pending` **sin** cambiar `ClientOperationId`, luego `ISyncEngine` + `ManualSyncGate`.
+- Forbidden / Invalid → sin retry inútil.
+- 401 → «Volver a iniciar sesión».
+- Conflict → «Requiere revisión» (sin LWW/merge).
+- Límite de lista: **100** filas (sin paginación server-side).
+- Create-only en captura; **no** Update/Delete UI.
+- **No** tabla de historial nueva: Synced = estado actual de la fila Outbox.
+- ClearAll / borrado masivo de Outbox: **no** expuesto.
+
+### Componentes
+
+- `OfflineOperationsUxService` / modelos de inventario
+- `OfflineOperationsPage` / `OfflineOperationDetailPage`
+- Navegación desde `OfflineCapturePage` → «Operaciones offline»
+
+### Aislamiento
+
+List/Detail/Retry filtran por `UserId` de `LocalSession`. SyncEngine ya omite Pending de otros usuarios (`SkippedOtherUser`). Logout conserva Outbox.

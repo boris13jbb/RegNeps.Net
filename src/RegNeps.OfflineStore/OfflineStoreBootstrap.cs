@@ -42,6 +42,7 @@ public static class OfflineStoreBootstrap
         services.AddScoped<IOfflineOutboxQuery, OfflineOutboxQuery>();
         services.AddScoped<ISyncEngine, SyncEngine>();
         services.AddScoped<OfflineSyncUxService>();
+        services.AddScoped<OfflineOperationsUxService>();
         services.AddSingleton<ManualSyncGate>();
         return services;
     }

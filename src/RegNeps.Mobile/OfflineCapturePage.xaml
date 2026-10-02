@@ -80,6 +80,11 @@
                     BackgroundColor="#294D1E"
                     TextColor="White" />
 
+            <Button Text="Operaciones offline"
+                    Clicked="OnOperationsClicked"
+                    BackgroundColor="#374151"
+                    TextColor="White" />
+
             <!-- Conflictos -->
             <Label Text="Conflictos (requieren revisión)"
                    FontAttributes="Bold"

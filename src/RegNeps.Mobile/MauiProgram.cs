@@ -31,6 +31,8 @@ public static class MauiProgram
         builder.Services.AddSingleton<ISyncAuthCookieProvider, MauiWebViewCookieProvider>();
 
         builder.Services.AddTransient<OfflineCapturePage>();
+        builder.Services.AddTransient<OfflineOperationsPage>();
+        builder.Services.AddTransient<OfflineOperationDetailPage>();
         // MainPage se resuelve desde App; registrar para DI explícito.
         builder.Services.AddTransient<MainPage>();
 

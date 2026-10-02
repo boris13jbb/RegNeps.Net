@@ -379,6 +379,24 @@ public partial class OfflineCapturePage : ContentPage
         }
     }
 
+    private async void OnOperationsClicked(object? sender, EventArgs e)
+    {
+        var services = Handler?.MauiContext?.Services
+                       ?? Application.Current?.Handler?.MauiContext?.Services;
+        if (services is null)
+        {
+            return;
+        }
+
+        if (Navigation.NavigationStack.LastOrDefault() is OfflineOperationsPage)
+        {
+            return;
+        }
+
+        var page = services.GetRequiredService<OfflineOperationsPage>();
+        await Navigation.PushAsync(page);
+    }
+
     private async void OnBackClicked(object? sender, EventArgs e)
     {
         if (Navigation.NavigationStack.Count > 1)
