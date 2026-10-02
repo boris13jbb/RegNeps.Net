@@ -1,0 +1,396 @@
+using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using RegNeps.Application.Abstractions;
+using RegNeps.Application.Permissions;
+using RegNeps.Application.Records;
+using RegNeps.Domain.Enums;
+using RegNeps.Domain.Permissions;
+using RegNeps.Domain.Services;
+using RegNeps.Domain.Sync;
+
+namespace RegNeps.Application.Sync;
+
+/// <summary>
+/// Orquestación Push/Pull v1. Autorización siempre desde claims + matriz de permisos.
+/// No confía en UserId/Role/permisos enviados por el cliente.
+/// </summary>
+public sealed class SyncAppService
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private readonly ISyncPersistence _persistence;
+    private readonly IPermissionService _permissions;
+    private readonly ILogger<SyncAppService> _logger;
+
+    public SyncAppService(
+        ISyncPersistence persistence,
+        IPermissionService permissions,
+        ILogger<SyncAppService> logger)
+    {
+        _persistence = persistence;
+        _permissions = permissions;
+        _logger = logger;
+    }
+
+    public async Task<SyncPushResponse> PushAsync(
+        SyncPushRequest request,
+        RecordActor actor,
+        string? correlationId,
+        CancellationToken ct = default)
+    {
+        var sw = Stopwatch.StartNew();
+        await _permissions.EnsureLoadedAsync(ct);
+
+        var response = new SyncPushResponse
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            ServerTimeUtc = DateTime.UtcNow
+        };
+
+        if (request is null)
+        {
+            response.Results.Add(Invalid(string.Empty, "REQUEST_NULL", "Solicitud inválida."));
+            return response;
+        }
+
+        if (request.ProtocolVersion != SyncProtocol.Version)
+        {
+            response.Results.Add(Invalid(string.Empty, "PROTOCOL_VERSION",
+                $"ProtocolVersion no soportado. Esperado {SyncProtocol.Version}."));
+            LogPush(actor, request.DeviceId, null, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, null);
+            return response;
+        }
+
+        if (!TryNormalizeDeviceId(request.DeviceId, out var deviceId, out var deviceError))
+        {
+            response.Results.Add(Invalid(string.Empty, "DEVICE_ID", deviceError!));
+            LogPush(actor, request.DeviceId, null, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, null);
+            return response;
+        }
+
+        if (request.Operations is null || request.Operations.Count == 0)
+        {
+            response.Results.Add(Invalid(string.Empty, "OPERATIONS_EMPTY", "Debe enviar al menos una operación."));
+            return response;
+        }
+
+        if (request.Operations.Count > SyncConstants.MaxPageSize)
+        {
+            response.Results.Add(Invalid(string.Empty, "OPERATIONS_LIMIT",
+                $"Máximo {SyncConstants.MaxPageSize} operaciones por Push."));
+            return response;
+        }
+
+        foreach (var op in request.Operations)
+        {
+            var result = await ProcessOperationAsync(op, actor, deviceId, correlationId, ct);
+            response.Results.Add(result);
+        }
+
+        LogPush(actor, deviceId, null, null, sw.ElapsedMilliseconds, correlationId,
+            $"ops={request.Operations.Count}");
+        return response;
+    }
+
+    public async Task<SyncPullResponse> PullAsync(
+        SyncPullRequest request,
+        RecordActor actor,
+        string? correlationId,
+        CancellationToken ct = default)
+    {
+        var sw = Stopwatch.StartNew();
+        await _permissions.EnsureLoadedAsync(ct);
+
+        var serverTime = DateTime.UtcNow;
+        if (request is null)
+        {
+            return EmptyPull(serverTime);
+        }
+
+        if (request.ProtocolVersion != SyncProtocol.Version)
+        {
+            _logger.LogWarning(
+                "Sync Pull protocolo inválido. UserId={UserId} DeviceId={DeviceId} CorrelationId={CorrelationId}",
+                actor.UserId, request.DeviceId, correlationId);
+            return EmptyPull(serverTime);
+        }
+
+        if (!TryNormalizeDeviceId(request.DeviceId, out var deviceId, out _))
+        {
+            _logger.LogWarning(
+                "Sync Pull DeviceId inválido. UserId={UserId} CorrelationId={CorrelationId}",
+                actor.UserId, correlationId);
+            return EmptyPull(serverTime);
+        }
+
+        if (!CanViewRecords(actor))
+        {
+            _logger.LogInformation(
+                "Sync Pull Forbidden. UserId={UserId} DeviceId={DeviceId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
+                actor.UserId, deviceId, correlationId, sw.ElapsedMilliseconds);
+            // Sin permiso de consulta: cursor no avanza; lista vacía (no filtrar datos ajenos).
+            return new SyncPullResponse
+            {
+                ProtocolVersion = SyncProtocol.Version,
+                ServerTimeUtc = serverTime,
+                NextCursor = Math.Max(0, request.Cursor),
+                HasMore = false,
+                Changes = []
+            };
+        }
+
+        var cursor = request.Cursor < 0 ? 0 : request.Cursor;
+        var pageSize = SyncProtocol.NormalizePageSize(request.PageSize);
+
+        var page = await _persistence.PullAuthorizedChangesAsync(actor, cursor, pageSize, ct);
+        var changes = page.AuthorizedChanges.Select(MapChange).ToList();
+
+        _logger.LogInformation(
+            "Sync Pull. UserId={UserId} DeviceId={DeviceId} Cursor={Cursor} NextCursor={NextCursor} Returned={Returned} HasMore={HasMore} CorrelationId={CorrelationId} DurationMs={DurationMs}",
+            actor.UserId, deviceId, cursor, page.NextCursor, changes.Count, page.HasMore, correlationId, sw.ElapsedMilliseconds);
+
+        return new SyncPullResponse
+        {
+            ProtocolVersion = SyncProtocol.Version,
+            ServerTimeUtc = serverTime,
+            NextCursor = page.NextCursor,
+            HasMore = page.HasMore,
+            Changes = changes
+        };
+    }
+
+    private async Task<SyncOperationResultDto> ProcessOperationAsync(
+        SyncOperationDto op,
+        RecordActor actor,
+        string deviceId,
+        string? correlationId,
+        CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        var clientOpId = op?.ClientOperationId?.Trim() ?? string.Empty;
+
+        try
+        {
+            if (op is null)
+            {
+                return Invalid(clientOpId, "OPERATION_NULL", "Operación inválida.");
+            }
+
+            if (string.IsNullOrWhiteSpace(clientOpId))
+            {
+                var r = Invalid(clientOpId, "CLIENT_OPERATION_ID", "ClientOperationId es obligatorio.");
+                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, null);
+                return r;
+            }
+
+            if (clientOpId.Length > SyncConstants.MaxClientOperationIdLength)
+            {
+                return Invalid(clientOpId, "CLIENT_OPERATION_ID", "ClientOperationId demasiado largo.");
+            }
+
+            var opType = (op.OperationType ?? string.Empty).Trim();
+            if (!string.Equals(opType, SyncConstants.OperationCreateRecord, StringComparison.OrdinalIgnoreCase))
+            {
+                var unsupported = new SyncOperationResultDto
+                {
+                    ClientOperationId = clientOpId,
+                    Result = nameof(SyncOperationResult.Invalid),
+                    ErrorCode = "OPERATION_TYPE_UNSUPPORTED",
+                    Message = $"OperationType '{opType}' no soportado en protocolo v1 (solo CreateRecord)."
+                };
+                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, opType);
+                return unsupported;
+            }
+
+            if (!CanCapture(actor))
+            {
+                var forbidden = new SyncOperationResultDto
+                {
+                    ClientOperationId = clientOpId,
+                    Result = nameof(SyncOperationResult.Forbidden),
+                    ErrorCode = "CAPTURE_FORBIDDEN",
+                    Message = "No tiene permiso para capturar registros."
+                };
+                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Forbidden, sw.ElapsedMilliseconds, correlationId, null);
+                return forbidden;
+            }
+
+            if (op.Payload is null || op.Payload.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            {
+                return Invalid(clientOpId, "PAYLOAD_REQUIRED", "Payload es obligatorio.");
+            }
+
+            SyncCreateRecordPayload? payload;
+            try
+            {
+                payload = op.Payload.Value.Deserialize<SyncCreateRecordPayload>(JsonOptions);
+            }
+            catch (JsonException)
+            {
+                return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+            }
+
+            if (payload is null)
+            {
+                return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+            }
+
+            // Ignorar cualquier intento de enviar identidad/permisos en el payload.
+            var createRequest = new CreateNepRecordRequest
+            {
+                Telar = payload.Telar ?? string.Empty,
+                Neps = payload.Neps,
+                Tela = payload.Tela ?? string.Empty,
+                LoteTrama = payload.LoteTrama ?? string.Empty,
+                Turno = payload.Turno ?? string.Empty,
+                Operario = payload.Operario ?? string.Empty,
+                LineaProduccion = payload.LineaProduccion ?? string.Empty,
+                Observacion = payload.Observacion ?? string.Empty,
+                ClientOperationId = clientOpId,
+                CaptureSessionId = string.IsNullOrWhiteSpace(op.CaptureSessionId)
+                    ? null
+                    : op.CaptureSessionId.Trim()
+            };
+
+            if (createRequest.CaptureSessionId?.Length > SyncConstants.MaxCaptureSessionIdLength)
+            {
+                return Invalid(clientOpId, "CAPTURE_SESSION_ID", "CaptureSessionId demasiado largo.");
+            }
+
+            try
+            {
+                NepRecordService.ValidateCreateRequest(createRequest);
+            }
+            catch (ArgumentException ex)
+            {
+                var invalid = Invalid(clientOpId, "VALIDATION", ex.Message);
+                LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, null);
+                return invalid;
+            }
+
+            // ClientCreatedAtUtc / ExpectedConcurrencyStamp: no se usan como fuente de verdad en Create v1.
+            var persist = await _persistence.CreateRecordAtomicallyAsync(createRequest, actor, deviceId, ct);
+
+            if (persist.Result is SyncOperationResult.Accepted or SyncOperationResult.Duplicate)
+            {
+                var level = AlertEvaluator.GetLevel(persist.Record!.Neps);
+                var dto = new SyncOperationResultDto
+                {
+                    ClientOperationId = clientOpId,
+                    Result = persist.Result.ToString(),
+                    EntityId = persist.Record.Id,
+                    ConcurrencyStamp = persist.Record.ConcurrencyStamp,
+                    QualityLabel = level.ToDisplayLabel(),
+                    ChangeSequence = persist.ChangeSequence
+                };
+                LogPush(actor, deviceId, clientOpId, persist.Result, sw.ElapsedMilliseconds, correlationId, null);
+                return dto;
+            }
+
+            var mapped = new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = persist.Result.ToString(),
+                ErrorCode = persist.ErrorCode,
+                Message = persist.Message
+            };
+            LogPush(actor, deviceId, clientOpId, persist.Result, sw.ElapsedMilliseconds, correlationId, persist.ErrorCode);
+            return mapped;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Sync Push TransientError. UserId={UserId} DeviceId={DeviceId} ClientOperationId={ClientOperationId} CorrelationId={CorrelationId}",
+                actor.UserId, deviceId, clientOpId, correlationId);
+            return new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = nameof(SyncOperationResult.TransientError),
+                ErrorCode = "TRANSIENT",
+                Message = "Error temporal al procesar la operación."
+            };
+        }
+    }
+
+    private bool CanCapture(RecordActor actor) =>
+        _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.CaptureRecords);
+
+    private bool CanViewRecords(RecordActor actor) =>
+        _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.ViewRecords)
+        || _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.CaptureRecords);
+
+    private static SyncChangeDto MapChange(Domain.Entities.SyncChangeLog log)
+    {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(log.PayloadJson) ? "{}" : log.PayloadJson);
+        return new SyncChangeDto
+        {
+            Sequence = log.Sequence,
+            EntityType = log.EntityType,
+            EntityId = log.EntityId,
+            ChangeType = log.ChangeType,
+            OccurredAtUtc = log.OccurredAtUtc,
+            Payload = doc.RootElement.Clone()
+        };
+    }
+
+    private static SyncPullResponse EmptyPull(DateTime serverTime) => new()
+    {
+        ProtocolVersion = SyncProtocol.Version,
+        ServerTimeUtc = serverTime,
+        NextCursor = 0,
+        HasMore = false,
+        Changes = []
+    };
+
+    private static SyncOperationResultDto Invalid(string clientOpId, string code, string message) => new()
+    {
+        ClientOperationId = clientOpId,
+        Result = nameof(SyncOperationResult.Invalid),
+        ErrorCode = code,
+        Message = message
+    };
+
+    private static bool TryNormalizeDeviceId(string? raw, out string deviceId, out string? error)
+    {
+        deviceId = (raw ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            error = "DeviceId es obligatorio.";
+            return false;
+        }
+
+        if (deviceId.Length > SyncConstants.MaxDeviceIdLength)
+        {
+            error = "DeviceId demasiado largo.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private void LogPush(
+        RecordActor actor,
+        string? deviceId,
+        string? clientOperationId,
+        SyncOperationResult? result,
+        long durationMs,
+        string? correlationId,
+        string? detail)
+    {
+        _logger.LogInformation(
+            "Sync Push. UserId={UserId} DeviceId={DeviceId} ClientOperationId={ClientOperationId} Result={Result} DurationMs={DurationMs} CorrelationId={CorrelationId} Detail={Detail}",
+            actor.UserId,
+            deviceId,
+            clientOperationId,
+            result?.ToString() ?? "-",
+            durationMs,
+            correlationId,
+            detail);
+    }
+}

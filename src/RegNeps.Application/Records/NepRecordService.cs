@@ -709,8 +709,14 @@ public sealed class NepRecordService
         }
     }
 
-    private static void Validate(CreateNepRecordRequest request)
+    private static void Validate(CreateNepRecordRequest request) =>
+        ValidateCreateRequest(request);
+
+    /// <summary>Validación compartida con Push sync (mismas reglas que Captura online).</summary>
+    public static void ValidateCreateRequest(CreateNepRecordRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
         if (string.IsNullOrWhiteSpace(request.Telar))
         {
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));

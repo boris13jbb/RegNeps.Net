@@ -117,13 +117,17 @@ public static class DatabaseInitializer
         }
 
         // Índice único parcial: permite muchos históricos con ClientOperationId NULL.
-        if (!await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_ClientOperation"))
+        // Solo si existen ambas columnas (esquemas legacy pueden no tener CreatedByUserId aún).
+        // Identificadores sin comillas dobles: SQLite 3.50+ / DQS puede tratar "Col" como literal.
+        if (await SqliteColumnExistsAsync(db, "NepRecords", "CreatedByUserId")
+            && await SqliteColumnExistsAsync(db, "NepRecords", "ClientOperationId")
+            && !await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_ClientOperation"))
         {
             await TryExecuteAsync(db,
                 """
-                CREATE UNIQUE INDEX IF NOT EXISTS "IX_NepRecords_CreatedBy_ClientOperation"
-                ON "NepRecords" ("CreatedByUserId", "ClientOperationId")
-                WHERE "ClientOperationId" IS NOT NULL AND "ClientOperationId" <> ''
+                CREATE UNIQUE INDEX IF NOT EXISTS IX_NepRecords_CreatedBy_ClientOperation
+                ON NepRecords (CreatedByUserId, ClientOperationId)
+                WHERE ClientOperationId IS NOT NULL AND ClientOperationId <> ''
                 """);
         }
 
@@ -133,12 +137,14 @@ public static class DatabaseInitializer
                 """ALTER TABLE "NepRecords" ADD COLUMN "CaptureSessionId" TEXT NULL""");
         }
 
-        if (!await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_CaptureSession"))
+        if (await SqliteColumnExistsAsync(db, "NepRecords", "CreatedByUserId")
+            && await SqliteColumnExistsAsync(db, "NepRecords", "CaptureSessionId")
+            && !await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_CaptureSession"))
         {
             await TryExecuteAsync(db,
                 """
-                CREATE INDEX IF NOT EXISTS "IX_NepRecords_CreatedBy_CaptureSession"
-                ON "NepRecords" ("CreatedByUserId", "CaptureSessionId")
+                CREATE INDEX IF NOT EXISTS IX_NepRecords_CreatedBy_CaptureSession
+                ON NepRecords (CreatedByUserId, CaptureSessionId)
                 """);
         }
 
@@ -152,6 +158,7 @@ public static class DatabaseInitializer
                 """);
         }
 
+        await EnsureSyncChangeLogsSqliteAsync(db);
     }
 
     private static async Task ApplySqlServerPatchesAsync(RegNepsDbContext db)
@@ -210,6 +217,8 @@ public static class DatabaseInitializer
                 """);
         }
 
+        await EnsureSyncChangeLogsSqlServerAsync(db);
+
         if (!await SqlServerIndexExistsAsync(db, "Fabrics", "IX_Fabrics_Name_Unique"))
         {
             await TryExecuteAsync(db,
@@ -219,6 +228,112 @@ public static class DatabaseInitializer
                 """);
         }
 
+    }
+
+    /// <summary>FASE 2B: SyncChangeLogs (aditivo; compatible con EnsureCreated existente).</summary>
+    private static async Task EnsureSyncChangeLogsSqliteAsync(RegNepsDbContext db)
+    {
+        if (!await SqliteTableExistsAsync(db, "SyncChangeLogs"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE TABLE IF NOT EXISTS "SyncChangeLogs" (
+                    "Sequence" INTEGER NOT NULL CONSTRAINT "PK_SyncChangeLogs" PRIMARY KEY AUTOINCREMENT,
+                    "EntityType" TEXT NOT NULL,
+                    "EntityId" TEXT NOT NULL,
+                    "ChangeType" TEXT NOT NULL,
+                    "OccurredAtUtc" TEXT NOT NULL,
+                    "ActorUserId" TEXT NOT NULL,
+                    "OwnerUserId" TEXT NOT NULL,
+                    "ClientOperationId" TEXT NULL,
+                    "DeviceId" TEXT NULL,
+                    "PayloadJson" TEXT NOT NULL
+                )
+                """);
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_Sequence"))
+        {
+            await TryExecuteAsync(db,
+                """CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_Sequence" ON "SyncChangeLogs" ("Sequence")""");
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_EntityType_EntityId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_EntityType_EntityId"
+                ON "SyncChangeLogs" ("EntityType", "EntityId")
+                """);
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_Owner_Sequence"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_Owner_Sequence"
+                ON "SyncChangeLogs" ("OwnerUserId", "Sequence")
+                """);
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_ClientOperationId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_ClientOperationId"
+                ON "SyncChangeLogs" ("ClientOperationId")
+                """);
+        }
+    }
+
+    private static async Task EnsureSyncChangeLogsSqlServerAsync(RegNepsDbContext db)
+    {
+        await TryExecuteAsync(db,
+            """
+            IF OBJECT_ID(N'[dbo].[SyncChangeLogs]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[SyncChangeLogs] (
+                    [Sequence] bigint IDENTITY(1,1) NOT NULL,
+                    [EntityType] nvarchar(64) NOT NULL,
+                    [EntityId] uniqueidentifier NOT NULL,
+                    [ChangeType] nvarchar(64) NOT NULL,
+                    [OccurredAtUtc] datetime2 NOT NULL,
+                    [ActorUserId] nvarchar(64) NOT NULL,
+                    [OwnerUserId] nvarchar(64) NOT NULL,
+                    [ClientOperationId] nvarchar(64) NULL,
+                    [DeviceId] nvarchar(64) NULL,
+                    [PayloadJson] nvarchar(max) NOT NULL,
+                    CONSTRAINT [PK_SyncChangeLogs] PRIMARY KEY CLUSTERED ([Sequence])
+                );
+            END
+            """);
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_EntityType_EntityId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_EntityType_EntityId]
+                ON [SyncChangeLogs] ([EntityType], [EntityId])
+                """);
+        }
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_Owner_Sequence"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_Owner_Sequence]
+                ON [SyncChangeLogs] ([OwnerUserId], [Sequence])
+                """);
+        }
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_ClientOperationId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_ClientOperationId]
+                ON [SyncChangeLogs] ([ClientOperationId])
+                """);
+        }
     }
 
     private static async Task TryExecuteAsyncPrivate(RegNepsDbContext db, string sql, object[]? parameters = null)
