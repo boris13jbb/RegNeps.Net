@@ -40,11 +40,32 @@ Idempotente: se puede reiniciar la app sin duplicar roles/permisos ni pisar `IsE
 | Columna `Users.RoleCode` | `ALTER TABLE ... ADD COLUMN` si no existe | `ALTER TABLE ... ADD` si no existe |
 | `RolePermissions` enum → `RoleId` | Rebuild a tabla nueva + `INSERT` mapeando `Role` 0–4 → códigos | Igual con `sp_rename` |
 | `RolePermissionAudits` | Análogo | Análogo |
-| Semilla 5 roles sistema | `INSERT OR IGNORE` | `IF NOT EXISTS ... INSERT` |
+| Semilla 5 roles sistema | `INSERT OR IGNORE` (Guid formato D) | `IF NOT EXISTS ... INSERT` (`NEWID()`) |
+| Reparación Guid hex | Convierte `Roles.Id` / `RoleId` de 32 hex sin `-` a formato D | N/A (uniqueidentifier) |
 | `RoleCode` en usuarios legacy | `RoleBootstrap.SyncUserRoleCodesAsync` (solo nulos/vacíos) | Igual |
 | Permisos faltantes | Solo inserta filas inexistentes; **no** cambia `IsEnabled` | Igual |
 
 Roles de sistema: Operario, Supervisor, Admin, Gerencia, SuperAdmin (`SystemRoleCodes.Definitions`).
+
+### Parche transaccional (rebuild DROP + rename)
+
+El rebuild de `RolePermissions` / `RolePermissionAudits` (crear `_new` → insertar → `DROP` tabla original → rename) corre dentro de una **transacción explícita** (`Database.BeginTransactionAsync`). El proyecto no usa `EnableRetryOnFailure`, así que no hace falta `CreateExecutionStrategy`.
+
+- **Si el parche falla a mitad:** se hace `ROLLBACK`. La BD queda como antes del rebuild (sin tabla `_new` huérfana y sin haber perdido la tabla original).
+- **Si el parche termina bien:** `COMMIT`. Un segundo arranque no vuelve a rebuild (ya no existe la columna enum `Role`).
+- **Backup previo (paso 1) sigue siendo obligatorio** ante cualquier despliegue: la transacción protege un fallo a mitad del rebuild, no sustituye un backup ante corrupción de disco, despliegue incorrecto o necesidad de volver atrás de versión.
+
+### Prueba manual SQL Server (staging) — rollback del rebuild
+
+NO VERIFICABLE en CI/local sin SQL Server/LocalDB. En staging:
+
+1. Backup de la BD.
+2. Dejar (o restaurar) un esquema con `RolePermissions.Role` (enum) y sin `RoleId`.
+3. Forzar un fallo controlado a mitad del rebuild (p. ej. breakpoint/`THROW` tras el `DROP`, o simular error de permisos DDL) y confirmar que tras el error:
+   - sigue existiendo `RolePermissions` con columna `Role`;
+   - no queda `RolePermissions_new`;
+   - los datos enum previos siguen legibles.
+4. Arrancar de nuevo sin el fallo: el rebuild debe completar e idempotencia en un segundo arranque.
 
 ## 3. Rollback
 
