@@ -1,14 +1,20 @@
+using Microsoft.Extensions.DependencyInjection;
+
 namespace RegNeps.Mobile;
 
-public partial class App : Application
+public partial class App : Microsoft.Maui.Controls.Application
 {
-    public App()
+    private readonly IServiceProvider _services;
+
+    public App(IServiceProvider services)
     {
+        _services = services;
         InitializeComponent();
     }
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        return new Window(new MainPage());
+        var main = _services.GetRequiredService<MainPage>();
+        return new Window(new NavigationPage(main));
     }
 }

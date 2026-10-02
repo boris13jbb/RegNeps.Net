@@ -1,5 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.ApplicationModel.DataTransfer;
 using Microsoft.Maui.Storage;
+using RegNeps.Mobile.Local;
 #if ANDROID
 using Android.Webkit;
 #endif
@@ -26,26 +28,39 @@ public partial class MainPage : ContentPage
 
         var savedUrl = Preferences.Default.Get(ServerUrlPreferenceKey, DefaultServerUrl);
         ServerEntry.Text = savedUrl;
-        NavigateTo(savedUrl);
+        _ = ProbeAndNavigateAsync(savedUrl, persist: false);
     }
 
-    private void OnConnectClicked(object? sender, EventArgs e)
-    {
-        NavigateTo(ServerEntry.Text ?? string.Empty, persist: true);
-    }
+    private void OnConnectClicked(object? sender, EventArgs e) =>
+        _ = ProbeAndNavigateAsync(ServerEntry.Text ?? string.Empty, persist: true);
 
     private void OnReloadClicked(object? sender, EventArgs e)
     {
         var currentUrl = ServerEntry.Text ?? Preferences.Default.Get(ServerUrlPreferenceKey, DefaultServerUrl);
-        NavigateTo(currentUrl);
+        _ = ProbeAndNavigateAsync(currentUrl, persist: false);
     }
 
-    private void NavigateTo(string rawUrl, bool persist = false)
+    private async void OnOfflineClicked(object? sender, EventArgs e)
+    {
+        var services = Handler?.MauiContext?.Services
+                       ?? Microsoft.Maui.Controls.Application.Current?.Handler?.MauiContext?.Services;
+        if (services is null)
+        {
+            return;
+        }
+
+        var page = services.GetRequiredService<OfflineCapturePage>();
+        await Navigation.PushAsync(page);
+    }
+
+    private async Task ProbeAndNavigateAsync(string rawUrl, bool persist)
     {
         var normalized = NormalizeServerUrl(rawUrl);
         if (normalized is null)
         {
-            ShowError("La URL no es válida. Usa http:// o https://, por ejemplo http://192.168.100.140:5080");
+            ShowError(
+                "La URL no es válida. Usa http:// o https://, por ejemplo http://192.168.100.140:5080",
+                offerOffline: true);
             return;
         }
 
@@ -53,6 +68,14 @@ public partial class MainPage : ContentPage
         if (persist)
         {
             Preferences.Default.Set(ServerUrlPreferenceKey, normalized);
+        }
+
+        ShowLoading("Comprobando servidor...");
+        var availability = await ServerAvailabilityProbe.ProbeAsync(normalized);
+        if (availability.Kind != ServerAvailabilityKind.Online)
+        {
+            ShowError($"{availability.Message}\nPuede continuar con captura offline.", offerOffline: true);
+            return;
         }
 
         ShowLoading("Conectando con RegNeps...");
@@ -81,7 +104,6 @@ public partial class MainPage : ContentPage
 
     private void OnBrowserNavigating(object? sender, WebNavigatingEventArgs e)
     {
-        // Interceptar el puente nativo ANTES del overlay de carga.
         if (TryBeginNativeShare(e.Url))
         {
             e.Cancel = true;
@@ -98,6 +120,7 @@ public partial class MainPage : ContentPage
             StatusOverlay.IsVisible = false;
             LoadingIndicator.IsRunning = false;
             RetryButton.IsVisible = false;
+            GoOfflineButton.IsVisible = false;
 
             try
             {
@@ -111,14 +134,11 @@ public partial class MainPage : ContentPage
             return;
         }
 
-        ShowError("No se pudo conectar con RegNeps. Comprueba que el servidor esté encendido, que el teléfono esté en la misma red y que el puerto 5080 sea accesible.");
+        ShowError(
+            "No se pudo conectar con RegNeps. Comprueba servidor, Wi‑Fi y puerto. Puede usar captura offline.",
+            offerOffline: true);
     }
 
-    /// <summary>
-    /// Acepta únicamente:
-    /// - regneps-share://share?title=&amp;text= (legado texto)
-    /// - regneps-share://file?id=&amp;name= (archivo vía TempExport autenticado)
-    /// </summary>
     private bool TryBeginNativeShare(string? rawUrl)
     {
         if (string.IsNullOrWhiteSpace(rawUrl) || rawUrl.Length > NativeShareUrlMaxLength)
@@ -144,7 +164,7 @@ public partial class MainPage : ContentPage
             var fileName = Uri.UnescapeDataString(GetQueryValue(uri, "name") ?? "regneps-export");
             if (!Guid.TryParse(idRaw, out var exportId))
             {
-                return true; // esquema reconocido pero inválido: cancelar navegación sin crashear
+                return true;
             }
 
             _ = RequestNativeFileShareAsync(exportId, SanitizeFileName(fileName));
@@ -289,14 +309,16 @@ public partial class MainPage : ContentPage
         StatusOverlay.IsVisible = true;
         LoadingIndicator.IsRunning = true;
         RetryButton.IsVisible = false;
+        GoOfflineButton.IsVisible = false;
     }
 
-    private void ShowError(string message)
+    private void ShowError(string message, bool offerOffline = false)
     {
         StatusLabel.Text = message;
         StatusOverlay.IsVisible = true;
         LoadingIndicator.IsRunning = false;
         RetryButton.IsVisible = true;
+        GoOfflineButton.IsVisible = offerOffline;
     }
 
     protected override bool OnBackButtonPressed()

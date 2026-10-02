@@ -27,6 +27,12 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RegNeps.Domain\RegNeps.Domain.csproj" />
+    <ProjectReference Include="..\RegNeps.OfflineStore\RegNeps.OfflineStore.csproj" />
   </ItemGroup>
 
 </Project>
