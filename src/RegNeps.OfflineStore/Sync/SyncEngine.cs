@@ -562,6 +562,10 @@ public sealed class SyncEngine : ISyncEngine
                         && (sameOp is null || p.Id != sameOp.Id))
             .ToList();
 
+        var conflictOps = pendingForEntity
+            .Where(p => p.Status == PendingOperationStatus.Conflict)
+            .ToList();
+
         if (local is null)
         {
             // Nuevo remoto: solo si pertenece al usuario de sesión (o sin owner).
@@ -607,17 +611,30 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
-        if (otherPending.Count > 0)
+        if (otherPending.Count > 0 || conflictOps.Count > 0)
         {
-            // Hay edición local pendiente distinta: NO LWW de campos de negocio.
-            // Actualizar stamp para el próximo Push / Conflict esperado.
+            // Edición local pendiente o Conflict en revisión: NO LWW de campos de negocio.
+            // Actualizar stamp; conservar snapshot de conflicto ya guardado.
             local.ConcurrencyStamp = snap.ConcurrencyStamp;
             local.UpdatedAtUtc = snap.UpdatedAtUtc ?? local.UpdatedAtUtc;
             local.ServerRecordId ??= snap.Id;
             local.IsDeleted = false;
+            if (conflictOps.Count > 0)
+            {
+                local.SyncStatus = LocalSyncStatus.Conflict;
+            }
+
             foreach (var p in otherPending)
             {
                 p.ExpectedConcurrencyStamp = snap.ConcurrencyStamp;
+            }
+
+            // Refrescar snapshot servidor en Conflict sin tocar PayloadJson local.
+            foreach (var c in conflictOps)
+            {
+                c.ConflictServerConcurrencyStamp = snap.ConcurrencyStamp;
+                c.ConflictServerSnapshotJson = change.Payload.GetRawText();
+                c.ExpectedConcurrencyStamp = snap.ConcurrencyStamp;
             }
 
             result.PulledUpserts++;
