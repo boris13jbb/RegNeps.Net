@@ -346,14 +346,36 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
             "a-conflict");
         Assert.Equal(nameof(SyncOperationResult.Conflict), aConflict.Results[0].Result);
         Assert.Equal(stampY, aConflict.Results[0].ServerConcurrencyStamp);
+        Assert.NotNull(aConflict.Results[0].ServerSnapshot);
+        Assert.Equal(300, aConflict.Results[0].ServerSnapshot!.Value.GetProperty("neps").GetDouble());
+        Assert.Equal(stampY, aConflict.Results[0].ServerSnapshot!.Value.GetProperty("concurrencyStamp").GetString());
 
-        await using var db = _factory.CreateDbContext();
-        var record = await db.NepRecords.SingleAsync(r => r.Id == id);
-        Assert.Equal(stampY, record.ConcurrencyStamp);
-        Assert.Equal(300, record.Neps);
-        Assert.Equal("T-B", record.Telar);
-        Assert.Equal(2, await db.SyncChangeLogs.CountAsync(c =>
-            c.ChangeType == SyncConstants.ChangeRecordUpserted));
+        await using (var db = _factory.CreateDbContext())
+        {
+            var record = await db.NepRecords.SingleAsync(r => r.Id == id);
+            Assert.Equal(stampY, record.ConcurrencyStamp);
+            Assert.Equal(300, record.Neps);
+            Assert.Equal("T-B", record.Telar);
+            Assert.Equal(2, await db.SyncChangeLogs.CountAsync(c =>
+                c.ChangeType == SyncConstants.ChangeRecordUpserted));
+        }
+
+        // A adopta Y y reintenta deliberadamente → debe poder actualizar.
+        var aRetry = await sync.PushAsync(
+            PushUpdate("dev-a", Guid.NewGuid().ToString("N"), id, stampY, 35, "T-A2"),
+            a,
+            "a-retry-y");
+        Assert.Equal(nameof(SyncOperationResult.Accepted), aRetry.Results[0].Result);
+        Assert.NotEqual(stampY, aRetry.Results[0].ConcurrencyStamp);
+
+        var pullAfter = await sync.PullAsync(Pull("dev-a", 0), a, "pull-y");
+        var lastUpsert = pullAfter.Changes
+            .Where(c => c.ChangeType == SyncConstants.ChangeRecordUpserted && c.EntityId == id)
+            .OrderByDescending(c => c.Sequence)
+            .First();
+        Assert.Equal(aRetry.Results[0].ConcurrencyStamp,
+            lastUpsert.Payload.GetProperty("concurrencyStamp").GetString());
+        Assert.Equal(35, lastUpsert.Payload.GetProperty("neps").GetDouble());
     }
 
     [Fact]
@@ -598,6 +620,170 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
             try { File.Delete(path + "-wal"); } catch { /* ignore */ }
             try { File.Delete(path + "-shm"); } catch { /* ignore */ }
         }
+    }
+
+    [Fact]
+    public async Task Delete_After_Update_With_Stale_Stamp_Is_Conflict_Then_Delete_Y_Succeeds()
+    {
+        var sync = CreateSync();
+        var actor = ActorAdmin();
+        var (id, stampX) = await CreateViaPushAsync(sync, actor);
+
+        var upd = await sync.PushAsync(
+            PushUpdate("dev-2c", Guid.NewGuid().ToString("N"), id, stampX, 30),
+            actor,
+            "upd");
+        var stampY = upd.Results[0].ConcurrencyStamp!;
+
+        // Delete con stamp antiguo X mientras el registro sigue vivo → Conflict, 0 tombstones.
+        var delStale = await sync.PushAsync(
+            PushDelete("dev-2c", Guid.NewGuid().ToString("N"), id, stampX),
+            actor,
+            "del-x");
+        Assert.Equal(nameof(SyncOperationResult.Conflict), delStale.Results[0].Result);
+        Assert.Equal(stampY, delStale.Results[0].ServerConcurrencyStamp);
+
+        await using (var mid = _factory.CreateDbContext())
+        {
+            Assert.Equal(1, await mid.NepRecords.CountAsync(r => r.Id == id));
+            Assert.Equal(0, await mid.SyncChangeLogs.CountAsync(c =>
+                c.ChangeType == SyncConstants.ChangeRecordDeleted));
+        }
+
+        var delOk = await sync.PushAsync(
+            PushDelete("dev-2c", Guid.NewGuid().ToString("N"), id, stampY),
+            actor,
+            "del-y");
+        Assert.Equal(nameof(SyncOperationResult.Accepted), delOk.Results[0].Result);
+
+        await using var db = _factory.CreateDbContext();
+        Assert.Equal(0, await db.NepRecords.CountAsync(r => r.Id == id));
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.ChangeType == SyncConstants.ChangeRecordDeleted));
+        var sequences = await db.SyncChangeLogs.OrderBy(c => c.Sequence).Select(c => c.Sequence).ToListAsync();
+        Assert.Equal(3, sequences.Count);
+        Assert.True(sequences[0] < sequences[1] && sequences[1] < sequences[2]);
+    }
+
+    [Fact]
+    public async Task Update_After_Delete_Is_EntityDeleted_Not_Duplicate()
+    {
+        var sync = CreateSync();
+        var actor = ActorAdmin();
+        var (id, stamp) = await CreateViaPushAsync(sync, actor);
+        await sync.PushAsync(PushDelete("dev-2c", Guid.NewGuid().ToString("N"), id, stamp), actor, "del");
+
+        var upd = await sync.PushAsync(
+            PushUpdate("dev-2c", Guid.NewGuid().ToString("N"), id, stamp, 22),
+            actor,
+            "upd-after-del");
+        Assert.Equal(nameof(SyncOperationResult.Invalid), upd.Results[0].Result);
+        Assert.Equal("ENTITY_DELETED", upd.Results[0].ErrorCode);
+
+        await using var db = _factory.CreateDbContext();
+        Assert.Equal(0, await db.NepRecords.CountAsync(r => r.Id == id));
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.ChangeType == SyncConstants.ChangeRecordDeleted));
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.ChangeType == SyncConstants.ChangeRecordUpserted));
+    }
+
+    [Fact]
+    public async Task Lagged_Client_Pull_Receives_Autonomous_Tombstone_From_Cursor_Zero()
+    {
+        var sync = CreateSync();
+        var actor = ActorAdmin();
+        var (id, stamp) = await CreateViaPushAsync(sync, actor);
+        await sync.PushAsync(PushDelete("dev-2c", Guid.NewGuid().ToString("N"), id, stamp), actor, "del");
+
+        var pull = await sync.PullAsync(Pull("dev-lag", 0), actor, "lag");
+        var tombstone = Assert.Single(pull.Changes.Where(c =>
+            c.ChangeType == SyncConstants.ChangeRecordDeleted && c.EntityId == id));
+        Assert.Equal(id, tombstone.Payload.GetProperty("id").GetGuid());
+        Assert.False(string.IsNullOrWhiteSpace(tombstone.Payload.GetProperty("ownerUserId").GetString()));
+        Assert.Equal(stamp, tombstone.Payload.GetProperty("lastConcurrencyStamp").GetString());
+        Assert.True(tombstone.Payload.TryGetProperty("deletedAtUtc", out _));
+    }
+
+    [Fact]
+    public async Task Same_ClientOperationId_Update_Then_Delete_Is_Reused_Not_False_Duplicate()
+    {
+        var sync = CreateSync();
+        var actor = ActorAdmin();
+        var (id, stamp) = await CreateViaPushAsync(sync, actor);
+        var sharedOp = Guid.NewGuid().ToString("N");
+
+        var upd = await sync.PushAsync(PushUpdate("dev-2c", sharedOp, id, stamp, 28), actor, "u");
+        Assert.Equal(nameof(SyncOperationResult.Accepted), upd.Results[0].Result);
+        var stampY = upd.Results[0].ConcurrencyStamp!;
+
+        var del = await sync.PushAsync(PushDelete("dev-2c", sharedOp, id, stampY), actor, "d");
+        Assert.Equal(nameof(SyncOperationResult.Invalid), del.Results[0].Result);
+        Assert.Equal("CLIENT_OPERATION_REUSED", del.Results[0].ErrorCode);
+
+        await using var db = _factory.CreateDbContext();
+        Assert.Equal(1, await db.NepRecords.CountAsync(r => r.Id == id));
+        Assert.Equal(0, await db.SyncChangeLogs.CountAsync(c =>
+            c.ChangeType == SyncConstants.ChangeRecordDeleted));
+    }
+
+    [Fact]
+    public async Task Same_ClientOperationId_Different_Payload_Update_Is_Duplicate_Of_First()
+    {
+        var sync = CreateSync();
+        var actor = ActorAdmin();
+        var (id, stamp) = await CreateViaPushAsync(sync, actor);
+        var opId = Guid.NewGuid().ToString("N");
+
+        var first = await sync.PushAsync(PushUpdate("dev-2c", opId, id, stamp, 25, "T-FIRST"), actor, "p1");
+        Assert.Equal(nameof(SyncOperationResult.Accepted), first.Results[0].Result);
+
+        // Mismo opId + payload distinto: contrato de idempotencia = no reaplica (Duplicate).
+        var second = await sync.PushAsync(PushUpdate("dev-2c", opId, id, stamp, 50, "T-SECOND"), actor, "p2");
+        Assert.Equal(nameof(SyncOperationResult.Duplicate), second.Results[0].Result);
+
+        await using var db = _factory.CreateDbContext();
+        var record = await db.NepRecords.SingleAsync(r => r.Id == id);
+        Assert.Equal("T-FIRST", record.Telar);
+        Assert.Equal(25, record.Neps);
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c => c.ClientOperationId == opId));
+    }
+
+    [Fact]
+    public async Task Upsert_Payload_Contains_Full_Replica_Snapshot()
+    {
+        var sync = CreateSync();
+        var actor = ActorAdmin();
+        var createOp = Guid.NewGuid().ToString("N");
+        var create = await sync.PushAsync(PushCreate("dev-2c", createOp, 12), actor, "c");
+        var id = create.Results[0].EntityId!.Value;
+        var stamp = create.Results[0].ConcurrencyStamp!;
+
+        var upd = await sync.PushAsync(
+            PushUpdate("dev-2c", Guid.NewGuid().ToString("N"), id, stamp, 40, "T-SNAP"),
+            actor,
+            "u");
+        Assert.Equal(nameof(SyncOperationResult.Accepted), upd.Results[0].Result);
+
+        var pull = await sync.PullAsync(Pull("dev-2c", 0), actor, "p");
+        var upsert = pull.Changes
+            .Where(c => c.ChangeType == SyncConstants.ChangeRecordUpserted && c.EntityId == id)
+            .OrderByDescending(c => c.Sequence)
+            .First();
+        var p = upsert.Payload;
+        Assert.Equal(id, p.GetProperty("id").GetGuid());
+        Assert.Equal("T-SNAP", p.GetProperty("telar").GetString());
+        Assert.Equal(40, p.GetProperty("neps").GetDouble());
+        Assert.True(p.GetProperty("mtsCalculados").GetDouble() > 0);
+        Assert.False(string.IsNullOrWhiteSpace(p.GetProperty("concurrencyStamp").GetString()));
+        Assert.Equal(_adminId.ToString(), p.GetProperty("ownerUserId").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(p.GetProperty("qualityLabel").GetString()));
+        Assert.True(p.TryGetProperty("updatedAtUtc", out var updated) && updated.ValueKind != JsonValueKind.Null);
+        Assert.True(p.TryGetProperty("createdAtUtc", out _));
+        Assert.True(p.TryGetProperty("captureSessionId", out _));
+        Assert.True(p.TryGetProperty("clientOperationId", out _));
+        // Campos correctivos no forman parte del snapshot canónico de réplica 2C.
+        Assert.False(p.TryGetProperty("accionCorrectiva", out _));
     }
 
     [Fact]

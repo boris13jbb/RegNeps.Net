@@ -180,10 +180,10 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 var processed = await FindProcessedByClientOpAsync(db, actor.UserId, opId, ct);
                 if (processed is not null)
                 {
-                    var prior = await db.NepRecords.AsNoTracking()
-                        .FirstOrDefaultAsync(r => r.Id == processed.EntityId, ct);
+                    var idempotent = await ResolveIdempotentUpsertAsync(
+                        db, processed, fields.EntityId, ct);
                     await tx.CommitAsync(ct);
-                    return DuplicateMutation(processed, prior);
+                    return idempotent;
                 }
             }
 
@@ -305,9 +305,7 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 var processed = await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
                 if (processed is not null)
                 {
-                    var prior = await read.NepRecords.AsNoTracking()
-                        .FirstOrDefaultAsync(r => r.Id == processed.EntityId, ct);
-                    return DuplicateMutation(processed, prior);
+                    return await ResolveIdempotentUpsertAsync(read, processed, fields.EntityId, ct);
                 }
             }
 
@@ -350,14 +348,7 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 if (processed is not null)
                 {
                     await tx.CommitAsync(ct);
-                    return new AtomicNepRecordMutationResult
-                    {
-                        Result = SyncOperationResult.Duplicate,
-                        EntityId = processed.EntityId,
-                        ChangeSequence = processed.Sequence,
-                        ErrorCode = "ALREADY_PROCESSED",
-                        Message = "Operación ya procesada."
-                    };
+                    return ResolveIdempotentDelete(processed, entityId);
                 }
             }
 
@@ -447,14 +438,7 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 var processed = await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
                 if (processed is not null)
                 {
-                    return new AtomicNepRecordMutationResult
-                    {
-                        Result = SyncOperationResult.Duplicate,
-                        EntityId = processed.EntityId,
-                        ChangeSequence = processed.Sequence,
-                        ErrorCode = "ALREADY_PROCESSED",
-                        Message = "Operación ya procesada."
-                    };
+                    return ResolveIdempotentDelete(processed, entityId);
                 }
             }
 
@@ -470,6 +454,66 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
             throw;
         }
+    }
+
+    /// <summary>
+    /// Duplicate solo si el ChangeLog previo es el mismo upsert (mismo EntityId + RecordUpserted).
+    /// Reutilizar ClientOperationId tras un Delete u otra entidad → Invalid (no fingir éxito).
+    /// </summary>
+    private static async Task<AtomicNepRecordMutationResult> ResolveIdempotentUpsertAsync(
+        RegNepsDbContext db,
+        SyncChangeLog processed,
+        Guid expectedEntityId,
+        CancellationToken ct)
+    {
+        if (!string.Equals(processed.ChangeType, SyncConstants.ChangeRecordUpserted, StringComparison.Ordinal)
+            || processed.EntityId != expectedEntityId)
+        {
+            return new AtomicNepRecordMutationResult
+            {
+                Result = SyncOperationResult.Invalid,
+                ErrorCode = "CLIENT_OPERATION_REUSED",
+                Message =
+                    "ClientOperationId ya fue usado en otra operación. Genere un nuevo ClientOperationId.",
+                EntityId = expectedEntityId,
+                ChangeSequence = processed.Sequence
+            };
+        }
+
+        var prior = await db.NepRecords.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == processed.EntityId, ct);
+        return DuplicateMutation(processed, prior);
+    }
+
+    /// <summary>
+    /// Duplicate solo si el ChangeLog previo es el mismo tombstone (mismo EntityId + RecordDeleted).
+    /// </summary>
+    private static AtomicNepRecordMutationResult ResolveIdempotentDelete(
+        SyncChangeLog processed,
+        Guid expectedEntityId)
+    {
+        if (!string.Equals(processed.ChangeType, SyncConstants.ChangeRecordDeleted, StringComparison.Ordinal)
+            || processed.EntityId != expectedEntityId)
+        {
+            return new AtomicNepRecordMutationResult
+            {
+                Result = SyncOperationResult.Invalid,
+                ErrorCode = "CLIENT_OPERATION_REUSED",
+                Message =
+                    "ClientOperationId ya fue usado en otra operación. Genere un nuevo ClientOperationId.",
+                EntityId = expectedEntityId,
+                ChangeSequence = processed.Sequence
+            };
+        }
+
+        return new AtomicNepRecordMutationResult
+        {
+            Result = SyncOperationResult.Duplicate,
+            EntityId = processed.EntityId,
+            ChangeSequence = processed.Sequence,
+            ErrorCode = "ALREADY_PROCESSED",
+            Message = "Operación ya procesada."
+        };
     }
 
     private static AtomicNepRecordMutationResult DuplicateMutation(

@@ -96,6 +96,20 @@ Sin cambios: `NextCursor = última Sequence examinada`. Política de privacidad 
 
 Backfill administrativo **opcional y no ejecutado** en 2C. Diseño futuro: generar `RecordUpserted` idempotente para `NepRecord` sin ChangeLog, paginado, fuera del flujo Push/Pull.
 
+## Idempotencia — semántica (ActorUserId + ClientOperationId)
+
+Índice único filtrado `IX_SyncChangeLogs_Actor_ClientOperation`.
+
+| Caso | Resultado |
+|------|-----------|
+| Mismo opId + mismo upsert (retry) | `Duplicate` / `ALREADY_PROCESSED` |
+| Mismo opId + mismo tombstone (retry) | `Duplicate` / `ALREADY_PROCESSED` |
+| Mismo opId, OperationType distinto (p. ej. Update→Delete) | `Invalid` / `CLIENT_OPERATION_REUSED` (no fingir éxito) |
+| Mismo opId, mismo Update, payload distinto | `Duplicate` del primero (no reaplica) |
+| Create y Update ambos son `RecordUpserted` | Si se reutiliza el opId del Create en un Update del **mismo** EntityId, el servidor no puede distinguir el intent → contrato cliente: **un ClientOperationId = una operación lógica** |
+
+Clave actual (sin columna `OperationType` en ChangeLog): `(ActorUserId, ClientOperationId)` + validación de `ChangeType` + `EntityId` en lectura.
+
 ## Pendientes de consistencia sync
 
 | Ruta | Estado 2C |
@@ -103,12 +117,23 @@ Backfill administrativo **opcional y no ejecutado** en 2C. Diseño futuro: gener
 | Create online | ChangeLog (2B.1) |
 | Update/Delete online | ChangeLog / tombstone |
 | DeleteMany | Delega en DeleteAsync → tombstone |
-| Importación | ChangeLog por fila vía store atómico |
-| ApplyCorrective | **Pendiente** (muta sin ChangeLog dedicado) |
-| ClearAll | **Pendiente** (borrado masivo sin tombstones por fila) |
+| Importación productiva (`RecordImportService`) | ChangeLog por fila vía store atómico (DI) |
+| Migración histórica Firestore | **Sin ChangeLog** (herramienta admin) |
+| ApplyCorrective | **Brecha crítica sync**: muta + cambia stamp/UpdatedAt **sin** ChangeLog |
+| ClearAll | **Incompatible con sync fina**: `ExecuteDelete` sin tombstones |
 | Backfill históricos | **No ejecutado** (política B) |
 
-Hasta resolver ApplyCorrective/ClearAll/backfill, el sistema no debe considerarse 100 % sync-consistente para esas rutas.
+### ApplyCorrective
+
+Campos: `AccionCorrectiva`, `ResponsableRevision`, `RevisadoPorSupervisor`, `FechaRevision`, historial `CorrectiveActions`.  
+`NepRecordRepository.UpdateAsync` **sí** regenera `ConcurrencyStamp` y `UpdatedAt`.  
+Punto de integración recomendado (futuro): escritura atómica `RecordUpserted` tras mutación correctiva (ampliar payload canónico con campos de revisión). **No mezclar con ClearAll.**
+
+### ClearAll — decisión
+
+**Opción C (recomendada):** operación administrativa **incompatible** con clientes offline activos.  
+Precondición operativa: no ejecutar ClearAll mientras existan dispositivos offline-first sincronizando.  
+Si en el futuro debe coexistir: Opción A (tombstone por registro, costoso) o B (`RecordsCleared` + epoch de generación).
 
 ## Endpoints
 
