@@ -352,44 +352,51 @@ internal static class RoleSchemaPatches
     /// <summary>
     /// Normaliza Guid TEXT en minúsculas (formato D) al casing mayúsculas que escribe EF Core
     /// en SQLite. Sin esto, SELECT por username funciona pero UPDATE por Id falla
-    /// (DbUpdateConcurrencyException: 0 filas). Idempotente.
+    /// (DbUpdateConcurrencyException: 0 filas). Idempotente; una sola transacción.
     /// </summary>
+    /// <remarks>
+    /// Usa <c>upper(col)</c> en SQL (no parámetros Guid fila a fila): actualiza de golpe
+    /// Roles.Id, RolePermissions.RoleId y RolePermissionAudits.RoleId aunque haya muchas filas.
+    /// </remarks>
     internal static async Task RepairSqliteGuidTextCasingAsync(
         RegNepsDbContext db,
         CancellationToken ct = default)
     {
-        // Recolectar trabajo primero; si no hay minúsculas, no tocar PRAGMA/FK.
-        var jobs = new List<(string Table, string Column, List<string> Values)>();
-        async Task QueueAsync(string table, string column)
+        // Columnas Guid que el parche / seed crudo pueden dejar en minúsculas.
+        // Orden: FKs de roles primero, luego PKs de Roles, luego resto.
+        var columns = new (string Table, string Column)[]
+        {
+            ("RolePermissions", "RoleId"),
+            ("RolePermissions", "UpdatedByUserId"),
+            ("RolePermissionAudits", "RoleId"),
+            ("RolePermissionAudits", "Id"),
+            ("RolePermissionAudits", "ModifiedByUserId"),
+            ("Roles", "Id"),
+            ("Users", "Id"),
+            ("Fabrics", "Id"),
+            ("SavedReports", "Id"),
+            ("CorrectiveActions", "Id"),
+            ("CorrectiveActions", "NepRecordId"),
+            ("NepRecords", "Id"),
+            ("LoteTramaItems", "Id"),
+        };
+
+        var pending = new List<(string Table, string Column)>();
+        foreach (var (table, column) in columns)
         {
             if (!await DatabaseInitializer.SqliteTableExistsAsync(db, table)
                 || !await DatabaseInitializer.SqliteColumnExistsAsync(db, table, column))
             {
-                return;
+                continue;
             }
 
-            var lowers = await ListSqliteLowercaseDashedGuidsAsync(db, table, column, ct);
-            if (lowers.Count > 0)
+            if (await CountSqliteLowercaseDashedGuidsAsync(db, table, column, ct) > 0)
             {
-                jobs.Add((table, column, lowers));
+                pending.Add((table, column));
             }
         }
 
-        await QueueAsync("RolePermissions", "RoleId");
-        await QueueAsync("RolePermissions", "UpdatedByUserId");
-        await QueueAsync("RolePermissionAudits", "RoleId");
-        await QueueAsync("RolePermissionAudits", "Id");
-        await QueueAsync("RolePermissionAudits", "ModifiedByUserId");
-        await QueueAsync("Roles", "Id");
-        await QueueAsync("Users", "Id");
-        await QueueAsync("Fabrics", "Id");
-        await QueueAsync("SavedReports", "Id");
-        await QueueAsync("CorrectiveActions", "Id");
-        await QueueAsync("CorrectiveActions", "NepRecordId");
-        await QueueAsync("NepRecords", "Id");
-        await QueueAsync("LoteTramaItems", "Id");
-
-        if (jobs.Count == 0)
+        if (pending.Count == 0)
         {
             return;
         }
@@ -401,23 +408,19 @@ internal static class RoleSchemaPatches
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             try
             {
-                foreach (var (table, column, values) in jobs)
+                foreach (var (table, column) in pending)
                 {
-                    foreach (var raw in values)
-                    {
-                        if (!Guid.TryParse(raw, out var guid))
-                        {
-                            continue;
-                        }
-
-                        // Parámetro Guid → TEXT mayúsculas (formato del proveedor SQLite de EF).
-                        var sql = string.Format(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            """UPDATE "{0}" SET "{1}" = {{0}} WHERE "{1}" = {{1}}""",
-                            table,
-                            column);
-                        await db.Database.ExecuteSqlRawAsync(sql, guid, raw);
-                    }
+                    // Identificadores solo desde la lista fija de arriba (no input externo).
+                    var sql =
+                        $"""
+                        UPDATE "{table}"
+                        SET "{column}" = upper("{column}")
+                        WHERE "{column}" IS NOT NULL
+                          AND length("{column}") = 36
+                          AND instr("{column}", '-') > 0
+                          AND "{column}" GLOB '*[a-f]*'
+                        """;
+                    await db.Database.ExecuteSqlRawAsync(sql, ct);
                 }
 
                 await tx.CommitAsync(ct);
@@ -434,10 +437,9 @@ internal static class RoleSchemaPatches
         }
     }
 
-    private static async Task<List<string>> ListSqliteLowercaseDashedGuidsAsync(
+    private static async Task<int> CountSqliteLowercaseDashedGuidsAsync(
         RegNepsDbContext db, string table, string column, CancellationToken ct)
     {
-        var result = new List<string>();
         var conn = db.Database.GetDbConnection();
         var openedHere = conn.State != System.Data.ConnectionState.Open;
         if (openedHere)
@@ -448,29 +450,16 @@ internal static class RoleSchemaPatches
         try
         {
             await using var cmd = conn.CreateCommand();
-            // Formato D con al menos una letra hex minúscula (a-f). SQLite es case-sensitive.
             cmd.CommandText =
                 $"""
-                SELECT DISTINCT "{column}" FROM "{table}"
+                SELECT COUNT(*) FROM "{table}"
                 WHERE "{column}" IS NOT NULL
                   AND length("{column}") = 36
                   AND instr("{column}", '-') > 0
                   AND "{column}" GLOB '*[a-f]*'
                 """;
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                if (reader.IsDBNull(0))
-                {
-                    continue;
-                }
-
-                var id = reader.GetString(0);
-                if (!string.IsNullOrWhiteSpace(id))
-                {
-                    result.Add(id);
-                }
-            }
+            var scalar = await cmd.ExecuteScalarAsync(ct);
+            return Convert.ToInt32(scalar, System.Globalization.CultureInfo.InvariantCulture);
         }
         finally
         {
@@ -479,8 +468,6 @@ internal static class RoleSchemaPatches
                 await conn.CloseAsync();
             }
         }
-
-        return result;
     }
 
     private static async Task<List<string>> ListSqliteUndashedRoleIdsAsync(
