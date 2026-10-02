@@ -115,3 +115,41 @@ Contrato existente (`OfflineSessionService.ClearUxSnapshotAsync`):
 - `OfflineSyncUxService` / `ManualSyncGate` / `ManualSyncRunner` — OfflineStore
 - `OfflineCapturePage` — MAUI UX
 - `ISyncEngine` — única fuente de verdad para ejecutar sync
+
+---
+
+## FASE 2D.3.1 — Validación técnica (fuentes de verdad)
+
+### De dónde lee la UX cada dato
+
+| Dato UX | Fuente persistida | Derivado / runtime |
+|---------|-------------------|--------------------|
+| Pending / Synced / SyncError / Conflict | `PendingOperations.Status` (enum; Sending se suma a Pending) | `OfflineSyncUxService.GetCountersAsync` |
+| Última sincronización | `SyncState.LastSuccessfulSyncUtc` (singleton Id=1) | Fallback `UpdatedAtUtc` |
+| Error última sync | `SyncState.LastError` | Sanitizado (sin secretos) |
+| Cursor Pull | `SyncState.LastPulledSequence` | Solo informativo en resumen |
+| Sesión local | `LocalSessions` vía `OfflineSessionService` | TTL 72h; **no** es auth |
+| Cookie / sync posible | `ISyncAuthCookieProvider` + `LocalSession.ServerBaseUrl` | Runtime WebView; **no** SQLite |
+| Conectividad red | `Connectivity` + `ServerAvailabilityProbe` | Runtime |
+| Conflictos UI | Outbox `Conflict` + `LocalNepRecord` + `ConflictServerSnapshotJson` | Textos amigables |
+| Ejecutar sync | Solo `ISyncEngine.SyncAsync` | Gate: `ManualSyncGate` |
+
+**Una fila Outbox = un estado.** No hay doble fuente para Pending/Conflict: el enum es excluyente.
+**Synced en contador** = filas actuales con `Status=Synced` en Outbox (estado actual, no historial externo).
+
+### Semántica IDs
+
+- `LocalNepRecord.Id` — identidad local.
+- `LocalNepRecord.ServerRecordId` — Id servidor tras Accepted/Duplicate.
+- `PendingOperation.TargetServerRecordId` — Id servidor conocido para Update/Delete.
+- `ClientOperationId` — idempotencia; **nunca** se regenera en retry.
+
+### Correcciones 2D.3.1
+
+- Guard anti doble-toque en «Guardar» (`_saving`).
+- Aviso UX si `ServerBaseUrl` de sesión ≠ URL Entry (sin hardcode).
+- `SanitizeError` clasifica 401/403 también en mensajes cortos limpios.
+
+### No incluido
+
+Background sync, SignalR recovery, push automático, resolución de conflictos, cambio de TTL 72h, E2E APK obligatorio.

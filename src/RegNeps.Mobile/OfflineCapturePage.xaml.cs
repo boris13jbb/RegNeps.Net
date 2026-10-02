@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.Networking;
+using Microsoft.Maui.Storage;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Services;
 using RegNeps.Mobile.Local;
@@ -18,6 +19,7 @@ public partial class OfflineCapturePage : ContentPage
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ManualSyncGate _syncGate;
     private bool _requiresLogin;
+    private bool _saving;
     private string? _serverBaseUrl;
 
     public OfflineCapturePage(IServiceScopeFactory scopeFactory, ManualSyncGate syncGate)
@@ -75,6 +77,17 @@ public partial class OfflineCapturePage : ContentPage
                 lastRunRequiresLogin: _requiresLogin);
 
             ApplyConnectivityBanner(connectivity);
+
+            // Aviso si LocalSession.ServerBaseUrl diverge del Entry (cookie por host).
+            var entryUrl = Preferences.Default.Get("regneps_server_url", string.Empty);
+            var mismatch = OfflineSyncUxService.ServerBaseUrlMismatchHint(_serverBaseUrl, entryUrl);
+            if (!string.IsNullOrWhiteSpace(mismatch)
+                && connectivity is SyncConnectivityUxKind.LocalSessionWithoutOnlineAuth
+                    or SyncConnectivityUxKind.RequiresLogin
+                    or SyncConnectivityUxKind.OnlineReady)
+            {
+                StatusBanner.Text = StatusBanner.Text + "\n" + mismatch;
+            }
 
             ReloginButton.IsVisible = connectivity is SyncConnectivityUxKind.RequiresLogin
                 or SyncConnectivityUxKind.LocalSessionWithoutOnlineAuth
@@ -317,6 +330,11 @@ public partial class OfflineCapturePage : ContentPage
 
     private async void OnSaveClicked(object? sender, EventArgs e)
     {
+        if (_saving)
+        {
+            return;
+        }
+
         MessageLabel.Text = string.Empty;
         if (!double.TryParse(NepsEntry.Text?.Replace(',', '.'),
                 System.Globalization.NumberStyles.Float,
@@ -327,6 +345,7 @@ public partial class OfflineCapturePage : ContentPage
             return;
         }
 
+        _saving = true;
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -353,6 +372,10 @@ public partial class OfflineCapturePage : ContentPage
         {
             MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
             MessageLabel.TextColor = Color.FromArgb("#7C2D12");
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 

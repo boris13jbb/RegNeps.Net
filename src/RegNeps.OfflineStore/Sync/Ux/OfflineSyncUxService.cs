@@ -304,6 +304,52 @@ public sealed class OfflineSyncUxService
         _ => "Estado de conexión desconocido."
     };
 
+    /// <summary>
+    /// Detecta divergencia entre ServerBaseUrl de LocalSession y la URL del Entry/WebView.
+    /// No cambia la arquitectura de configuración: solo un aviso UX.
+    /// </summary>
+    public static string? ServerBaseUrlMismatchHint(string? sessionServerBaseUrl, string? entryOrWebViewUrl)
+    {
+        if (string.IsNullOrWhiteSpace(sessionServerBaseUrl) || string.IsNullOrWhiteSpace(entryOrWebViewUrl))
+        {
+            return null;
+        }
+
+        if (!TryNormalizeBase(sessionServerBaseUrl, out var sessionNorm)
+            || !TryNormalizeBase(entryOrWebViewUrl, out var entryNorm))
+        {
+            return null;
+        }
+
+        if (string.Equals(sessionNorm, entryNorm, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return "La URL del servidor en la sesión local no coincide con la URL del WebView. "
+               + "Vuelve a iniciar sesión online para alinearlas; de lo contrario la cookie puede no encontrarse.";
+    }
+
+    private static bool TryNormalizeBase(string raw, out string normalized)
+    {
+        normalized = string.Empty;
+        var value = raw.Trim();
+        if (!value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            value = "http://" + value;
+        }
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return false;
+        }
+
+        normalized = uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        return true;
+    }
+
     /// <summary>Colores hex del banner (Bg, Fg) — la UI MAUI los interpreta.</summary>
     public static (string BgHex, string FgHex) BannerColorHex(SyncConnectivityUxKind kind) => kind switch
     {
@@ -513,27 +559,30 @@ public sealed class OfflineSyncUxService
         }
 
         var t = raw.Trim();
-        if (t.Contains("cookie", StringComparison.OrdinalIgnoreCase)
-            || t.Contains("Bearer", StringComparison.OrdinalIgnoreCase)
+
+        // Clasificar auth/authz antes de devolver el texto crudo (aunque sea corto y «limpio»).
+        if (t.Contains("401", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("iniciar sesión", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("cookie", StringComparison.OrdinalIgnoreCase))
+        {
+            return SyncResultUserMessages.RequiresLogin;
+        }
+
+        if (t.Contains("403", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("Forbidden", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("Acceso denegado", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("No tienes permisos", StringComparison.OrdinalIgnoreCase))
+        {
+            return SyncResultUserMessages.Forbidden;
+        }
+
+        if (t.Contains("Bearer", StringComparison.OrdinalIgnoreCase)
             || t.Contains("password", StringComparison.OrdinalIgnoreCase)
             || t.Contains("Connection String", StringComparison.OrdinalIgnoreCase)
             || t.Contains("at RegNeps.", StringComparison.OrdinalIgnoreCase)
             || t.Length > 280)
         {
-            if (t.Contains("cookie", StringComparison.OrdinalIgnoreCase)
-                || t.Contains("401", StringComparison.OrdinalIgnoreCase)
-                || t.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
-                || t.Contains("iniciar sesión", StringComparison.OrdinalIgnoreCase))
-            {
-                return SyncResultUserMessages.RequiresLogin;
-            }
-
-            if (t.Contains("403", StringComparison.OrdinalIgnoreCase)
-                || t.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
-            {
-                return SyncResultUserMessages.Forbidden;
-            }
-
             return "Ocurrió un error al sincronizar. Intenta de nuevo más tarde.";
         }
 
