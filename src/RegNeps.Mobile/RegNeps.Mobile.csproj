@@ -28,6 +28,8 @@
     <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <!-- FASE 2E: SignalR notifica; Pull sincroniza (cliente). -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.17" />
     <!-- Override transitivo vulnerable SQLitePCLRaw 2.1.x (GHSA-2m69-gcr7-jv3q). -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
   </ItemGroup>

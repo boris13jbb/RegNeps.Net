@@ -724,6 +724,9 @@ public sealed class OfflineSyncUxValidation231Tests : IAsyncLifetime
         public ScriptedEngine(Func<CancellationToken, Task<SyncRunResult>> fn) => _fn = fn;
 
         public Task<SyncRunResult> SyncAsync(CancellationToken ct = default) => _fn(ct);
+
+        public Task<SyncRunResult> PullAsync(CancellationToken ct = default) =>
+            Task.FromResult(new SyncRunResult { Started = true, PullCompleted = true });
     }
 
     private sealed class ThrowingApi : ISyncApiClient

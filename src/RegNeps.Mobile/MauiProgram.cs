@@ -29,6 +29,7 @@ public static class MauiProgram
         });
         builder.Services.AddSingleton<ISyncApiClient, HttpSyncApiClient>();
         builder.Services.AddSingleton<ISyncAuthCookieProvider, MauiWebViewCookieProvider>();
+        builder.Services.AddSingleton<MauiSyncHubRecoveryService>();
 
         builder.Services.AddTransient<OfflineCapturePage>();
         builder.Services.AddTransient<OfflineOperationsPage>();

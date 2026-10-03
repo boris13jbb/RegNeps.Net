@@ -4,6 +4,7 @@ using RegNeps.OfflineStore.Abstractions;
 using RegNeps.OfflineStore.Device;
 using RegNeps.OfflineStore.Services;
 using RegNeps.OfflineStore.Sync;
+using RegNeps.OfflineStore.Sync.Recovery;
 using RegNeps.OfflineStore.Sync.Ux;
 
 namespace RegNeps.OfflineStore;
@@ -46,6 +47,8 @@ public static class OfflineStoreBootstrap
         services.AddScoped<OfflineSyncUxService>();
         services.AddScoped<OfflineOperationsUxService>();
         services.AddSingleton<ManualSyncGate>();
+        // FASE 2E: coalescing SignalR/conectividad → Pull (singleton; un Pull activo).
+        services.AddSingleton<ISyncRecoveryCoordinator, SyncRecoveryCoordinator>();
         return services;
     }
 }

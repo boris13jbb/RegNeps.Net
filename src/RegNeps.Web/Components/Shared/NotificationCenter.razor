@@ -570,6 +570,18 @@
                     });
                 });
 
+            // FASE 2E: Blazor online no usa SyncEngine; tras reconectar refresca alertas
+            // (no asume que llegaron eventos SignalR perdidos). SyncRecoverySuggested
+            // no muta datos offline aquí — el motor offline vive en MAUI.
+            _hub.Reconnected += async _ =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    await RefreshAlertsAsync();
+                    StateHasChanged();
+                });
+            };
+
             await _hub.StartAsync();
             _hubStarted = true;
         }

@@ -41,35 +41,19 @@ public sealed class SyncEngine : ISyncEngine
     public async Task<SyncRunResult> SyncAsync(CancellationToken ct = default)
     {
         var result = new SyncRunResult();
-        var session = await _sessions.GetValidSessionAsync(ct);
-        if (session is null)
+        var prepared = await TryPrepareSessionAsync(result, ct);
+        if (prepared is null)
         {
-            result.SessionMissingOrExpired = true;
-            result.Message = "No hay LocalSession válida. Inicie sesión online primero.";
-            return result;
-        }
-
-        if (string.IsNullOrWhiteSpace(session.ServerBaseUrl))
-        {
-            result.SessionMissingOrExpired = true;
-            result.Message = "LocalSession sin ServerBaseUrl.";
-            return result;
-        }
-
-        var cookie = await _cookies.GetCookieHeaderAsync(session.ServerBaseUrl!, ct);
-        if (string.IsNullOrWhiteSpace(cookie))
-        {
-            result.AuthRequired = true;
-            result.Message = "No hay cookie de autenticación del WebView. Vuelva a iniciar sesión online.";
             return result;
         }
 
         result.Started = true;
+        var (session, cookie) = prepared.Value;
         var deviceId = await _deviceIds.GetOrCreateAsync(ct);
 
         try
         {
-            await PushOutboxAsync(session, deviceId, cookie!, result, ct);
+            await PushOutboxAsync(session, deviceId, cookie, result, ct);
         }
         catch (SyncTransportException ex) when (ex.Kind == SyncTransportFailureKind.Unauthorized)
         {
@@ -90,9 +74,69 @@ public sealed class SyncEngine : ISyncEngine
             await TouchSyncStateErrorAsync(deviceId, ex.Message, "PushPersistFailed", ct);
         }
 
+        await ExecutePullPhaseAsync(session, deviceId, cookie, result, ct);
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<SyncRunResult> PullAsync(CancellationToken ct = default)
+    {
+        var result = new SyncRunResult();
+        var prepared = await TryPrepareSessionAsync(result, ct);
+        if (prepared is null)
+        {
+            return result;
+        }
+
+        result.Started = true;
+        var (session, cookie) = prepared.Value;
+        var deviceId = await _deviceIds.GetOrCreateAsync(ct);
+
+        // Solo Pull: no toca Outbox ni marca operaciones Pending como SyncError.
+        await ExecutePullPhaseAsync(session, deviceId, cookie, result, ct);
+        return result;
+    }
+
+    private async Task<(LocalSession Session, string Cookie)?> TryPrepareSessionAsync(
+        SyncRunResult result,
+        CancellationToken ct)
+    {
+        var session = await _sessions.GetValidSessionAsync(ct);
+        if (session is null)
+        {
+            result.SessionMissingOrExpired = true;
+            result.Message = "No hay LocalSession válida. Inicie sesión online primero.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(session.ServerBaseUrl))
+        {
+            result.SessionMissingOrExpired = true;
+            result.Message = "LocalSession sin ServerBaseUrl.";
+            return null;
+        }
+
+        var cookie = await _cookies.GetCookieHeaderAsync(session.ServerBaseUrl!, ct);
+        if (string.IsNullOrWhiteSpace(cookie))
+        {
+            result.AuthRequired = true;
+            result.Message = "No hay cookie de autenticación del WebView. Vuelva a iniciar sesión online.";
+            return null;
+        }
+
+        return (session, cookie);
+    }
+
+    private async Task ExecutePullPhaseAsync(
+        LocalSession session,
+        string deviceId,
+        string cookie,
+        SyncRunResult result,
+        CancellationToken ct)
+    {
         try
         {
-            await PullAllPagesAsync(session, deviceId, cookie!, result, ct);
+            await PullAllPagesAsync(session, deviceId, cookie, result, ct);
             result.PullCompleted = true;
         }
         catch (SyncTransportException ex) when (ex.Kind == SyncTransportFailureKind.Unauthorized)
@@ -100,7 +144,7 @@ public sealed class SyncEngine : ISyncEngine
             result.AuthRequired = true;
             result.Message = ex.Message;
             await TouchSyncStateErrorAsync(deviceId, ex.Message, "Unauthorized", ct);
-            return result;
+            return;
         }
         catch (SyncTransportException ex)
         {
@@ -128,8 +172,6 @@ public sealed class SyncEngine : ISyncEngine
             state.UpdatedAtUtc = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
         }
-
-        return result;
     }
 
     private async Task PushOutboxAsync(
@@ -466,6 +508,7 @@ public sealed class SyncEngine : ISyncEngine
         CancellationToken ct)
     {
         var state = await EnsureSyncStateAsync(deviceId, ct);
+        result.CursorBefore = state.LastPulledSequence;
         var safety = 0;
         const int maxPages = 10_000;
 
@@ -526,6 +569,7 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             result.CursorAfter = page.NextCursor;
+            result.PullPagesProcessed++;
             if (!page.HasMore || page.Changes.Count == 0)
             {
                 break;

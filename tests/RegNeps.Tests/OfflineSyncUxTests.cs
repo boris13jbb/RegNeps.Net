@@ -305,6 +305,9 @@ public sealed class OfflineSyncUxTests : IAsyncLifetime
         public CountingSyncEngine(Func<Task<SyncRunResult>> fn) => _fn = fn;
 
         public Task<SyncRunResult> SyncAsync(CancellationToken ct = default) => _fn();
+
+        public Task<SyncRunResult> PullAsync(CancellationToken ct = default) =>
+            Task.FromResult(new SyncRunResult { Started = true, PullCompleted = true });
     }
 
     private sealed class NoopSyncApi : ISyncApiClient

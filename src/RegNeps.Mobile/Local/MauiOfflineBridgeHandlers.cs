@@ -33,13 +33,28 @@ public sealed class MauiOfflineBridgeHandlers : IOfflineBridgeHandlers
             ttl: null,
             secureAuthMaterial: null,
             ct);
+
+        // FASE 2E: tras login UX, conectar hub (cookie WebView) y pedir Pull.
+        var hub = scope.ServiceProvider.GetService<MauiSyncHubRecoveryService>();
+        if (hub is not null)
+        {
+            _ = hub.EnsureConnectedAsync(ct);
+        }
     }
 
     public async Task<ClearLocalSessionResult> ClearSessionAsync(CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var sessions = scope.ServiceProvider.GetRequiredService<OfflineSessionService>();
-        return await sessions.ClearUxSnapshotAsync(ct);
+        var cleared = await sessions.ClearUxSnapshotAsync(ct);
+        // No mezclar recuperación de otro usuario: cortar hub hasta nuevo login.
+        var hub = scope.ServiceProvider.GetService<MauiSyncHubRecoveryService>();
+        if (hub is not null)
+        {
+            await hub.StopAsync();
+        }
+
+        return cleared;
     }
 
     public async Task<OfflineSessionViewDto> GetSessionAsync(CancellationToken ct = default)
