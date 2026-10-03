@@ -210,8 +210,13 @@ public sealed class SyncAppService
                 return await ProcessDeleteAsync(op, clientOpId, actor, deviceId, correlationId, sw, ct);
             }
 
+            if (string.Equals(opType, SyncConstants.OperationApplyCorrective, StringComparison.OrdinalIgnoreCase))
+            {
+                return await ProcessApplyCorrectiveAsync(op, clientOpId, actor, deviceId, correlationId, sw, ct);
+            }
+
             var unsupported = Invalid(clientOpId, "OPERATION_TYPE_UNSUPPORTED",
-                $"OperationType '{opType}' no soportado en protocolo v1 (CreateRecord/UpdateRecord/DeleteRecord).");
+                $"OperationType '{opType}' no soportado en protocolo v1 (CreateRecord/UpdateRecord/DeleteRecord/ApplyCorrective).");
             LogPush(actor, deviceId, clientOpId, SyncOperationResult.Invalid, sw.ElapsedMilliseconds, correlationId, opType);
             return unsupported;
         }
@@ -481,6 +486,75 @@ public sealed class SyncAppService
         return dto;
     }
 
+    private async Task<SyncOperationResultDto> ProcessApplyCorrectiveAsync(
+        SyncOperationDto op,
+        string clientOpId,
+        RecordActor actor,
+        string deviceId,
+        string? correlationId,
+        Stopwatch sw,
+        CancellationToken ct)
+    {
+        if (!CanApplyCorrective(actor))
+        {
+            var forbidden = new SyncOperationResultDto
+            {
+                ClientOperationId = clientOpId,
+                Result = nameof(SyncOperationResult.Forbidden),
+                ErrorCode = "CORRECTIVE_FORBIDDEN",
+                Message = "No tiene permiso para acciones correctivas."
+            };
+            LogPush(actor, deviceId, clientOpId, SyncOperationResult.Forbidden, sw.ElapsedMilliseconds, correlationId, null);
+            return forbidden;
+        }
+
+        if (op.Payload is null || op.Payload.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return Invalid(clientOpId, "PAYLOAD_REQUIRED", "Payload es obligatorio.");
+        }
+
+        SyncApplyCorrectivePayload? payload;
+        try
+        {
+            payload = op.Payload.Value.Deserialize<SyncApplyCorrectivePayload>(JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "Payload JSON inválido.");
+        }
+
+        if (payload is null || payload.EntityId == Guid.Empty)
+        {
+            return Invalid(clientOpId, "PAYLOAD_FORMAT", "EntityId es obligatorio.");
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Accion))
+        {
+            return Invalid(clientOpId, "VALIDATION", "La acción correctiva es obligatoria.");
+        }
+
+        var expectedStamp = FirstNonEmpty(op.ExpectedConcurrencyStamp, payload.ExpectedConcurrencyStamp);
+        if (string.IsNullOrWhiteSpace(expectedStamp))
+        {
+            return Invalid(clientOpId, "CONCURRENCY_STAMP", "ExpectedConcurrencyStamp es obligatorio.");
+        }
+
+        var outcome = await _persistence.ApplyCorrectiveAtomicallyAsync(
+            payload.EntityId,
+            payload.Accion,
+            payload.Responsable ?? string.Empty,
+            payload.MarcarRevisado,
+            expectedStamp,
+            clientOpId,
+            actor,
+            deviceId,
+            ct);
+
+        var dto = MapMutationDto(clientOpId, outcome);
+        LogPush(actor, deviceId, clientOpId, outcome.Result, sw.ElapsedMilliseconds, correlationId, outcome.ErrorCode);
+        return dto;
+    }
+
     private static SyncOperationResultDto MapMutationDto(
         string clientOpId,
         AtomicNepRecordMutationResult outcome)
@@ -573,6 +647,10 @@ public sealed class SyncAppService
 
     private bool CanDelete(RecordActor actor) =>
         _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.DeleteRecords);
+
+    private bool CanApplyCorrective(RecordActor actor) =>
+        _permissions.HasPermissionByRoleCode(
+            actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.ApplyCorrectiveAction);
 
     private bool CanViewRecords(RecordActor actor) =>
         _permissions.HasPermissionByRoleCode(actor.EffectiveRoleCode, actor.IsSuperAdmin, true, AppPermission.ViewRecords)

@@ -30,7 +30,7 @@ public enum ConflictResolutionOutcome
     InvalidState = 5
 }
 
-/// <summary>Campos de negocio comparables (captura). QualityLabel se deriva de Neps.</summary>
+/// <summary>Campos de negocio comparables (captura + correctiva). QualityLabel se deriva de Neps.</summary>
 public sealed class ConflictFieldSnapshot
 {
     public string Telar { get; init; } = string.Empty;
@@ -41,6 +41,8 @@ public sealed class ConflictFieldSnapshot
     public string Operario { get; init; } = string.Empty;
     public string LineaProduccion { get; init; } = string.Empty;
     public string Observacion { get; init; } = string.Empty;
+    public string AccionCorrectiva { get; init; } = string.Empty;
+    public string ResponsableRevision { get; init; } = string.Empty;
     public string QualityLabel { get; init; } = string.Empty;
     public bool IsDeleted { get; init; }
     public string? ConcurrencyStamp { get; init; }
@@ -87,6 +89,11 @@ public sealed class ConflictEditFields
     public string? Operario { get; set; }
     public string? LineaProduccion { get; set; }
     public string? Observacion { get; set; }
+
+    /// <summary>FASE 2D.10: solo para Edit&Retry de ApplyCorrective.</summary>
+    public string? AccionCorrectiva { get; set; }
+    public string? ResponsableRevision { get; set; }
+    public bool? MarcarRevisado { get; set; }
 }
 
 public sealed class ConflictResolutionResult

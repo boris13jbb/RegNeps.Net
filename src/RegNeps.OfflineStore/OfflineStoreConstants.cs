@@ -16,4 +16,7 @@ public static class OfflineStoreConstants
 
     /// <summary>Permiso UX para eliminar; el servidor revalida DeleteRecords.</summary>
     public const string DeleteRecordsPermission = "DeleteRecords";
+
+    /// <summary>Permiso UX correctiva; el servidor revalida ApplyCorrectiveAction.</summary>
+    public const string ApplyCorrectiveActionPermission = "ApplyCorrectiveAction";
 }

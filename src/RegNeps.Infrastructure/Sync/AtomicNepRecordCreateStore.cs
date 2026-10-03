@@ -457,8 +457,8 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
     }
 
     /// <summary>
-    /// Duplicate solo si el ChangeLog previo es el mismo upsert (mismo EntityId + RecordUpserted).
-    /// Reutilizar ClientOperationId tras un Delete u otra entidad → Invalid (no fingir éxito).
+    /// Online: stamp/clientOp null. Push: stamp + ClientOperationId; Duplicate solo si
+    /// ChangeLog previo es RecordUpserted del mismo EntityId.
     /// </summary>
     public async Task<AtomicNepRecordMutationResult> ApplyCorrectiveWithChangeLogAsync(
         Guid entityId,
@@ -466,27 +466,49 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
         string responsable,
         bool marcarRevisado,
         RecordActor actor,
+        string? expectedConcurrencyStamp = null,
+        string? clientOperationId = null,
+        string? deviceId = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentException.ThrowIfNullOrWhiteSpace(accion);
 
+        var opId = string.IsNullOrWhiteSpace(clientOperationId) ? null : clientOperationId.Trim();
+        var stamp = string.IsNullOrWhiteSpace(expectedConcurrencyStamp)
+            ? null
+            : expectedConcurrencyStamp.Trim();
+
         await using var db = await _factory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
+            if (opId is not null)
+            {
+                var processed = await FindProcessedByClientOpAsync(db, actor.UserId, opId, ct);
+                if (processed is not null)
+                {
+                    await tx.CommitAsync(ct);
+                    return await ResolveIdempotentUpsertAsync(db, processed, entityId, ct);
+                }
+            }
+
             var entity = await db.NepRecords
                 .FirstOrDefaultAsync(r => r.Id == entityId, ct);
 
             if (entity is null)
             {
+                var tombstone = await FindLatestTombstoneAsync(db, entityId, ct);
                 await tx.CommitAsync(ct);
                 return new AtomicNepRecordMutationResult
                 {
                     Result = SyncOperationResult.Invalid,
-                    ErrorCode = "ENTITY_NOT_FOUND",
-                    Message = "Registro no encontrado.",
-                    EntityId = entityId
+                    ErrorCode = tombstone is null ? "ENTITY_NOT_FOUND" : "ENTITY_DELETED",
+                    Message = tombstone is null
+                        ? "Registro no encontrado."
+                        : "El registro ya fue eliminado.",
+                    EntityId = entityId,
+                    ChangeSequence = tombstone?.Sequence
                 };
             }
 
@@ -502,6 +524,24 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 };
             }
 
+            // Push sync exige stamp; online (stamp null) conserva comportamiento previo.
+            if (stamp is not null
+                && !string.Equals(entity.ConcurrencyStamp, stamp, StringComparison.Ordinal))
+            {
+                var snapshot = SyncNepRecordPayloadMapper.ToPayloadJson(entity);
+                await tx.CommitAsync(ct);
+                return new AtomicNepRecordMutationResult
+                {
+                    Result = SyncOperationResult.Conflict,
+                    ErrorCode = "CONCURRENCY",
+                    Message = "El registro fue modificado por otro usuario.",
+                    EntityId = entity.Id,
+                    Record = entity,
+                    ServerConcurrencyStamp = entity.ConcurrencyStamp,
+                    ServerSnapshotJson = snapshot
+                };
+            }
+
             var now = DateTime.UtcNow;
             var entry = new CorrectiveActionEntry
             {
@@ -511,7 +551,6 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 Responsable = (responsable ?? string.Empty).Trim(),
                 Fecha = now
             };
-            // Insertar historial por DbSet (evita rarezas de concurrencia con Include + colección).
             db.CorrectiveActions.Add(entry);
             entity.AccionCorrectiva = entry.Accion;
             entity.ResponsableRevision = entry.Responsable;
@@ -524,9 +563,8 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             entity.UpdatedAt = now;
             entity.ConcurrencyStamp = Guid.NewGuid().ToString("N");
 
-            // Mutación online: sin ClientOperationId (no es Push sync).
             var change = SyncNepRecordPayloadMapper.CreateRecordUpsertedEntry(
-                entity, actor.UserId, deviceId: null, clientOperationId: null, entity.UpdatedAt);
+                entity, actor.UserId, deviceId, opId, entity.UpdatedAt);
 
             db.SyncChangeLogs.Add(change);
             await db.SaveChangesAsync(ct);
@@ -567,6 +605,26 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 Record = current,
                 ServerConcurrencyStamp = current.ConcurrencyStamp,
                 ServerSnapshotJson = SyncNepRecordPayloadMapper.ToPayloadJson(current)
+            };
+        }
+        catch (DbUpdateException)
+        {
+            await tx.RollbackAsync(ct);
+            if (opId is not null)
+            {
+                await using var read = await _factory.CreateDbContextAsync(ct);
+                var processed = await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
+                if (processed is not null)
+                {
+                    return await ResolveIdempotentUpsertAsync(read, processed, entityId, ct);
+                }
+            }
+
+            return new AtomicNepRecordMutationResult
+            {
+                Result = SyncOperationResult.TransientError,
+                ErrorCode = "PERSISTENCE",
+                Message = "Error temporal al procesar la operación."
             };
         }
         catch

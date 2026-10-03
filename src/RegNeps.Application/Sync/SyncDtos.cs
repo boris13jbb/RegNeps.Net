@@ -119,3 +119,18 @@ public sealed class SyncDeleteRecordPayload
     /// <summary>Opcional si ya viene en SyncOperationDto.ExpectedConcurrencyStamp.</summary>
     public string? ExpectedConcurrencyStamp { get; set; }
 }
+
+/// <summary>
+/// Payload ApplyCorrective (FASE 2D.10). Solo parámetros de corrección;
+/// no permite mutar Telar/Neps/campos de captura.
+/// </summary>
+public sealed class SyncApplyCorrectivePayload
+{
+    public Guid EntityId { get; set; }
+    public string Accion { get; set; } = string.Empty;
+    public string Responsable { get; set; } = string.Empty;
+    public bool MarcarRevisado { get; set; } = true;
+
+    /// <summary>Opcional si ya viene en SyncOperationDto.ExpectedConcurrencyStamp.</summary>
+    public string? ExpectedConcurrencyStamp { get; set; }
+}

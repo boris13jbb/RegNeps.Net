@@ -497,7 +497,7 @@ public sealed class NepRecordService
                 request.Responsable ?? string.Empty,
                 request.MarcarRevisado,
                 actor,
-                ct);
+                ct: ct);
             EnsureMutationSucceeded(outcome);
             return;
         }

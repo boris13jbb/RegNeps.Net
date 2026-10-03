@@ -102,7 +102,7 @@ public sealed class ConflictResolutionService
             LocalNepRecordId = op.LocalNepRecordId,
             EntityId = op.TargetServerRecordId ?? op.LocalNepRecord?.ServerRecordId,
             Kind = kind,
-            KindLabel = ConflictKindClassifier.KindLabel(kind),
+            KindLabel = ConflictKindClassifier.KindLabel(kind, op.OperationType),
             ReasonLabel = ConflictKindClassifier.ReasonLabel(op, kind),
             OperationType = op.OperationType,
             OriginalClientOperationId = op.ClientOperationId,
@@ -122,17 +122,24 @@ public sealed class ConflictResolutionService
             },
             KeepLocalButtonText = kind switch
             {
+                OfflineConflictKind.UpdateUpdate when op.OperationType == OfflineOperationType.ApplyCorrective
+                    => "Reaplicar mi correctiva",
                 OfflineConflictKind.UpdateUpdate => "Mantener mis cambios",
                 OfflineConflictKind.DeleteUpdate => "Confirmar eliminación",
                 _ => null
             },
             EditAndRetryHint = kind == OfflineConflictKind.UpdateUpdate
-                ? "Edite los valores y genere una nueva actualización sobre la versión del servidor."
+                && op.OperationType == OfflineOperationType.ApplyCorrective
+                ? "Edite acción/responsable y reintente la correctiva sobre la versión del servidor."
+                : kind == OfflineConflictKind.UpdateUpdate
+                    ? "Edite los valores y genere una nueva actualización sobre la versión del servidor."
                 : kind == OfflineConflictKind.UpdateDelete
                     ? "El registro ya no existe. Conservar estos datos requeriría una creación explícita futura (no disponible aquí). No hay Restore."
                     : null,
             BlockedKeepLocalReason = kind == OfflineConflictKind.UpdateDelete
-                ? "No se puede reaplicar un Update sobre un EntityId eliminado (sin Restore)."
+                ? op.OperationType == OfflineOperationType.ApplyCorrective
+                    ? "No se puede reaplicar una correctiva sobre un EntityId eliminado (sin Restore)."
+                    : "No se puede reaplicar un Update sobre un EntityId eliminado (sin Restore)."
                 : kind == OfflineConflictKind.DeleteDelete
                     ? "El servidor ya eliminó el registro; use Aceptar eliminación."
                     : null
@@ -243,6 +250,18 @@ public sealed class ConflictResolutionService
                 if (decision is ConflictResolutionDecision.KeepLocal
                         or ConflictResolutionDecision.EditAndRetry
                     && kind == OfflineConflictKind.UpdateUpdate
+                    && op.OperationType == OfflineOperationType.ApplyCorrective
+                    && !_sessions.HasPermission(session, OfflineStoreConstants.ApplyCorrectiveActionPermission))
+                {
+                    return Fail(ConflictResolutionOutcome.Unauthorized,
+                        "Tu sesión no incluye permiso para correctivas. El conflicto se conserva.",
+                        op, kind, decision);
+                }
+
+                if (decision is ConflictResolutionDecision.KeepLocal
+                        or ConflictResolutionDecision.EditAndRetry
+                    && kind == OfflineConflictKind.UpdateUpdate
+                    && op.OperationType != OfflineOperationType.ApplyCorrective
                     && !_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
                 {
                     return Fail(ConflictResolutionOutcome.Unauthorized,
@@ -419,7 +438,17 @@ public sealed class ConflictResolutionService
         }
 
         // Permisos locales UX (servidor revalida al Push).
-        if (kind is OfflineConflictKind.UpdateUpdate)
+        if (kind is OfflineConflictKind.UpdateUpdate
+            && op.OperationType == OfflineOperationType.ApplyCorrective)
+        {
+            if (!_sessions.HasPermission(session, OfflineStoreConstants.ApplyCorrectiveActionPermission))
+            {
+                return Fail(ConflictResolutionOutcome.Unauthorized,
+                    "Tu sesión no incluye permiso para correctivas. No se encola la resolución.",
+                    op, kind, decision);
+            }
+        }
+        else if (kind is OfflineConflictKind.UpdateUpdate)
         {
             if (!_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
             {
@@ -461,6 +490,69 @@ public sealed class ConflictResolutionService
             record.UpdatedAtUtc = now;
             record.SyncStatus = LocalSyncStatus.PendingSync;
             // ConcurrencyStamp local se mantiene; ExpectedConcurrencyStamp = stamp servidor.
+        }
+        else if (op.OperationType == OfflineOperationType.ApplyCorrective)
+        {
+            // Keep Local / Edit&Retry: reencolar ApplyCorrective (nunca UpdateRecord).
+            ApplyCorrectivePayload correctivePayload;
+            if (decision == ConflictResolutionDecision.EditAndRetry)
+            {
+                if (editFields is null || string.IsNullOrWhiteSpace(editFields.AccionCorrectiva))
+                {
+                    return Fail(ConflictResolutionOutcome.Rejected,
+                        "Faltan acción/responsable para Edit & Retry de correctiva.",
+                        op, kind, decision);
+                }
+
+                correctivePayload = new ApplyCorrectivePayload
+                {
+                    EntityId = serverId.Value,
+                    Accion = editFields.AccionCorrectiva.Trim(),
+                    Responsable = (editFields.ResponsableRevision ?? string.Empty).Trim(),
+                    MarcarRevisado = editFields.MarcarRevisado ?? true
+                };
+            }
+            else
+            {
+                correctivePayload = TryReadCorrectivePayload(op.PayloadJson, serverId.Value)
+                    ?? new ApplyCorrectivePayload
+                    {
+                        EntityId = serverId.Value,
+                        Accion = record.AccionCorrectiva,
+                        Responsable = record.ResponsableRevision,
+                        MarcarRevisado = record.RevisadoPorSupervisor
+                    };
+            }
+
+            if (string.IsNullOrWhiteSpace(correctivePayload.Accion))
+            {
+                return Fail(ConflictResolutionOutcome.Rejected,
+                    "La acción correctiva es obligatoria para reintentar.",
+                    op, kind, decision);
+            }
+
+            newOp = BuildPending(
+                OfflineOperationType.ApplyCorrective,
+                JsonSerializer.Serialize(correctivePayload, JsonOptions),
+                newClientOpId,
+                session.UserId,
+                deviceId,
+                record,
+                serverId.Value,
+                expectedStamp,
+                now);
+
+            record.AccionCorrectiva = correctivePayload.Accion;
+            record.ResponsableRevision = correctivePayload.Responsable;
+            if (correctivePayload.MarcarRevisado)
+            {
+                record.RevisadoPorSupervisor = true;
+                record.FechaRevisionUtc = now;
+            }
+
+            record.IsDeleted = false;
+            record.UpdatedAtUtc = now;
+            record.SyncStatus = LocalSyncStatus.PendingSync;
         }
         else
         {
@@ -542,14 +634,20 @@ public sealed class ConflictResolutionService
         _db.PendingOperations.Add(newOp);
 
         var level = AlertEvaluator.GetLevel(record.Neps);
+        var isCorrective = op.OperationType == OfflineOperationType.ApplyCorrective
+                           || newOp.OperationType == OfflineOperationType.ApplyCorrective;
         return new ConflictResolutionResult
         {
             Outcome = ConflictResolutionOutcome.Success,
             Message = decision == ConflictResolutionDecision.EditAndRetry
-                ? "Nueva actualización encolada (Edit & Retry). Pendiente de sincronización."
+                ? isCorrective
+                    ? "Nueva correctiva encolada (Edit & Retry). Pendiente de sincronización."
+                    : "Nueva actualización encolada (Edit & Retry). Pendiente de sincronización."
                 : kind == OfflineConflictKind.DeleteUpdate
                     ? "Nueva eliminación encolada sobre la versión actual del servidor."
-                    : "Nueva actualización encolada con tus cambios. Pendiente de sincronización.",
+                    : isCorrective
+                        ? "Nueva correctiva encolada sobre la versión del servidor. Pendiente de sincronización."
+                        : "Nueva actualización encolada con tus cambios. Pendiente de sincronización.",
             Kind = kind,
             Decision = decision,
             ClosedOperationId = op.Id,
@@ -608,7 +706,14 @@ public sealed class ConflictResolutionService
         switch (kind)
         {
             case OfflineConflictKind.UpdateUpdate:
-                if (_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
+                if (op.OperationType == OfflineOperationType.ApplyCorrective)
+                {
+                    if (_sessions.HasPermission(session, OfflineStoreConstants.ApplyCorrectiveActionPermission))
+                    {
+                        actions |= ConflictResolutionActions.KeepLocal | ConflictResolutionActions.EditAndRetry;
+                    }
+                }
+                else if (_sessions.HasPermission(session, OfflineStoreConstants.EditRecordsPermission))
                 {
                     actions |= ConflictResolutionActions.KeepLocal | ConflictResolutionActions.EditAndRetry;
                 }
@@ -703,6 +808,10 @@ public sealed class ConflictResolutionService
         }
 
         record.UpdatedAtUtc = snap.UpdatedAtUtc ?? now;
+        record.AccionCorrectiva = snap.AccionCorrectiva ?? string.Empty;
+        record.ResponsableRevision = snap.ResponsableRevision ?? string.Empty;
+        record.RevisadoPorSupervisor = snap.RevisadoPorSupervisor;
+        record.FechaRevisionUtc = snap.FechaRevisionUtc;
         // QualityLabel no se almacena; se deriva de Neps vía AlertEvaluator.
     }
 
@@ -727,6 +836,8 @@ public sealed class ConflictResolutionService
             Operario = record.Operario,
             LineaProduccion = record.LineaProduccion,
             Observacion = record.Observacion,
+            AccionCorrectiva = record.AccionCorrectiva,
+            ResponsableRevision = record.ResponsableRevision,
             QualityLabel = level.ToDisplayLabel(),
             IsDeleted = record.IsDeleted || op.OperationType == OfflineOperationType.DeleteRecord,
             ConcurrencyStamp = record.ConcurrencyStamp,
@@ -747,6 +858,8 @@ public sealed class ConflictResolutionService
             Operario = snap.Operario,
             LineaProduccion = snap.LineaProduccion,
             Observacion = snap.Observacion,
+            AccionCorrectiva = snap.AccionCorrectiva ?? string.Empty,
+            ResponsableRevision = snap.ResponsableRevision ?? string.Empty,
             QualityLabel = level.ToDisplayLabel(),
             IsDeleted = false,
             ConcurrencyStamp = snap.ConcurrencyStamp,
@@ -809,6 +922,8 @@ public sealed class ConflictResolutionService
         Add("Operario", local.Operario, server.Operario);
         Add("Línea", local.LineaProduccion, server.LineaProduccion);
         Add("Observación", local.Observacion, server.Observacion);
+        Add("Acción correctiva", local.AccionCorrectiva, server.AccionCorrectiva);
+        Add("Responsable", local.ResponsableRevision, server.ResponsableRevision);
         return diffs;
     }
 
@@ -819,6 +934,30 @@ public sealed class ConflictResolutionService
         string.IsNullOrWhiteSpace(loteTrama)
             ? NepsConstants.LoteTramaPrefix
             : loteTrama.Trim().ToUpperInvariant();
+
+    private static ApplyCorrectivePayload? TryReadCorrectivePayload(string? json, Guid serverId)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<ApplyCorrectivePayload>(json, JsonOptions);
+            if (parsed is null || string.IsNullOrWhiteSpace(parsed.Accion))
+            {
+                return null;
+            }
+
+            parsed.EntityId = serverId;
+            return parsed;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static void ValidateBusinessFields(ConflictEditFields fields)
     {

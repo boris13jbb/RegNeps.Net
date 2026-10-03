@@ -240,7 +240,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
                 new SyncOperationDto
                 {
                     ClientOperationId = Guid.NewGuid().ToString("N"),
-                    OperationType = SyncConstants.OperationApplyCorrective,
+                    OperationType = "UpsertCatalog",
                     Payload = JsonSerializer.SerializeToElement(new { telar = "1", neps = 1 })
                 }
             ]

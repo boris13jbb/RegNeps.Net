@@ -41,8 +41,8 @@ public interface IAtomicNepRecordCreateStore
         CancellationToken ct = default);
 
     /// <summary>
-    /// Mutación online ApplyCorrective + RecordUpserted en la misma transacción.
-    /// Sin ClientOperationId (no forma parte del Push sync v1).
+    /// ApplyCorrective + RecordUpserted atómicos.
+    /// Online: stamp/clientOp/device null. Push sync: stamp + ClientOperationId obligatorios.
     /// </summary>
     Task<AtomicNepRecordMutationResult> ApplyCorrectiveWithChangeLogAsync(
         Guid entityId,
@@ -50,6 +50,9 @@ public interface IAtomicNepRecordCreateStore
         string responsable,
         bool marcarRevisado,
         RecordActor actor,
+        string? expectedConcurrencyStamp = null,
+        string? clientOperationId = null,
+        string? deviceId = null,
         CancellationToken ct = default);
 }
 

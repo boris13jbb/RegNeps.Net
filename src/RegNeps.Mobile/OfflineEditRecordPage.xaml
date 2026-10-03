@@ -55,6 +55,31 @@
                     BackgroundColor="#7C2D12"
                     TextColor="White" />
 
+            <BoxView HeightRequest="1" Color="#D1D5DB" Margin="0,8" />
+
+            <Label Text="Acción correctiva offline"
+                   FontAttributes="Bold"
+                   FontSize="16" />
+            <Label x:Name="CorrectiveBannerLabel"
+                   FontSize="12"
+                   TextColor="#6B7280"
+                   Text="Requiere permiso ApplyCorrectiveAction. El servidor revalida." />
+            <Label Text="Acción *" />
+            <Entry x:Name="AccionEntry" Placeholder="Descripción de la correctiva" />
+            <Label Text="Responsable" />
+            <Entry x:Name="ResponsableEntry" />
+            <HorizontalStackLayout Spacing="8">
+                <CheckBox x:Name="MarcarRevisadoCheck" IsChecked="True" />
+                <Label Text="Marcar revisado por supervisor"
+                       VerticalOptions="Center" />
+            </HorizontalStackLayout>
+            <Button x:Name="CorrectiveButton"
+                    Text="Aplicar correctiva offline"
+                    Clicked="OnCorrectiveClicked"
+                    IsVisible="False"
+                    BackgroundColor="#1D4ED8"
+                    TextColor="White" />
+
             <Label x:Name="MessageLabel" FontSize="13" />
 
             <Button Text="Cancelar" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />

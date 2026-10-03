@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Services;
+using RegNeps.OfflineStore.Enums;
 using RegNeps.OfflineStore.Models;
 using RegNeps.OfflineStore.Services;
 using RegNeps.OfflineStore.Sync;
@@ -86,21 +87,39 @@ public partial class OfflineConflictResolvePage : ContentPage
         EditRetryButton.IsVisible = v.AllowedActions.HasFlag(ConflictResolutionActions.EditAndRetry);
 
         var showEdit = v.AllowedActions.HasFlag(ConflictResolutionActions.EditAndRetry);
+        var isCorrective = v.OperationType == OfflineOperationType.ApplyCorrective;
         EditSectionTitle.IsVisible = showEdit;
-        EditFields.IsVisible = showEdit;
+        EditSectionTitle.Text = isCorrective
+            ? "Editar correctiva y reintentar"
+            : "Editar y reintentar";
+        EditFields.IsVisible = showEdit && !isCorrective;
+        CorrectiveEditFields.IsVisible = showEdit && isCorrective;
         if (showEdit)
         {
             // Base = snapshot servidor (no local), según diseño Edit&Retry.
             var baseSnap = v.Server ?? v.Local;
-            TelarEntry.Text = baseSnap.Telar;
-            NepsEntry.Text = baseSnap.Neps.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            TelaEntry.Text = baseSnap.Tela;
-            LoteEntry.Text = baseSnap.LoteTrama;
-            TurnoEntry.Text = baseSnap.Turno;
-            OperarioEntry.Text = baseSnap.Operario;
-            LineaEntry.Text = baseSnap.LineaProduccion;
-            ObservacionEditor.Text = baseSnap.Observacion;
-            QualityLabel.Text = $"Calidad: {AlertEvaluator.GetLevel(baseSnap.Neps).ToDisplayLabel()}";
+            if (isCorrective)
+            {
+                AccionEntry.Text = string.IsNullOrWhiteSpace(v.Local.AccionCorrectiva)
+                    ? baseSnap.AccionCorrectiva
+                    : v.Local.AccionCorrectiva;
+                ResponsableEntry.Text = string.IsNullOrWhiteSpace(v.Local.ResponsableRevision)
+                    ? baseSnap.ResponsableRevision
+                    : v.Local.ResponsableRevision;
+                MarcarRevisadoCheck.IsChecked = true;
+            }
+            else
+            {
+                TelarEntry.Text = baseSnap.Telar;
+                NepsEntry.Text = baseSnap.Neps.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                TelaEntry.Text = baseSnap.Tela;
+                LoteEntry.Text = baseSnap.LoteTrama;
+                TurnoEntry.Text = baseSnap.Turno;
+                OperarioEntry.Text = baseSnap.Operario;
+                LineaEntry.Text = baseSnap.LineaProduccion;
+                ObservacionEditor.Text = baseSnap.Observacion;
+                QualityLabel.Text = $"Calidad: {AlertEvaluator.GetLevel(baseSnap.Neps).ToDisplayLabel()}";
+            }
         }
 
         BlockedHintLabel.IsVisible = !string.IsNullOrWhiteSpace(v.BlockedKeepLocalReason)
@@ -119,7 +138,14 @@ public partial class OfflineConflictResolvePage : ContentPage
             return $"Intención: eliminar · Telar {s.Telar} · Neps {s.Neps} · {s.QualityLabel}";
         }
 
-        return $"Telar {s.Telar} · Neps {s.Neps} · {s.QualityLabel} · Tela {s.Tela} · Lote {s.LoteTrama} · Turno {s.Turno}";
+        var baseText =
+            $"Telar {s.Telar} · Neps {s.Neps} · {s.QualityLabel} · Tela {s.Tela} · Lote {s.LoteTrama} · Turno {s.Turno}";
+        if (string.IsNullOrWhiteSpace(s.AccionCorrectiva))
+        {
+            return baseText;
+        }
+
+        return $"{baseText} · Acción: {s.AccionCorrectiva} · Resp: {s.ResponsableRevision}";
     }
 
     private void HideActions()
@@ -128,6 +154,7 @@ public partial class OfflineConflictResolvePage : ContentPage
         KeepLocalButton.IsVisible = false;
         EditRetryButton.IsVisible = false;
         EditFields.IsVisible = false;
+        CorrectiveEditFields.IsVisible = false;
         EditSectionTitle.IsVisible = false;
     }
 
@@ -165,26 +192,45 @@ public partial class OfflineConflictResolvePage : ContentPage
 
     private async void OnEditRetryClicked(object? sender, EventArgs e)
     {
-        if (!double.TryParse(NepsEntry.Text?.Replace(',', '.'),
-                System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var neps))
+        ConflictEditFields fields;
+        if (_view?.OperationType == OfflineOperationType.ApplyCorrective)
         {
-            MessageLabel.Text = "Neps inválido.";
-            return;
-        }
+            if (string.IsNullOrWhiteSpace(AccionEntry.Text))
+            {
+                MessageLabel.Text = "La acción correctiva es obligatoria.";
+                return;
+            }
 
-        var fields = new ConflictEditFields
+            fields = new ConflictEditFields
+            {
+                AccionCorrectiva = AccionEntry.Text ?? string.Empty,
+                ResponsableRevision = ResponsableEntry.Text ?? string.Empty,
+                MarcarRevisado = MarcarRevisadoCheck.IsChecked
+            };
+        }
+        else
         {
-            Telar = TelarEntry.Text ?? string.Empty,
-            Neps = neps,
-            Tela = TelaEntry.Text,
-            LoteTrama = LoteEntry.Text,
-            Turno = TurnoEntry.Text,
-            Operario = OperarioEntry.Text,
-            LineaProduccion = LineaEntry.Text,
-            Observacion = ObservacionEditor.Text
-        };
+            if (!double.TryParse(NepsEntry.Text?.Replace(',', '.'),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var neps))
+            {
+                MessageLabel.Text = "Neps inválido.";
+                return;
+            }
+
+            fields = new ConflictEditFields
+            {
+                Telar = TelarEntry.Text ?? string.Empty,
+                Neps = neps,
+                Tela = TelaEntry.Text,
+                LoteTrama = LoteEntry.Text,
+                Turno = TurnoEntry.Text,
+                Operario = OperarioEntry.Text,
+                LineaProduccion = LineaEntry.Text,
+                Observacion = ObservacionEditor.Text
+            };
+        }
 
         await RunResolutionAsync(async resolver => await resolver.EditAndRetryAsync(_operationId, fields));
     }

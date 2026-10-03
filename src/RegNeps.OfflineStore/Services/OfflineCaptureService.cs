@@ -347,6 +347,123 @@ public sealed class OfflineCaptureService
         };
     }
 
+    /// <summary>
+    /// ApplyCorrective offline (FASE 2D.10). Atómico: LocalNepRecord scalars + Outbox ApplyCorrective.
+    /// No es UpdateRecord: solo AccionCorrectiva / ResponsableRevision / RevisadoPorSupervisor.
+    /// </summary>
+    public async Task<OfflineCaptureResult> ApplyCorrectiveAsync(
+        OfflineApplyCorrectiveRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var session = await _sessions.GetValidSessionAsync(ct)
+            ?? throw new InvalidOperationException(
+                "No hay sesión offline válida. Inicie sesión online en el dispositivo primero.");
+
+        var eligibility = await EvaluateCorrectiveEligibilityAsync(session, request.LocalRecordId, ct);
+        if (!eligibility.CanApply)
+        {
+            throw eligibility.Reason switch
+            {
+                OfflineCorrectiveBlockReason.NoCorrectivePermission
+                    or OfflineCorrectiveBlockReason.NotOwner =>
+                    new UnauthorizedAccessException(eligibility.Message),
+                _ => new InvalidOperationException(eligibility.Message)
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Accion))
+        {
+            throw new ArgumentException("La acción correctiva es obligatoria.", nameof(request));
+        }
+
+        var record = await _db.LocalNepRecords
+            .FirstAsync(r => r.Id == request.LocalRecordId, ct);
+
+        var serverId = record.ServerRecordId!.Value;
+        var expectedStamp = record.ConcurrencyStamp!;
+        var deviceId = await _deviceIds.GetOrCreateAsync(ct);
+        var clientOperationId = Guid.NewGuid().ToString("N");
+        var now = DateTime.UtcNow;
+
+        var payload = new ApplyCorrectivePayload
+        {
+            EntityId = serverId,
+            Accion = request.Accion.Trim(),
+            Responsable = (request.Responsable ?? string.Empty).Trim(),
+            MarcarRevisado = request.MarcarRevisado
+        };
+
+        var operation = new PendingOperation
+        {
+            Id = Guid.NewGuid(),
+            ClientOperationId = clientOperationId,
+            OperationType = OfflineOperationType.ApplyCorrective,
+            PayloadJson = JsonSerializer.Serialize(payload, JsonOptions),
+            ProtocolVersion = OfflineStoreConstants.ProtocolVersion,
+            CreatedAtUtc = now,
+            AttemptCount = 0,
+            Status = PendingOperationStatus.Pending,
+            UserId = session.UserId,
+            DeviceId = deviceId,
+            CaptureSessionId = record.CaptureSessionId,
+            LocalNepRecordId = record.Id,
+            TargetServerRecordId = serverId,
+            ExpectedConcurrencyStamp = expectedStamp
+        };
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            record.AccionCorrectiva = payload.Accion;
+            record.ResponsableRevision = payload.Responsable;
+            if (payload.MarcarRevisado)
+            {
+                record.RevisadoPorSupervisor = true;
+                record.FechaRevisionUtc = now;
+            }
+
+            record.UpdatedAtUtc = now;
+            record.SyncStatus = LocalSyncStatus.PendingSync;
+
+            _db.PendingOperations.Add(operation);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+
+        var level = AlertEvaluator.GetLevel(record.Neps);
+        return new OfflineCaptureResult
+        {
+            Record = record,
+            Operation = operation,
+            QualityLevel = level,
+            QualityLabel = level.ToDisplayLabel()
+        };
+    }
+
+    public async Task<OfflineCorrectiveEligibility> GetCorrectiveEligibilityAsync(
+        Guid localRecordId,
+        CancellationToken ct = default)
+    {
+        var session = await _sessions.GetValidSessionAsync(ct);
+        if (session is null)
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.NoSession,
+                "No hay sesión offline válida.",
+                localRecordId);
+        }
+
+        return await EvaluateCorrectiveEligibilityAsync(session, localRecordId, ct);
+    }
+
     public async Task<OfflineEditEligibility> GetEditEligibilityAsync(
         Guid localRecordId,
         CancellationToken ct = default)
@@ -536,11 +653,12 @@ public sealed class OfflineCaptureService
                 record.ServerRecordId);
         }
 
-        if (blocking.Any(o => o.OperationType == OfflineOperationType.UpdateRecord))
+        if (blocking.Any(o => o.OperationType == OfflineOperationType.UpdateRecord
+                              || o.OperationType == OfflineOperationType.ApplyCorrective))
         {
             return BlockedEdit(
                 OfflineEditBlockReason.UpdateAlreadyPending,
-                "Ya existe una modificación pendiente o en revisión para este registro.",
+                "Ya existe una modificación o correctiva pendiente o en revisión para este registro.",
                 localRecordId,
                 record.ServerRecordId);
         }
@@ -641,11 +759,12 @@ public sealed class OfflineCaptureService
         }
 
         if (blocking.Any(o => o.OperationType is OfflineOperationType.UpdateRecord
-                                or OfflineOperationType.DeleteRecord))
+                                or OfflineOperationType.DeleteRecord
+                                or OfflineOperationType.ApplyCorrective))
         {
             return BlockedDelete(
                 OfflineDeleteBlockReason.MutationAlreadyPending,
-                "Ya existe una modificación o eliminación pendiente/en revisión para este registro.",
+                "Ya existe una modificación, correctiva o eliminación pendiente/en revisión para este registro.",
                 localRecordId,
                 record.ServerRecordId);
         }
@@ -697,6 +816,118 @@ public sealed class OfflineCaptureService
         new()
         {
             CanDelete = false,
+            Reason = reason,
+            Message = message,
+            LocalRecordId = localId,
+            ServerRecordId = serverId
+        };
+
+    private async Task<OfflineCorrectiveEligibility> EvaluateCorrectiveEligibilityAsync(
+        LocalSession session,
+        Guid localRecordId,
+        CancellationToken ct)
+    {
+        if (!_sessions.HasPermission(session, OfflineStoreConstants.ApplyCorrectiveActionPermission))
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.NoCorrectivePermission,
+                "Tu sesión no incluye permiso para acciones correctivas. El servidor lo revalidará al sincronizar.",
+                localRecordId);
+        }
+
+        var record = await _db.LocalNepRecords.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == localRecordId, ct);
+        if (record is null)
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.NotFound, "Registro no encontrado.", localRecordId);
+        }
+
+        if (record.IsDeleted)
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.Deleted,
+                "El registro está eliminado localmente.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (record.SyncStatus == LocalSyncStatus.Conflict)
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.ConflictRequiresReview,
+                "El registro requiere revisión de conflicto. No se puede aplicar correctiva todavía.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (!SeesAll(session)
+            && !string.Equals(record.UserId, session.UserId, StringComparison.OrdinalIgnoreCase))
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.NotOwner,
+                "No puedes aplicar correctivas a registros de otro usuario en este dispositivo.",
+                localRecordId);
+        }
+
+        if (record.ServerRecordId is null || record.ServerRecordId == Guid.Empty)
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.CreateStillPending,
+                "Pendiente de sincronización. Espera a que el Create se sincronice antes de corregir.",
+                localRecordId);
+        }
+
+        if (string.IsNullOrWhiteSpace(record.ConcurrencyStamp))
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.MissingConcurrencyStamp,
+                "Falta la marca de concurrencia del servidor. Sincroniza primero.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        var blocking = await ListBlockingOpsAsync(localRecordId, record.ServerRecordId, ct);
+
+        if (blocking.Any(o => o.OperationType == OfflineOperationType.CreateRecord
+                              && o.Status is PendingOperationStatus.Pending or PendingOperationStatus.Sending))
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.CreateStillPending,
+                "Pendiente de sincronización. Espera a que el Create se sincronice antes de corregir.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        if (blocking.Any(o => o.OperationType is OfflineOperationType.UpdateRecord
+                                or OfflineOperationType.DeleteRecord
+                                or OfflineOperationType.ApplyCorrective))
+        {
+            return BlockedCorrective(
+                OfflineCorrectiveBlockReason.MutationAlreadyPending,
+                "Ya existe una mutación pendiente o en revisión para este registro.",
+                localRecordId,
+                record.ServerRecordId);
+        }
+
+        return new OfflineCorrectiveEligibility
+        {
+            CanApply = true,
+            Reason = OfflineCorrectiveBlockReason.None,
+            Message = string.Empty,
+            LocalRecordId = localRecordId,
+            ServerRecordId = record.ServerRecordId
+        };
+    }
+
+    private static OfflineCorrectiveEligibility BlockedCorrective(
+        OfflineCorrectiveBlockReason reason,
+        string message,
+        Guid? localId = null,
+        Guid? serverId = null) =>
+        new()
+        {
+            CanApply = false,
             Reason = reason,
             Message = message,
             LocalRecordId = localId,

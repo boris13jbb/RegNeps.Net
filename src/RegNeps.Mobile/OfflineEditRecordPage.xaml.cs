@@ -35,6 +35,7 @@ public partial class OfflineEditRecordPage : ContentPage
             var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
             var editElig = await capture.GetEditEligibilityAsync(_localRecordId);
             var deleteElig = await capture.GetDeleteEligibilityAsync(_localRecordId);
+            var correctiveElig = await capture.GetCorrectiveEligibilityAsync(_localRecordId);
 
             var record = await capture.GetLocalRecordAsync(_localRecordId);
             if (record is null)
@@ -42,6 +43,7 @@ public partial class OfflineEditRecordPage : ContentPage
                 MessageLabel.Text = "Registro no encontrado.";
                 SaveButton.IsEnabled = false;
                 DeleteButton.IsVisible = false;
+                CorrectiveButton.IsVisible = false;
                 return;
             }
 
@@ -54,6 +56,9 @@ public partial class OfflineEditRecordPage : ContentPage
             OperarioEntry.Text = record.Operario;
             LineaEntry.Text = record.LineaProduccion;
             ObservacionEditor.Text = record.Observacion;
+            AccionEntry.Text = record.AccionCorrectiva;
+            ResponsableEntry.Text = record.ResponsableRevision;
+            MarcarRevisadoCheck.IsChecked = true;
             QualityLabel.Text = $"Calidad: {record.GetQualityLabel()}";
             IdsLabel.Text =
                 $"ID local: {record.Id:N} · Servidor: {record.ServerRecordId:N}";
@@ -61,10 +66,19 @@ public partial class OfflineEditRecordPage : ContentPage
             SaveButton.IsEnabled = editElig.CanEdit;
             DeleteButton.IsVisible = deleteElig.CanDelete;
             DeleteButton.IsEnabled = deleteElig.CanDelete;
+            CorrectiveButton.IsVisible = true;
+            CorrectiveButton.IsEnabled = correctiveElig.CanApply;
+            CorrectiveBannerLabel.Text = correctiveElig.CanApply
+                ? "Correctiva offline (ApplyCorrective). No modifica Telar/Neps. El servidor revalida."
+                : correctiveElig.Message;
 
-            if (!editElig.CanEdit && !deleteElig.CanDelete)
+            if (!editElig.CanEdit && !deleteElig.CanDelete && !correctiveElig.CanApply)
             {
-                BannerLabel.Text = editElig.Message.Length > 0 ? editElig.Message : deleteElig.Message;
+                BannerLabel.Text = editElig.Message.Length > 0
+                    ? editElig.Message
+                    : deleteElig.Message.Length > 0
+                        ? deleteElig.Message
+                        : correctiveElig.Message;
                 BannerLabel.BackgroundColor = Color.FromArgb("#FEF3C7");
                 BannerLabel.TextColor = Color.FromArgb("#92400E");
                 MessageLabel.Text = BannerLabel.Text;
@@ -79,7 +93,7 @@ public partial class OfflineEditRecordPage : ContentPage
             }
             else
             {
-                BannerLabel.Text = "Edición/eliminación offline — los cambios quedan pendientes de sincronización.";
+                BannerLabel.Text = "Edición/eliminación/correctiva offline — pendientes de sincronización.";
                 BannerLabel.BackgroundColor = Color.FromArgb("#DBEAFE");
                 BannerLabel.TextColor = Color.FromArgb("#1E3A5F");
             }
@@ -89,6 +103,7 @@ public partial class OfflineEditRecordPage : ContentPage
             MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
             SaveButton.IsEnabled = false;
             DeleteButton.IsVisible = false;
+            CorrectiveButton.IsVisible = false;
         }
     }
 
@@ -195,6 +210,58 @@ public partial class OfflineEditRecordPage : ContentPage
             });
 
             MessageLabel.Text = "Eliminación guardada offline. Pendiente de sincronización.";
+            MessageLabel.TextColor = Color.FromArgb("#14532D");
+
+            await Task.Delay(400);
+            if (Navigation.NavigationStack.Count > 1)
+            {
+                await Navigation.PopAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageLabel.Text = OfflineSyncUxService.SanitizeError(ex.Message) ?? ex.Message;
+            MessageLabel.TextColor = Color.FromArgb("#7C2D12");
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async void OnCorrectiveClicked(object? sender, EventArgs e)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(AccionEntry.Text))
+        {
+            MessageLabel.Text = "La acción correctiva es obligatoria.";
+            MessageLabel.TextColor = Color.FromArgb("#7C2D12");
+            return;
+        }
+
+        _busy = true;
+        CorrectiveButton.IsEnabled = false;
+        SaveButton.IsEnabled = false;
+        DeleteButton.IsEnabled = false;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var capture = scope.ServiceProvider.GetRequiredService<OfflineCaptureService>();
+            var result = await capture.ApplyCorrectiveAsync(new OfflineApplyCorrectiveRequest
+            {
+                LocalRecordId = _localRecordId,
+                Accion = AccionEntry.Text ?? string.Empty,
+                Responsable = ResponsableEntry.Text ?? string.Empty,
+                MarcarRevisado = MarcarRevisadoCheck.IsChecked
+            });
+
+            MessageLabel.Text =
+                $"Correctiva guardada offline ({result.QualityLabel}). Pendiente de sincronización.";
             MessageLabel.TextColor = Color.FromArgb("#14532D");
 
             await Task.Delay(400);

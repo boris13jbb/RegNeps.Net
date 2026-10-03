@@ -294,7 +294,9 @@ public sealed class SyncEngine : ISyncEngine
             return doc.RootElement.Clone();
         }
 
-        if (op.OperationType is OfflineOperationType.UpdateRecord or OfflineOperationType.DeleteRecord)
+        if (op.OperationType is OfflineOperationType.UpdateRecord
+            or OfflineOperationType.DeleteRecord
+            or OfflineOperationType.ApplyCorrective)
         {
             // Asegurar EntityId = ServerRecordId ?? LocalId / TargetServerRecordId.
             var entityId = op.TargetServerRecordId

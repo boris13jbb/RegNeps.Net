@@ -152,6 +152,27 @@ public sealed class SyncPersistence : ISyncPersistence
         _atomicCreate.DeleteWithTombstoneAsync(
             entityId, expectedConcurrencyStamp, clientOperationId, actor, deviceId, ct);
 
+    public Task<AtomicNepRecordMutationResult> ApplyCorrectiveAtomicallyAsync(
+        Guid entityId,
+        string accion,
+        string responsable,
+        bool marcarRevisado,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default) =>
+        _atomicCreate.ApplyCorrectiveWithChangeLogAsync(
+            entityId,
+            accion,
+            responsable,
+            marcarRevisado,
+            actor,
+            expectedConcurrencyStamp,
+            clientOperationId,
+            deviceId,
+            ct);
+
     public async Task EnsureCatalogBaselineAsync(CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);

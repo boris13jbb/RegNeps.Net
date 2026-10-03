@@ -22,7 +22,7 @@ public static class ConflictKindClassifier
         var deletedServer = IsServerDeleted(op);
         return op.OperationType switch
         {
-            OfflineOperationType.UpdateRecord => deletedServer
+            OfflineOperationType.UpdateRecord or OfflineOperationType.ApplyCorrective => deletedServer
                 ? OfflineConflictKind.UpdateDelete
                 : OfflineConflictKind.UpdateUpdate,
             OfflineOperationType.DeleteRecord => deletedServer
@@ -55,7 +55,8 @@ public static class ConflictKindClassifier
         // ENTITY_DELETED vía SyncEngine deja IsDeleted local sin snapshot útil.
         if (op.LocalNepRecord is { IsDeleted: true }
             && string.IsNullOrWhiteSpace(op.ConflictServerSnapshotJson)
-            && op.OperationType == OfflineOperationType.UpdateRecord)
+            && op.OperationType is OfflineOperationType.UpdateRecord
+                or OfflineOperationType.ApplyCorrective)
         {
             return true;
         }
@@ -134,18 +135,27 @@ public static class ConflictKindClassifier
         }
     }
 
-    public static string KindLabel(OfflineConflictKind kind) => kind switch
-    {
-        OfflineConflictKind.UpdateUpdate => "Actualización vs actualización",
-        OfflineConflictKind.UpdateDelete => "Actualización vs eliminación",
-        OfflineConflictKind.DeleteUpdate => "Eliminación vs actualización",
-        OfflineConflictKind.DeleteDelete => "Eliminación ya aplicada en servidor",
-        _ => "Conflicto"
-    };
+    public static string KindLabel(OfflineConflictKind kind, OfflineOperationType? opType = null) =>
+        (kind, opType) switch
+        {
+            (OfflineConflictKind.UpdateUpdate, OfflineOperationType.ApplyCorrective) =>
+                "Correctiva vs actualización en servidor",
+            (OfflineConflictKind.UpdateDelete, OfflineOperationType.ApplyCorrective) =>
+                "Correctiva vs eliminación",
+            (OfflineConflictKind.UpdateUpdate, _) => "Actualización vs actualización",
+            (OfflineConflictKind.UpdateDelete, _) => "Actualización vs eliminación",
+            (OfflineConflictKind.DeleteUpdate, _) => "Eliminación vs actualización",
+            (OfflineConflictKind.DeleteDelete, _) => "Eliminación ya aplicada en servidor",
+            _ => "Conflicto"
+        };
 
     public static string ReasonLabel(PendingOperation op, OfflineConflictKind kind) => kind switch
     {
+        OfflineConflictKind.UpdateUpdate when op.OperationType == OfflineOperationType.ApplyCorrective =>
+            "El registro cambió en el servidor; la correctiva local quedó desactualizada.",
         OfflineConflictKind.UpdateUpdate => "Registro modificado por otro usuario o sesión.",
+        OfflineConflictKind.UpdateDelete when op.OperationType == OfflineOperationType.ApplyCorrective =>
+            "Registro eliminado en el servidor; la correctiva no puede aplicarse.",
         OfflineConflictKind.UpdateDelete => "Registro eliminado en el servidor.",
         OfflineConflictKind.DeleteUpdate => "Registro modificado en el servidor; la eliminación local quedó desactualizada.",
         OfflineConflictKind.DeleteDelete => "El registro ya estaba eliminado en el servidor.",

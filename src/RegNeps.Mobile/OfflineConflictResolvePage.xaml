@@ -44,6 +44,14 @@
                 <Entry x:Name="LineaEntry" Placeholder="Línea" />
                 <Editor x:Name="ObservacionEditor" Placeholder="Observación" AutoSize="TextChanges" HeightRequest="72" />
             </VerticalStackLayout>
+            <VerticalStackLayout x:Name="CorrectiveEditFields" Spacing="8" IsVisible="False">
+                <Entry x:Name="AccionEntry" Placeholder="Acción correctiva *" />
+                <Entry x:Name="ResponsableEntry" Placeholder="Responsable" />
+                <HorizontalStackLayout Spacing="8">
+                    <CheckBox x:Name="MarcarRevisadoCheck" IsChecked="True" />
+                    <Label Text="Marcar revisado por supervisor" VerticalOptions="Center" />
+                </HorizontalStackLayout>
+            </VerticalStackLayout>
 
             <Label x:Name="BlockedHintLabel" FontSize="13" TextColor="#7C2D12" IsVisible="False" />
 

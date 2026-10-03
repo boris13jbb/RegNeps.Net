@@ -32,6 +32,18 @@ public interface ISyncPersistence
         string deviceId,
         CancellationToken ct = default);
 
+    /// <summary>FASE 2D.10: ApplyCorrective vía Push (idempotente, ConcurrencyStamp).</summary>
+    Task<AtomicNepRecordMutationResult> ApplyCorrectiveAtomicallyAsync(
+        Guid entityId,
+        string accion,
+        string responsable,
+        bool marcarRevisado,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
     Task<SyncPullPersistResult> PullAuthorizedChangesAsync(
         RecordActor actor,
         long cursor,
