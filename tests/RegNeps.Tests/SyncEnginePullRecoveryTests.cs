@@ -240,34 +240,65 @@ public sealed class SyncEnginePullRecoveryTests : IAsyncLifetime
     [Fact]
     public async Task H_Concurrent_Pull_Does_Not_Regress_Cursor()
     {
-        await using var db = CreateContext();
-        var (engine, _, _, api) = await CreateAsync(db, cursor: 0);
-        var gate = new SemaphoreSlim(0, 1);
+        // EF no admite dos PullAsync concurrentes sobre el mismo DbContext (flaky bajo carga de suite).
+        // Dos contextos + Cache=Shared sobre el mismo archivo ejercitan el aborto de página stale.
+        var sharedOptions = new DbContextOptionsBuilder<LocalSyncDbContext>()
+            .UseSqlite($"Data Source={_dbPath};Cache=Shared")
+            .Options;
+
+        await using var dbSetup = new LocalSyncDbContext(sharedOptions);
+        await dbSetup.Database.ExecuteSqlRawAsync("DELETE FROM PendingOperations");
+        await dbSetup.Database.ExecuteSqlRawAsync("DELETE FROM LocalNepRecords");
+        await dbSetup.Database.ExecuteSqlRawAsync("DELETE FROM LocalSessions");
+        await dbSetup.Database.ExecuteSqlRawAsync("DELETE FROM SyncStates");
+        dbSetup.ChangeTracker.Clear();
+
+        var deviceStore = new FileDeviceIdStore(Path.Combine(_dir, "device-h-shared"));
+        var sessionsSetup = new OfflineSessionService(dbSetup, new MemorySecureAuthMaterialStore());
+        await sessionsSetup.UpsertUxSnapshotAsync(
+            "user-a", "alice", "Operario",
+            [OfflineStoreConstants.CaptureRecordsPermission],
+            "http://localhost:5080");
+        dbSetup.SyncStates.Add(new SyncState { Id = 1, DeviceId = "dev", LastPulledSequence = 0 });
+        await dbSetup.SaveChangesAsync();
+        await dbSetup.DisposeAsync();
+
+        await using var db1 = new LocalSyncDbContext(sharedOptions);
+        await using var db2 = new LocalSyncDbContext(sharedOptions);
+        var sessions1 = new OfflineSessionService(db1, new MemorySecureAuthMaterialStore());
+        var sessions2 = new OfflineSessionService(db2, new MemorySecureAuthMaterialStore());
+        var api = new FakeApi();
+        var cookie = new StaticCookie("RegNeps.Auth=test");
+        var engine1 = new SyncEngine(db1, sessions1, deviceStore, api, cookie);
+        var engine2 = new SyncEngine(db2, sessions2, deviceStore, api, cookie);
+
+        var firstEntered = new ManualResetEventSlim(false);
+        var releaseFirst = new ManualResetEventSlim(false);
         var started = 0;
         api.PullHandler = req =>
         {
-            Interlocked.Increment(ref started);
-            if (started == 1)
+            if (Interlocked.Increment(ref started) == 1)
             {
-                gate.Wait(2000);
+                firstEntered.Set();
+                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(15)), "timeout esperando 2º Pull");
             }
 
             return Page(req.Cursor, false, Upsert(req.Cursor + 1, Guid.NewGuid(), "X", 1, "user-a"));
         };
 
-        var t1 = engine.PullAsync();
-        await WaitUntilAsync(() => Volatile.Read(ref started) >= 1, 2000);
-        // Segunda corrida: si ve cursor ya avanzado en TX, aborta página sin regresar.
-        var t2 = engine.PullAsync();
-        await Task.Delay(50);
-        gate.Release();
+        var t1 = engine1.PullAsync();
+        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(15)), "timeout 1er Pull API");
+        // Segunda corrida avanza el cursor; la primera, al entrar en TX, debe abortar sin regresar.
+        var r2 = await engine2.PullAsync();
+        releaseFirst.Set();
         var r1 = await t1;
-        var r2 = await t2;
-        var cursor = (await db.SyncStates.SingleAsync()).LastPulledSequence;
-        Assert.True(cursor >= 1);
+
+        await using var dbCheck = new LocalSyncDbContext(sharedOptions);
+        var cursor = (await dbCheck.SyncStates.SingleAsync()).LastPulledSequence;
+        Assert.True(cursor >= 1, $"cursor final={cursor}, r1={r1.CursorAfter}, r2={r2.CursorAfter}");
+        Assert.True(r2.CursorAfter >= 1);
         Assert.True(r1.CursorAfter >= 0);
-        Assert.True(r2.CursorAfter >= 0);
-        Assert.True(cursor >= Math.Max(r1.CursorAfter, r2.CursorAfter) || cursor >= 1);
+        Assert.True(cursor >= Math.Max(r1.CursorAfter, r2.CursorAfter));
     }
 
     [Fact]
@@ -320,20 +351,6 @@ public sealed class SyncEnginePullRecoveryTests : IAsyncLifetime
         var run = await engine.PullAsync();
         Assert.Equal(20, run.CursorBefore);
         Assert.Equal(20, run.CursorAfter);
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> predicate, int timeoutMs)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (predicate())
-            {
-                return;
-            }
-
-            await Task.Delay(15);
-        }
     }
 
     private static ClientSyncPullResponse Page(
