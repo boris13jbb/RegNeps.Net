@@ -1,5 +1,6 @@
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Alerts;
+using RegNeps.Application.Common;
 using RegNeps.Application.Permissions;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
@@ -428,9 +429,7 @@ public sealed class NepRecordService
             throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
         }
 
-        var seesAll = scope == RecordQueryScope.PersonalOnly
-            ? false
-            : actor.SeesAllRecords;
+        var seesAll = ResolveSeesAll(actor, scope);
 
         if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
         {
@@ -441,6 +440,56 @@ public sealed class NepRecordService
         return _records.QueryAsync(filters, actor.UserId, seesAll, take, ct);
     }
 
+    /// <summary>FASE 2F — página server-side (filtros + autorización + ORDER + OFFSET/FETCH).</summary>
+    public Task<PagedResult<NepRecord>> QueryPagedAsync(
+        RecordFilters filters,
+        RecordActor actor,
+        int pageNumber,
+        int pageSize = RecordPaging.DefaultPageSize,
+        RecordQueryScope scope = RecordQueryScope.Default,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!ActorHas(actor, AppPermission.ViewRecords) && !ActorHas(actor, AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
+        }
+
+        var seesAll = ResolveSeesAll(actor, scope);
+
+        if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "Se requiere un usuario autenticado con identificador válido.");
+        }
+
+        return _records.QueryPagedAsync(filters, actor.UserId, seesAll, pageNumber, pageSize, ct);
+    }
+
+    /// <summary>COUNT filtrado (mismos filtros/autorización que Query/QueryPaged).</summary>
+    public Task<int> CountFilteredAsync(
+        RecordFilters filters,
+        RecordActor actor,
+        RecordQueryScope scope = RecordQueryScope.Default,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!ActorHas(actor, AppPermission.ViewRecords) && !ActorHas(actor, AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
+        }
+
+        var seesAll = ResolveSeesAll(actor, scope);
+
+        if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "Se requiere un usuario autenticado con identificador válido.");
+        }
+
+        return _records.CountFilteredAsync(filters, actor.UserId, seesAll, ct);
+    }
+
     /// <summary>Compatibilidad interna/tests: consulta con parámetros explícitos (fail-closed en repo).</summary>
     public Task<IReadOnlyList<NepRecord>> QueryAsync(
         RecordFilters filters,
@@ -449,6 +498,9 @@ public sealed class NepRecordService
         int take = 500,
         CancellationToken ct = default) =>
         _records.QueryAsync(filters, viewerUserId, viewerSeesAll, take, ct);
+
+    private static bool ResolveSeesAll(RecordActor actor, RecordQueryScope scope) =>
+        scope != RecordQueryScope.PersonalOnly && actor.SeesAllRecords;
 
     public async Task<(AlertLevel Level, IReadOnlyList<string> Recommendations, bool Reincidencia)> EvaluateAsync(
         double neps,

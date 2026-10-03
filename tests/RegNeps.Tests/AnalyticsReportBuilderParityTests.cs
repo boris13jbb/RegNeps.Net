@@ -71,6 +71,28 @@ public sealed class AnalyticsReportBuilderParityTests
             CancellationToken ct = default) =>
             Task.FromResult(_records);
 
+        public Task<RegNeps.Application.Common.PagedResult<NepRecord>> QueryPagedAsync(
+            RecordFilters filters,
+            string? viewerUserId,
+            bool viewerSeesAll,
+            int pageNumber,
+            int pageSize,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RegNeps.Application.Common.PagedResult<NepRecord>
+            {
+                Items = _records.Take(pageSize).ToList(),
+                PageNumber = Math.Max(1, pageNumber),
+                PageSize = pageSize,
+                TotalCount = _records.Count
+            });
+
+        public Task<int> CountFilteredAsync(
+            RecordFilters filters,
+            string? viewerUserId,
+            bool viewerSeesAll,
+            CancellationToken ct = default) =>
+            Task.FromResult(_records.Count);
+
         public Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default) =>
             Task.FromResult(_records);
         public Task<IReadOnlyList<NepRecord>> GetByIdsAsync(

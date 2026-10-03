@@ -349,20 +349,23 @@ else
             var range = ReportDateRange.FromLocalCalendarDates(fromUtc.ToLocalTime().Date, toUtc.ToLocalTime().Date);
             var filters = new RecordFilters();
             range.ApplyTo(filters);
-            var records = await RecordService.QueryAsync(
-                filters, _session.ToActor(), RecordQueryScope.Default, 50_000);
-            _pendientes = records.Count(r => r.RequiereSeguimiento(_config));
-            _ultimos = records
-                .OrderByDescending(r => r.CreatedAt)
-                .Take(15)
-                .ToList();
+            var actor = _session.ToActor();
+
+            // FASE 2F: no materializar hasta 50k solo para «últimos» + pendientes.
+            var ultimosPage = await RecordService.QueryPagedAsync(
+                filters, actor, pageNumber: 1, pageSize: 15, RecordQueryScope.Default);
+            _ultimos = ultimosPage.Items;
+
+            var pendFilters = new RecordFilters { SoloPendientes = true };
+            range.ApplyTo(pendFilters);
+            _pendientes = await RecordService.CountFilteredAsync(
+                pendFilters, actor, RecordQueryScope.Default);
 
             var prevRange = ReportDateRange.FromLocalCalendarDates(prevFrom.ToLocalTime().Date, prevTo.ToLocalTime().Date.AddDays(-1));
-            var prevFilters = new RecordFilters();
-            prevRange.ApplyTo(prevFilters);
-            var prevRecords = await RecordService.QueryAsync(
-                prevFilters, _session.ToActor(), RecordQueryScope.Default, 50_000);
-            _prevPendientes = prevRecords.Count(r => r.RequiereSeguimiento(_config));
+            var prevPendFilters = new RecordFilters { SoloPendientes = true };
+            prevRange.ApplyTo(prevPendFilters);
+            _prevPendientes = await RecordService.CountFilteredAsync(
+                prevPendFilters, actor, RecordQueryScope.Default);
 
             _currentPage = 1;
             _chartsDirty = true;

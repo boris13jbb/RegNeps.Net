@@ -302,7 +302,7 @@ else
         </div>
         <div class="d-flex flex-wrap align-items-center gap-2 mt-2 mb-3" style="max-width: 1100px;">
             <span class="small text-muted">
-                Página @_page de @TotalPages · @_records.Count registros · @PageSize por página
+                Página @_page de @TotalPages · @(_pagingFromSnapshot ? _records.Count : _filteredTotal) registros · @PageSize por página
             </span>
             <button class="btn btn-sm btn-outline-secondary" disabled="@(_page <= 1)" @onclick="() => GoToPageAsync(_page - 1)">Anterior</button>
             <button class="btn btn-sm btn-outline-secondary" disabled="@(_page >= TotalPages)" @onclick="() => GoToPageAsync(_page + 1)">Siguiente</button>
@@ -436,9 +436,12 @@ else
 }
 
 @code {
-    private const int PageSize = 50;
+    private const int PageSize = RecordPaging.DefaultPageSize;
 
+    /// <summary>Página actual (vivo) o snapshot completo (informe). No materializa todo el dataset vivo.</summary>
     private IReadOnlyList<NepRecord> _records = [];
+    private int _filteredTotal;
+    private bool _pagingFromSnapshot;
     private AlertConfig _config = new();
     private bool _loading = true;
     private bool _allowed;
@@ -503,10 +506,13 @@ else
 
     private bool _recordsReady;
 
-    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_records.Count / (double)PageSize));
+    private int TotalPages =>
+        Math.Max(1, (int)Math.Ceiling((_pagingFromSnapshot ? _records.Count : _filteredTotal) / (double)PageSize));
 
     private IReadOnlyList<NepRecord> PageRecords =>
-        _records.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+        _pagingFromSnapshot
+            ? _records.Skip((_page - 1) * PageSize).Take(PageSize).ToList()
+            : _records;
 
     private bool AllPageSelected
     {
@@ -749,11 +755,22 @@ else
         return LoadAsync();
     }
 
-    private Task GoToPageAsync(int page)
+    private async Task GoToPageAsync(int page)
     {
         RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
-        _page = Math.Clamp(page, 1, TotalPages);
-        return Task.CompletedTask;
+        var target = Math.Clamp(page, 1, TotalPages);
+        if (target == _page && !_pagingFromSnapshot)
+        {
+            return;
+        }
+
+        _page = target;
+        if (_pagingFromSnapshot)
+        {
+            return;
+        }
+
+        await LoadAsync();
     }
 
     private void ClearSelection() => _selectedIds.Clear();
@@ -924,7 +941,10 @@ else
                         var snapshot = await ExportService.LoadAccessibleSnapshotAsync(reportId, access);
                         if (snapshot.Count > 0)
                         {
+                            // Snapshot: ya materializado por diseño del informe; paginación solo en memoria.
+                            _pagingFromSnapshot = true;
                             _records = snapshot;
+                            _filteredTotal = snapshot.Count;
                             _totalInDb = await RecordService.CountAllAsync();
                             if (_page > TotalPages)
                             {
@@ -982,16 +1002,17 @@ else
                 ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
             }
 
-            // Con rango de fechas: traer todo el periodo (hasta 50k). Sin rango: últimos 1000.
-            var take = filters.FromUtc is not null || filters.ToExclusiveUtc is not null || filters.ToUtc is not null
-                ? 50_000
-                : 1_000;
-            _records = await RecordService.QueryAsync(
-                filters, _session.ToActor(), RecordQueryScope.Default, take);
-            if (_page > TotalPages)
-            {
-                _page = TotalPages;
-            }
+            // FASE 2F: solo la página solicitada (filtros + auth + ORDER en SQL).
+            _pagingFromSnapshot = false;
+            var paged = await RecordService.QueryPagedAsync(
+                filters,
+                _session.ToActor(),
+                pageNumber: _page,
+                pageSize: PageSize,
+                RecordQueryScope.Default);
+            _records = paged.Items;
+            _filteredTotal = paged.TotalCount;
+            _page = paged.PageNumber;
 
             RecordSelectionRules.PruneToVisible(_selectedIds, PageRecords.Select(r => r.Id));
         }
@@ -999,6 +1020,8 @@ else
         {
             _error = $"No se pudieron cargar los registros: {ex.Message}";
             _records = [];
+            _filteredTotal = 0;
+            _pagingFromSnapshot = false;
         }
         finally
         {

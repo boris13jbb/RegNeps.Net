@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
+using RegNeps.Application.Common;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
@@ -21,6 +22,7 @@ public sealed class NepRecordRepository : INepRecordRepository
         return await db.NepRecords
             .AsNoTracking()
             .OrderByDescending(r => r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .Take(take)
             .ToListAsync(ct);
     }
@@ -44,10 +46,108 @@ public sealed class NepRecordRepository : INepRecordRepository
         var hasDateRange = filters.FromUtc is not null
             || filters.ToExclusiveUtc is not null
             || filters.ToUtc is not null;
+        // Take(500)/50k: límite de seguridad para export/captura/analytics — no es PageSize UI.
         var maxTake = hasDateRange ? 50_000 : 10_000;
         take = Math.Clamp(take, 1, maxTake);
 
         await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = await BuildFilteredQueryAsync(db, filters, viewerUserId, viewerSeesAll, ct);
+
+        // Contrato legacy: Telar como desempate (compat). Paginación UI usa Id (QueryPagedAsync).
+        return await query
+            .OrderByDescending(r => r.CreatedAt)
+            .ThenBy(r => r.Telar)
+            .Take(take)
+            .ToListAsync(ct);
+    }
+
+    public async Task<PagedResult<NepRecord>> QueryPagedAsync(
+        RecordFilters filters,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        int pageNumber,
+        int pageSize,
+        CancellationToken ct = default)
+    {
+        filters ??= new RecordFilters();
+        ReportDateRange.EnsureConsolidatedRange(filters);
+
+        if (!viewerSeesAll && string.IsNullOrWhiteSpace(viewerUserId))
+        {
+            return new PagedResult<NepRecord>
+            {
+                Items = Array.Empty<NepRecord>(),
+                PageNumber = 1,
+                PageSize = RecordPaging.NormalizePageSize(pageSize),
+                TotalCount = 0
+            };
+        }
+
+        pageSize = RecordPaging.NormalizePageSize(pageSize);
+        pageNumber = RecordPaging.NormalizePageNumber(pageNumber);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = await BuildFilteredQueryAsync(db, filters, viewerUserId, viewerSeesAll, ct);
+
+        var totalCount = await query.CountAsync(ct);
+        var totalPages = totalCount <= 0
+            ? 1
+            : (int)Math.Ceiling(totalCount / (double)pageSize);
+        if (pageNumber > totalPages)
+        {
+            pageNumber = totalPages;
+        }
+
+        IReadOnlyList<NepRecord> items;
+        if (totalCount == 0)
+        {
+            items = Array.Empty<NepRecord>();
+        }
+        else
+        {
+            items = await query
+                .OrderByDescending(r => r.CreatedAt)
+                .ThenByDescending(r => r.Id)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync(ct);
+        }
+
+        return new PagedResult<NepRecord>
+        {
+            Items = items,
+            PageNumber = pageNumber,
+            PageSize = pageSize,
+            TotalCount = totalCount
+        };
+    }
+
+    public async Task<int> CountFilteredAsync(
+        RecordFilters filters,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        CancellationToken ct = default)
+    {
+        filters ??= new RecordFilters();
+        ReportDateRange.EnsureConsolidatedRange(filters);
+
+        if (!viewerSeesAll && string.IsNullOrWhiteSpace(viewerUserId))
+        {
+            return 0;
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = await BuildFilteredQueryAsync(db, filters, viewerUserId, viewerSeesAll, ct);
+        return await query.CountAsync(ct);
+    }
+
+    private static async Task<IQueryable<NepRecord>> BuildFilteredQueryAsync(
+        RegNepsDbContext db,
+        RecordFilters filters,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        CancellationToken ct)
+    {
         var query = db.NepRecords.AsNoTracking().AsQueryable();
 
         if (!viewerSeesAll)
@@ -204,11 +304,7 @@ public sealed class NepRecordRepository : INepRecordRepository
             }
         }
 
-        return await query
-            .OrderByDescending(r => r.CreatedAt)
-            .ThenBy(r => r.Telar)
-            .Take(take)
-            .ToListAsync(ct);
+        return query;
     }
 
     public async Task<NepRecord?> GetByIdAsync(Guid id, CancellationToken ct = default)

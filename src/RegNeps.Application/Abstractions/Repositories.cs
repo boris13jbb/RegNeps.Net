@@ -1,4 +1,5 @@
 using RegNeps.Application.Analytics;
+using RegNeps.Application.Common;
 using RegNeps.Application.Reports;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
@@ -10,6 +11,25 @@ public interface INepRecordRepository
 {
     Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default);
     Task<IReadOnlyList<NepRecord>> QueryAsync(RecordFilters filters, string? viewerUserId, bool viewerSeesAll, int take = 500, CancellationToken ct = default);
+
+    /// <summary>
+    /// FASE 2F: COUNT + página con los mismos filtros/autorización que <see cref="QueryAsync"/>.
+    /// Orden: CreatedAt DESC, Id DESC (determinista).
+    /// </summary>
+    Task<PagedResult<NepRecord>> QueryPagedAsync(
+        RecordFilters filters,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        int pageNumber,
+        int pageSize,
+        CancellationToken ct = default);
+
+    /// <summary>COUNT con filtros/autorización (sin materializar filas).</summary>
+    Task<int> CountFilteredAsync(
+        RecordFilters filters,
+        string? viewerUserId,
+        bool viewerSeesAll,
+        CancellationToken ct = default);
     /// <summary>
     /// Carga por conjunto de Ids con el mismo aislamiento que <see cref="QueryAsync"/>.
     /// No expande por sesión, fecha ni otros filtros.
