@@ -38,6 +38,9 @@ public interface ISyncPersistence
         int pageSize,
         CancellationToken ct = default);
 
+    /// <summary>FASE 2D.9: asegura ChangeLogs baseline de Fabric/Lote (idempotente).</summary>
+    Task EnsureCatalogBaselineAsync(CancellationToken ct = default);
+
     Task<long> CountChangeLogsAsync(CancellationToken ct = default);
 
     Task<int> CountRecordsByClientOperationAsync(

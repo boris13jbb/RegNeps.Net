@@ -39,6 +39,7 @@ public static class OfflineStoreBootstrap
         services.AddScoped<LocalStoreInitializer>();
         services.AddScoped<OfflineSessionService>();
         services.AddScoped<OfflineCaptureService>();
+        services.AddScoped<OfflineCatalogService>();
         services.AddScoped<ConflictResolutionService>();
         services.AddScoped<IOfflineOutboxQuery, OfflineOutboxQuery>();
         services.AddScoped<ISyncEngine, SyncEngine>();

@@ -117,6 +117,17 @@ public sealed class ClientNepRecordDeletedSnapshot
     public string? LastConcurrencyStamp { get; set; }
 }
 
+/// <summary>Payload CatalogUpserted / CatalogDeleted (FASE 2D.9).</summary>
+public sealed class ClientCatalogItemSnapshot
+{
+    public Guid Id { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
+    public DateTime UpdatedAtUtc { get; set; }
+}
+
 public static class ClientSyncResultNames
 {
     public const string Accepted = "Accepted";

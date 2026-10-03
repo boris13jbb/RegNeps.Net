@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RegNeps.Infrastructure.Migration;
+using RegNeps.Infrastructure.Sync;
 
 namespace RegNeps.Infrastructure.Persistence;
 
@@ -18,6 +19,8 @@ public static class DatabaseInitializer
         await db.Database.EnsureCreatedAsync();
         await ApplySchemaPatchesAsync(db);
         await DbSeeder.SeedAsync(db);
+        // FASE 2D.9: baseline ChangeLog de Fabric/Lote para Pull (idempotente).
+        await CatalogSyncChangeWriter.EnsureBaselineAsync(db);
 
         var migration = scope.ServiceProvider.GetRequiredService<HistoricalDataMigrationService>();
         var repaired = await migration.RepairRecordOwnershipAsync();

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
 using RegNeps.Domain.Entities;
 using RegNeps.Infrastructure.Persistence;
+using RegNeps.Infrastructure.Sync;
 
 namespace RegNeps.Infrastructure.Repositories;
 
@@ -64,6 +65,7 @@ public sealed class LoteTramaRepository : ILoteTramaRepository
             if (!existing.IsActive)
             {
                 existing.IsActive = true;
+                CatalogSyncChangeWriter.AppendLoteUpsert(db, existing);
                 await db.SaveChangesAsync(ct);
             }
 
@@ -74,6 +76,7 @@ public sealed class LoteTramaRepository : ILoteTramaRepository
         db.LoteTramaItems.Add(item);
         try
         {
+            CatalogSyncChangeWriter.AppendLoteUpsert(db, item);
             await db.SaveChangesAsync(ct);
             return item;
         }
@@ -109,6 +112,7 @@ public sealed class LoteTramaRepository : ILoteTramaRepository
 
         entity.Code = item.Code;
         entity.IsActive = item.IsActive;
+        CatalogSyncChangeWriter.AppendLoteUpsert(db, entity);
         await db.SaveChangesAsync(ct);
     }
 
@@ -121,6 +125,7 @@ public sealed class LoteTramaRepository : ILoteTramaRepository
             return;
         }
 
+        CatalogSyncChangeWriter.AppendLoteDeleted(db, entity);
         db.LoteTramaItems.Remove(entity);
         await db.SaveChangesAsync(ct);
     }

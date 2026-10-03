@@ -75,7 +75,23 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         _operarioAId = a.Id;
         _operarioBId = b.Id;
         _supervisorId = supervisor.Id;
+
+        // FASE 2D.9: catálogos en ChangeLog antes de Push/Pull de pruebas NepRecord.
+        await new SyncPersistence(_factory, new AtomicNepRecordCreateStore(_factory))
+            .EnsureCatalogBaselineAsync();
     }
+
+    private async Task<long> CatalogCursorAsync()
+    {
+        await using var db = _factory.CreateDbContext();
+        return await db.SyncChangeLogs.AsNoTracking()
+            .Where(c => c.EntityType == SyncConstants.EntityCatalogItem)
+            .Select(c => (long?)c.Sequence)
+            .MaxAsync() ?? 0L;
+    }
+
+    private static List<SyncChangeDto> NepChanges(SyncPullResponse pull) =>
+        pull.Changes.Where(c => c.EntityType == SyncConstants.EntityNepRecord).ToList();
 
     public Task DisposeAsync()
     {
@@ -157,7 +173,8 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(1, await db.NepRecords.CountAsync());
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
         var record = await db.NepRecords.SingleAsync();
         Assert.Equal(_operarioAId.ToString(), record.CreatedByUserId);
         Assert.Equal(opId, record.ClientOperationId);
@@ -186,7 +203,8 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
             Assert.Equal(nameof(SyncOperationResult.Forbidden), response.Results[0].Result);
             await using var verify = _factory.CreateDbContext();
             Assert.Equal(0, await verify.NepRecords.CountAsync());
-            Assert.Equal(0, await verify.SyncChangeLogs.CountAsync());
+            Assert.Equal(0, await verify.SyncChangeLogs.CountAsync(c =>
+                c.EntityType == SyncConstants.EntityNepRecord));
         }
         finally
         {
@@ -261,7 +279,8 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(1, await db.NepRecords.CountAsync());
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
     }
 
     [Fact]
@@ -279,23 +298,34 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
                 """);
         }
 
-        var sync = CreateSync();
-        var response = await sync.PushAsync(
-            PushCreate("device-a", Guid.NewGuid().ToString("N")),
-            ActorA(),
-            "corr-rollback");
+        try
+        {
+            var sync = CreateSync();
+            var response = await sync.PushAsync(
+                PushCreate("device-a", Guid.NewGuid().ToString("N")),
+                ActorA(),
+                "corr-rollback");
 
-        Assert.Equal(nameof(SyncOperationResult.TransientError), response.Results[0].Result);
+            Assert.Equal(nameof(SyncOperationResult.TransientError), response.Results[0].Result);
 
-        await using var verify = _factory.CreateDbContext();
-        Assert.Equal(0, await verify.NepRecords.CountAsync());
-        Assert.Equal(0, await verify.SyncChangeLogs.CountAsync());
+            await using var verify = _factory.CreateDbContext();
+            Assert.Equal(0, await verify.NepRecords.CountAsync());
+            Assert.Equal(0, await verify.SyncChangeLogs.CountAsync(c =>
+                c.EntityType == SyncConstants.EntityNepRecord));
+        }
+        finally
+        {
+            await using var cleanup = _factory.CreateDbContext();
+            await cleanup.Database.ExecuteSqlRawAsync(
+                "DROP TRIGGER IF EXISTS trg_reject_sync_changelog;");
+        }
     }
 
     [Fact]
     public async Task Push_Then_Pull_Returns_Change_Once_And_Retry_Does_Not_Duplicate_Pull()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         var opId = Guid.NewGuid().ToString("N");
         var push1 = await sync.PushAsync(PushCreate("device-a", opId, 30), ActorA(), "p1");
         Assert.Equal(nameof(SyncOperationResult.Accepted), push1.Results[0].Result);
@@ -304,13 +334,14 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "device-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50
         }, ActorA(), "pull1");
 
-        Assert.Single(pull1.Changes);
-        Assert.Equal(push1.Results[0].EntityId, pull1.Changes[0].EntityId);
-        Assert.Equal(SyncConstants.ChangeRecordUpserted, pull1.Changes[0].ChangeType);
+        var nep1 = NepChanges(pull1);
+        Assert.Single(nep1);
+        Assert.Equal(push1.Results[0].EntityId, nep1[0].EntityId);
+        Assert.Equal(SyncConstants.ChangeRecordUpserted, nep1[0].ChangeType);
         Assert.True(pull1.ServerTimeUtc.Kind == DateTimeKind.Utc || pull1.ServerTimeUtc.Kind == DateTimeKind.Unspecified);
 
         await sync.PushAsync(PushCreate("device-a", opId, 30), ActorA(), "p2");
@@ -319,21 +350,23 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "device-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50
         }, ActorA(), "pull2");
 
-        Assert.Single(pull2.Changes);
+        Assert.Single(NepChanges(pull2));
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(1, await db.NepRecords.CountAsync());
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
     }
 
     [Fact]
     public async Task Pull_Skips_Unauthorized_Sequences_But_Advances_NextCursor()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         var opA1 = Guid.NewGuid().ToString("N");
         var opB = Guid.NewGuid().ToString("N");
         var opA2 = Guid.NewGuid().ToString("N");
@@ -356,13 +389,14 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 10
         }, ActorA(), "cursor-skip");
 
-        Assert.Equal(2, pull.Changes.Count);
-        Assert.Equal(new[] { seq1, seq3 }, pull.Changes.Select(c => c.Sequence).ToArray());
-        Assert.DoesNotContain(pull.Changes, c => c.Sequence == seq2);
+        var nep = NepChanges(pull);
+        Assert.Equal(2, nep.Count);
+        Assert.Equal(new[] { seq1, seq3 }, nep.Select(c => c.Sequence).ToArray());
+        Assert.DoesNotContain(nep, c => c.Sequence == seq2);
         Assert.Equal(seq3, pull.NextCursor);
         Assert.False(pull.HasMore);
     }
@@ -371,6 +405,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
     public async Task Pull_PageSize_And_Ordering_And_Empty()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         for (var i = 0; i < 3; i++)
         {
             await sync.PushAsync(
@@ -383,11 +418,12 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 2
         }, ActorA(), "page1");
 
         Assert.Equal(2, page1.Changes.Count);
+        Assert.All(page1.Changes, c => Assert.Equal(SyncConstants.EntityNepRecord, c.EntityType));
         Assert.True(page1.HasMore);
         Assert.True(page1.Changes[0].Sequence < page1.Changes[1].Sequence);
 
@@ -400,6 +436,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         }, ActorA(), "page2");
 
         Assert.Single(page2.Changes);
+        Assert.Equal(SyncConstants.EntityNepRecord, page2.Changes[0].EntityType);
         Assert.False(page2.HasMore);
 
         var empty = await sync.PullAsync(new SyncPullRequest
@@ -419,17 +456,18 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
     public async Task Pull_PageSize_Is_Clamped_To_Max()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         await sync.PushAsync(PushCreate("dev-a", Guid.NewGuid().ToString("N")), ActorA(), "x");
 
         var pull = await sync.PullAsync(new SyncPullRequest
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50_000
         }, ActorA(), "max");
 
-        Assert.Single(pull.Changes);
+        Assert.Single(NepChanges(pull));
         Assert.Equal(SyncConstants.MaxPageSize, SyncProtocol.NormalizePageSize(50_000));
     }
 
@@ -437,6 +475,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
     public async Task Pull_Supervisor_Sees_All_Authorized_Changes()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         await sync.PushAsync(PushCreate("dev-a", Guid.NewGuid().ToString("N")), ActorA(), "a");
         await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N")), ActorB(), "b");
 
@@ -444,11 +483,11 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-sup",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50
         }, ActorSupervisor(), "sup");
 
-        Assert.Equal(2, pull.Changes.Count);
+        Assert.Equal(2, NepChanges(pull).Count);
     }
 
     [Fact]
@@ -535,7 +574,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
             PageSize = 10
         }, ActorA(), "after-clamp");
 
-        Assert.Contains(pull2.Changes, c => c.EntityId == later.Results[0].EntityId);
+        Assert.Contains(NepChanges(pull2), c => c.EntityId == later.Results[0].EntityId);
     }
 
     [Fact]
@@ -559,6 +598,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
     public async Task Pull_Only_Unauthorized_Advances_Cursor_Without_Leaking_Payloads()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "TB1"), ActorB(), "b1");
         await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 11, "TB2"), ActorB(), "b2");
 
@@ -566,20 +606,22 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 10
         }, ActorA(), "only-foreign");
 
-        Assert.Empty(pull.Changes);
-        Assert.True(pull.NextCursor > 0);
+        // Catálogos son visibles a todo autenticado; NepRecord ajenos no se filtran al payload.
+        Assert.Empty(NepChanges(pull));
+        Assert.DoesNotContain(pull.Changes, c => c.EntityType == SyncConstants.EntityNepRecord);
+        Assert.True(pull.NextCursor > afterCatalogs);
         Assert.False(pull.HasMore);
-        // No hay EntityId/Owner en Changes; el avance de cursor revela actividad global (limitación conocida).
     }
 
     [Fact]
     public async Task Pull_Dense_Unauthorized_Then_Visible_Keeps_Examined_Cursor()
     {
         var sync = CreateSync();
+        var afterCatalogs = await CatalogCursorAsync();
         // 100,101,102,103,104 conceptual: B,B,A,B,A
         await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "U1"), ActorB(), "u1");
         await sync.PushAsync(PushCreate("dev-b", Guid.NewGuid().ToString("N"), 10, "U2"), ActorB(), "u2");
@@ -594,7 +636,7 @@ public sealed class SyncPushPullIntegrationTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 1
         }, ActorA(), "dense-1");
 

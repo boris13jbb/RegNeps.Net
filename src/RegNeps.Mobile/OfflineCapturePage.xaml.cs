@@ -187,6 +187,8 @@ public partial class OfflineCapturePage : ContentPage
                 r.Neps.ToString("0.##"),
                 FormatSyncLabel(r.SyncStatus, r.GetQualityLabel())))
                 .ToList();
+
+            await LoadCatalogPickersAsync(scope);
         }
         catch (Exception ex)
         {
@@ -369,6 +371,50 @@ public partial class OfflineCapturePage : ContentPage
         }
 
         return root;
+    }
+
+    private async Task LoadCatalogPickersAsync(IServiceScope scope)
+    {
+        var catalogs = scope.ServiceProvider.GetRequiredService<OfflineCatalogService>();
+        var availability = await catalogs.GetAvailabilityAsync();
+        CatalogStatusLabel.Text = availability.StatusMessage;
+        CatalogStatusLabel.TextColor = availability.HasAnyCatalog
+            ? Color.FromArgb("#14532D")
+            : Color.FromArgb("#92400E");
+
+        var fabrics = await catalogs.ListActiveAsync(LocalCatalogKind.Fabric);
+        var lotes = await catalogs.ListActiveAsync(LocalCatalogKind.Lote);
+
+        var telaItems = new List<string> { "— texto libre —" };
+        telaItems.AddRange(fabrics.Select(f =>
+            string.IsNullOrWhiteSpace(f.Name) ? f.Code : f.Name));
+        TelaPicker.ItemsSource = telaItems;
+        TelaPicker.SelectedIndex = 0;
+
+        var loteItems = new List<string> { "— texto libre —" };
+        loteItems.AddRange(lotes.Select(l => l.Code));
+        LotePicker.ItemsSource = loteItems;
+        LotePicker.SelectedIndex = 0;
+    }
+
+    private void OnTelaPickerChanged(object? sender, EventArgs e)
+    {
+        if (TelaPicker.SelectedIndex <= 0)
+        {
+            return;
+        }
+
+        TelaEntry.Text = TelaPicker.SelectedItem?.ToString() ?? string.Empty;
+    }
+
+    private void OnLotePickerChanged(object? sender, EventArgs e)
+    {
+        if (LotePicker.SelectedIndex <= 0)
+        {
+            return;
+        }
+
+        LoteEntry.Text = LotePicker.SelectedItem?.ToString() ?? string.Empty;
     }
 
     private void OnNepsChanged(object? sender, TextChangedEventArgs e)

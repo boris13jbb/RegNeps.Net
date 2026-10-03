@@ -62,6 +62,9 @@ public sealed class OfflineBackendIntegrationGateTests : IAsyncLifetime
         await db.Database.EnsureCreatedAsync();
         await DatabaseInitializer.ApplySchemaPatchesAsync(db);
         await DbSeeder.SeedAsync(db);
+        // FASE 2D.9: baseline de catálogos antes de los gates (evita +N logs en el primer Pull).
+        await new SyncPersistence(_serverFactory, new AtomicNepRecordCreateStore(_serverFactory))
+            .EnsureCatalogBaselineAsync();
 
         var hash = BCrypt.Net.BCrypt.HashPassword("Gate241TestOnly!");
         var a = new AppUser
@@ -224,7 +227,8 @@ public sealed class OfflineBackendIntegrationGateTests : IAsyncLifetime
 
         await using var server = _serverFactory.CreateDbContext();
         Assert.Equal(1, await server.NepRecords.CountAsync());
-        Assert.Equal(1, await server.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await server.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
         var nep = await server.NepRecords.SingleAsync();
         Assert.Equal(local.ServerRecordId, nep.Id);
         Assert.Equal(_userAId.ToString(), nep.CreatedByUserId);
@@ -232,7 +236,8 @@ public sealed class OfflineBackendIntegrationGateTests : IAsyncLifetime
         Assert.Equal(18, nep.Neps);
         Assert.Equal("OK", nep.GetAlertLevel().ToDisplayLabel());
 
-        var log = await server.SyncChangeLogs.SingleAsync();
+        var log = await server.SyncChangeLogs.SingleAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord);
         Assert.Equal(SyncConstants.ChangeRecordUpserted, log.ChangeType);
         Assert.Equal(nep.Id, log.EntityId);
         Assert.True((await offline.SyncStates.SingleAsync()).LastPulledSequence >= log.Sequence);
@@ -391,7 +396,8 @@ public sealed class OfflineBackendIntegrationGateTests : IAsyncLifetime
             ]
         }, admin, "c2");
 
-        var logsBefore = await _serverFactory.CreateDbContext().SyncChangeLogs.CountAsync();
+        var logsBefore = await _serverFactory.CreateDbContext().SyncChangeLogs
+            .CountAsync(c => c.EntityType == SyncConstants.EntityNepRecord);
 
         await using var offline = CreateOfflineDb();
         var (engine, _, _, opsUx, _) = await BootOfflineAsync(offline, _adminId, "gate_admin", AppUserRole.Admin, "Admin");
@@ -439,7 +445,9 @@ public sealed class OfflineBackendIntegrationGateTests : IAsyncLifetime
         Assert.Equal("LOCAL", local.Telar); // no LWW
         Assert.Equal(18, local.Neps);
 
-        Assert.Equal(logsBefore, await _serverFactory.CreateDbContext().SyncChangeLogs.CountAsync());
+        // Conflict no debe emitir ChangeLog NepRecord; catálogos baseline ya existían.
+        Assert.Equal(logsBefore, await _serverFactory.CreateDbContext().SyncChangeLogs
+            .CountAsync(c => c.EntityType == SyncConstants.EntityNepRecord));
 
         var detail = await opsUx.GetDetailAsync(_adminId.ToString(), op.Id);
         Assert.NotNull(detail);

@@ -60,11 +60,22 @@
                    FontAttributes="Bold"
                    Text="Calidad: —" />
 
+            <Label x:Name="CatalogStatusLabel"
+                   FontSize="12"
+                   TextColor="#6B7280"
+                   Text="Catálogos: comprobando…" />
+
             <Label Text="Tela" />
-            <Entry x:Name="TelaEntry" Placeholder="Tela" />
+            <Picker x:Name="TelaPicker"
+                    Title="Seleccionar tela (catálogo local)"
+                    SelectedIndexChanged="OnTelaPickerChanged" />
+            <Entry x:Name="TelaEntry" Placeholder="Tela (texto libre si no hay catálogo)" />
 
             <Label Text="Lote/trama" />
-            <Entry x:Name="LoteEntry" Placeholder="Lote" />
+            <Picker x:Name="LotePicker"
+                    Title="Seleccionar lote (catálogo local)"
+                    SelectedIndexChanged="OnLotePickerChanged" />
+            <Entry x:Name="LoteEntry" Placeholder="Lote (texto libre si no hay catálogo)" />
 
             <Label Text="Turno" />
             <Entry x:Name="TurnoEntry" Placeholder="A / B / C" />

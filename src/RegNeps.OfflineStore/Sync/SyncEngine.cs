@@ -502,6 +502,12 @@ public sealed class SyncEngine : ISyncEngine
                     {
                         await ApplyDeleteAsync(change, session.UserId, result, ct);
                     }
+                    else if (string.Equals(change.ChangeType, SyncConstants.ChangeCatalogUpserted, StringComparison.Ordinal)
+                             || string.Equals(change.ChangeType, SyncConstants.ChangeCatalogDeleted, StringComparison.Ordinal))
+                    {
+                        await ApplyCatalogChangeAsync(change, result, ct);
+                    }
+                    // Otros ChangeType: ignorar aplicación; el cursor igualmente avanza.
                 }
 
                 // Avanzar cursor solo tras aplicar la página completa.
@@ -710,6 +716,113 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         result.PulledDeletes++;
+    }
+
+    /// <summary>
+    /// Aplica CatalogUpserted/CatalogDeleted a LocalCatalogItem.
+    /// No toca LocalNepRecord ni PendingOperation (sin Conflict NEPS).
+    /// </summary>
+    private async Task ApplyCatalogChangeAsync(
+        ClientSyncChangeDto change,
+        SyncRunResult result,
+        CancellationToken ct)
+    {
+        if (!string.Equals(change.EntityType, SyncConstants.EntityCatalogItem, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        ClientCatalogItemSnapshot? snap = null;
+        try
+        {
+            if (change.Payload.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null)
+            {
+                snap = change.Payload.Deserialize<ClientCatalogItemSnapshot>(ClientSyncJson.Options);
+            }
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (snap is null || snap.Id == Guid.Empty)
+        {
+            return;
+        }
+
+        var kind = ParseCatalogKind(snap.Kind);
+        if (kind is null)
+        {
+            return;
+        }
+
+        var isDelete = string.Equals(
+            change.ChangeType, SyncConstants.ChangeCatalogDeleted, StringComparison.Ordinal);
+        var isActive = !isDelete && snap.IsActive;
+
+        // FindAsync incluye entidades Added en la misma página (varios CatalogUpserted del mismo Id).
+        var local = await _db.LocalCatalogItems.FindAsync([snap.Id], ct);
+        if (local is null)
+        {
+            var codeKey = string.IsNullOrWhiteSpace(snap.Code) ? (snap.Name ?? string.Empty).Trim() : snap.Code.Trim();
+            // Evitar choque Unique(Kind, Code) con otra fila (p. ej. rename), incl. tracker local.
+            var clash = _db.LocalCatalogItems.Local
+                .FirstOrDefault(c => c.Kind == kind.Value && c.Code == codeKey && c.Id != snap.Id);
+            if (clash is null)
+            {
+                clash = await _db.LocalCatalogItems
+                    .FirstOrDefaultAsync(c => c.Kind == kind.Value && c.Code == codeKey && c.Id != snap.Id, ct);
+            }
+
+            if (clash is not null)
+            {
+                clash.Code = codeKey + "~" + clash.Id.ToString("N")[..8];
+                clash.IsActive = false;
+            }
+
+            local = new LocalCatalogItem { Id = snap.Id };
+            _db.LocalCatalogItems.Add(local);
+        }
+
+        local.Kind = kind.Value;
+        var resolvedCode = string.IsNullOrWhiteSpace(snap.Code)
+            ? (snap.Name ?? string.Empty).Trim()
+            : snap.Code.Trim();
+        if (string.IsNullOrWhiteSpace(resolvedCode))
+        {
+            resolvedCode = snap.Id.ToString("N");
+        }
+
+        local.Code = resolvedCode;
+        local.Name = string.IsNullOrWhiteSpace(snap.Name) ? local.Code : snap.Name.Trim();
+        local.IsActive = isActive;
+        local.UpdatedAtUtc = snap.UpdatedAtUtc == default ? change.OccurredAtUtc : snap.UpdatedAtUtc;
+
+        if (isDelete)
+        {
+            result.PulledDeletes++;
+        }
+        else
+        {
+            result.PulledUpserts++;
+        }
+    }
+
+    private static LocalCatalogKind? ParseCatalogKind(string? kind)
+    {
+        if (string.Equals(kind, SyncConstants.CatalogKindFabric, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(kind, "tela", StringComparison.OrdinalIgnoreCase))
+        {
+            return LocalCatalogKind.Fabric;
+        }
+
+        if (string.Equals(kind, SyncConstants.CatalogKindLote, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(kind, "lote", StringComparison.OrdinalIgnoreCase))
+        {
+            return LocalCatalogKind.Lote;
+        }
+
+        return null;
     }
 
     private async Task<LocalNepRecord?> FindLocalByServerOrClientOpAsync(

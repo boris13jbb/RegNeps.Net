@@ -6,11 +6,26 @@ public static class SyncConstants
     public const int ProtocolVersion = 1;
 
     public const string EntityNepRecord = "NepRecord";
-    /// <summary>Reservado para fases posteriores (catálogos).</summary>
+    /// <summary>Catálogo de referencia (Tela/Lote) — Pull server→client únicamente.</summary>
     public const string EntityCatalogItem = "CatalogItem";
 
     public const string ChangeRecordUpserted = "RecordUpserted";
     public const string ChangeRecordDeleted = "RecordDeleted";
+
+    /// <summary>Alta o actualización de elemento de catálogo (incluye IsActive).</summary>
+    public const string ChangeCatalogUpserted = "CatalogUpserted";
+
+    /// <summary>
+    /// Catálogo eliminado o retirado en servidor.
+    /// Cliente marca IsActive=false; no resurrección vía Push.
+    /// </summary>
+    public const string ChangeCatalogDeleted = "CatalogDeleted";
+
+    public const string CatalogKindFabric = "Fabric";
+    public const string CatalogKindLote = "Lote";
+
+    /// <summary>OwnerUserId sintético: catálogos son visibles a todo usuario autenticado en Pull.</summary>
+    public const string CatalogOwnerUserId = "catalog";
 
     public const string OperationCreateRecord = "CreateRecord";
     public const string OperationUpdateRecord = "UpdateRecord";

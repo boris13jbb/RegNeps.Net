@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RegNeps.Application.Abstractions;
 using RegNeps.Domain.Entities;
 using RegNeps.Infrastructure.Persistence;
+using RegNeps.Infrastructure.Sync;
 
 namespace RegNeps.Infrastructure.Repositories;
 
@@ -67,6 +68,7 @@ public sealed class FabricRepository : IFabricRepository
             if (!existing.IsActive)
             {
                 existing.IsActive = true;
+                CatalogSyncChangeWriter.AppendFabricUpsert(db, existing);
                 await db.SaveChangesAsync(ct);
             }
 
@@ -81,6 +83,7 @@ public sealed class FabricRepository : IFabricRepository
         db.Fabrics.Add(fabric);
         try
         {
+            CatalogSyncChangeWriter.AppendFabricUpsert(db, fabric);
             await db.SaveChangesAsync(ct);
             return fabric;
         }
@@ -115,6 +118,7 @@ public sealed class FabricRepository : IFabricRepository
         entity.Name = name;
         entity.Code = string.IsNullOrWhiteSpace(fabric.Code) ? null : fabric.Code.Trim();
         entity.IsActive = fabric.IsActive;
+        CatalogSyncChangeWriter.AppendFabricUpsert(db, entity);
         await db.SaveChangesAsync(ct);
     }
 
@@ -127,6 +131,7 @@ public sealed class FabricRepository : IFabricRepository
             return;
         }
 
+        CatalogSyncChangeWriter.AppendFabricDeleted(db, entity);
         db.Fabrics.Remove(entity);
         await db.SaveChangesAsync(ct);
     }

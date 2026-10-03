@@ -144,6 +144,9 @@ public sealed class SyncAppService
             };
         }
 
+        // FASE 2D.9: baseline de catálogos (idempotente) antes de servir Pull.
+        await _persistence.EnsureCatalogBaselineAsync(ct);
+
         var page = await _persistence.PullAuthorizedChangesAsync(
             actor, safeCursor, SyncProtocol.NormalizePageSize(request.PageSize), ct);
         var changes = page.AuthorizedChanges.Select(MapChange).ToList();

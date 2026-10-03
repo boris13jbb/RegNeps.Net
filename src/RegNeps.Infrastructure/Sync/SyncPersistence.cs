@@ -152,6 +152,12 @@ public sealed class SyncPersistence : ISyncPersistence
         _atomicCreate.DeleteWithTombstoneAsync(
             entityId, expectedConcurrencyStamp, clientOperationId, actor, deviceId, ct);
 
+    public async Task EnsureCatalogBaselineAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await CatalogSyncChangeWriter.EnsureBaselineAsync(db, ct);
+    }
+
     public async Task<SyncPullPersistResult> PullAuthorizedChangesAsync(
         RecordActor actor,
         long cursor,
@@ -254,10 +260,17 @@ public sealed class SyncPersistence : ISyncPersistence
     }
 
     private static bool IsEntitySupportedForPull(string entityType) =>
-        string.Equals(entityType, SyncConstants.EntityNepRecord, StringComparison.Ordinal);
+        string.Equals(entityType, SyncConstants.EntityNepRecord, StringComparison.Ordinal)
+        || string.Equals(entityType, SyncConstants.EntityCatalogItem, StringComparison.Ordinal);
 
     private static bool IsAuthorized(RecordActor actor, SyncChangeLog item, string? externalUid)
     {
+        // Catálogos de captura: visibles a cualquier usuario autenticado (server-authoritative).
+        if (string.Equals(item.EntityType, SyncConstants.EntityCatalogItem, StringComparison.Ordinal))
+        {
+            return !string.IsNullOrWhiteSpace(actor.UserId);
+        }
+
         if (actor.SeesAllRecords)
         {
             return true;

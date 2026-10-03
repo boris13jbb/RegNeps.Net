@@ -63,7 +63,22 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
         await db.SaveChangesAsync();
         _userAId = a.Id;
         _userBId = b.Id;
+
+        await new SyncPersistence(_factory, new AtomicNepRecordCreateStore(_factory))
+            .EnsureCatalogBaselineAsync();
     }
+
+    private async Task<long> CatalogCursorAsync()
+    {
+        await using var db = _factory.CreateDbContext();
+        return await db.SyncChangeLogs.AsNoTracking()
+            .Where(c => c.EntityType == SyncConstants.EntityCatalogItem)
+            .Select(c => (long?)c.Sequence)
+            .MaxAsync() ?? 0L;
+    }
+
+    private static List<SyncChangeDto> NepChanges(SyncPullResponse pull) =>
+        pull.Changes.Where(c => c.EntityType == SyncConstants.EntityNepRecord).ToList();
 
     public Task DisposeAsync()
     {
@@ -117,8 +132,10 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(1, await db.NepRecords.CountAsync());
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
-        var log = await db.SyncChangeLogs.SingleAsync();
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
+        var log = await db.SyncChangeLogs.SingleAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord);
         Assert.Equal(saved.Id, log.EntityId);
         Assert.Equal(SyncConstants.ChangeRecordUpserted, log.ChangeType);
         Assert.Equal(_userAId.ToString(), log.OwnerUserId);
@@ -150,18 +167,28 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
                 """);
         }
 
-        var service = CreateOnlineService();
-        await Assert.ThrowsAnyAsync<Exception>(() =>
-            service.CreateAsync(new CreateNepRecordRequest
-            {
-                Telar = "T-FAIL",
-                Neps = 10,
-                ClientOperationId = Guid.NewGuid().ToString("N")
-            }, ActorA()));
+        try
+        {
+            var service = CreateOnlineService();
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                service.CreateAsync(new CreateNepRecordRequest
+                {
+                    Telar = "T-FAIL",
+                    Neps = 10,
+                    ClientOperationId = Guid.NewGuid().ToString("N")
+                }, ActorA()));
 
-        await using var verify = _factory.CreateDbContext();
-        Assert.Equal(0, await verify.NepRecords.CountAsync());
-        Assert.Equal(0, await verify.SyncChangeLogs.CountAsync());
+            await using var verify = _factory.CreateDbContext();
+            Assert.Equal(0, await verify.NepRecords.CountAsync());
+            Assert.Equal(0, await verify.SyncChangeLogs.CountAsync(c =>
+                c.EntityType == SyncConstants.EntityNepRecord));
+        }
+        finally
+        {
+            await using var cleanup = _factory.CreateDbContext();
+            await cleanup.Database.ExecuteSqlRawAsync(
+                "DROP TRIGGER IF EXISTS trg_reject_online_changelog;");
+        }
     }
 
     [Fact]
@@ -186,7 +213,8 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(1, await db.NepRecords.CountAsync());
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
     }
 
     [Fact]
@@ -195,6 +223,7 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
         var online = CreateOnlineService();
         var sync = CreateSync();
         var actor = ActorA();
+        var afterCatalogs = await CatalogCursorAsync();
 
         var saved = await online.CreateAsync(new CreateNepRecordRequest
         {
@@ -207,12 +236,13 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-pull",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50
         }, actor, "p1");
 
-        Assert.Single(pull1.Changes);
-        Assert.Equal(saved.Id, pull1.Changes[0].EntityId);
+        var nep1 = NepChanges(pull1);
+        Assert.Single(nep1);
+        Assert.Equal(saved.Id, nep1[0].EntityId);
 
         var pull2 = await sync.PullAsync(new SyncPullRequest
         {
@@ -222,7 +252,7 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
             PageSize = 50
         }, actor, "p2");
 
-        Assert.Empty(pull2.Changes);
+        Assert.Empty(NepChanges(pull2));
         Assert.Equal(pull1.NextCursor, pull2.NextCursor);
     }
 
@@ -263,30 +293,34 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
         var push = await sync.PushAsync(pushReq, actorB, "push");
         Assert.Equal(nameof(SyncOperationResult.Accepted), push.Results[0].Result);
 
+        var afterCatalogs = await CatalogCursorAsync();
         // Supervisor-like: each user pulls own; A sees online, B sees push.
         var pullA = await sync.PullAsync(new SyncPullRequest
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-a",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50
         }, actorA, "pa");
-        Assert.Single(pullA.Changes);
-        Assert.Equal(onlineRecord.Id, pullA.Changes[0].EntityId);
+        var nepA = NepChanges(pullA);
+        Assert.Single(nepA);
+        Assert.Equal(onlineRecord.Id, nepA[0].EntityId);
 
         var pullB = await sync.PullAsync(new SyncPullRequest
         {
             ProtocolVersion = SyncProtocol.Version,
             DeviceId = "dev-b",
-            Cursor = 0,
+            Cursor = afterCatalogs,
             PageSize = 50
         }, actorB, "pb");
-        Assert.Single(pullB.Changes);
-        Assert.Equal(push.Results[0].EntityId, pullB.Changes[0].EntityId);
+        var nepB = NepChanges(pullB);
+        Assert.Single(nepB);
+        Assert.Equal(push.Results[0].EntityId, nepB[0].EntityId);
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(2, await db.NepRecords.CountAsync());
-        Assert.Equal(2, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(2, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
         var sequences = await db.SyncChangeLogs.OrderBy(c => c.Sequence)
             .Select(c => c.Sequence)
             .ToListAsync();
@@ -329,7 +363,9 @@ public sealed class SyncOnlineChangeLogTests : IAsyncLifetime
         }, actor, "fmt");
 
         await using var db = _factory.CreateDbContext();
-        var payloads = await db.SyncChangeLogs.OrderBy(c => c.Sequence)
+        var payloads = await db.SyncChangeLogs.AsNoTracking()
+            .Where(c => c.EntityType == SyncConstants.EntityNepRecord)
+            .OrderBy(c => c.Sequence)
             .Select(c => c.PayloadJson)
             .ToListAsync();
         Assert.Equal(2, payloads.Count);

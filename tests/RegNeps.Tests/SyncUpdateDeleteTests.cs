@@ -75,7 +75,22 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         _adminId = admin.Id;
         _adminBId = adminB.Id;
         _operarioId = operario.Id;
+
+        await new SyncPersistence(_factory, new AtomicNepRecordCreateStore(_factory))
+            .EnsureCatalogBaselineAsync();
     }
+
+    private async Task<long> CatalogCursorAsync()
+    {
+        await using var db = _factory.CreateDbContext();
+        return await db.SyncChangeLogs.AsNoTracking()
+            .Where(c => c.EntityType == SyncConstants.EntityCatalogItem)
+            .Select(c => (long?)c.Sequence)
+            .MaxAsync() ?? 0L;
+    }
+
+    private static List<SyncChangeDto> NepChanges(SyncPullResponse pull) =>
+        pull.Changes.Where(c => c.EntityType == SyncConstants.EntityNepRecord).ToList();
 
     public Task DisposeAsync()
     {
@@ -235,7 +250,8 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         Assert.Equal("T-2C-U", record.Telar);
         Assert.NotNull(record.UpdatedAt);
         Assert.Equal(upd.Results[0].ConcurrencyStamp, record.ConcurrencyStamp);
-        Assert.Equal(2, await verify.SyncChangeLogs.CountAsync());
+        Assert.Equal(2, await verify.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
         Assert.Equal(1, await verify.SyncChangeLogs.CountAsync(c =>
             c.ChangeType == SyncConstants.ChangeRecordUpserted && c.ClientOperationId == updOp));
     }
@@ -256,7 +272,8 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         await using var db = _factory.CreateDbContext();
         var record = await db.NepRecords.SingleAsync(r => r.Id == id);
         Assert.Equal(stamp, record.ConcurrencyStamp);
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
     }
 
     [Fact]
@@ -293,7 +310,8 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         var record = await db.NepRecords.SingleAsync(r => r.Id == id);
         Assert.Equal(12, record.Neps);
         Assert.Equal(stamp, record.ConcurrencyStamp);
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
     }
 
     [Fact]
@@ -315,7 +333,8 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         Assert.Equal(newStamp, retry.Results[0].ConcurrencyStamp);
 
         await using var db = _factory.CreateDbContext();
-        Assert.Equal(2, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(2, await db.SyncChangeLogs.CountAsync(c =>
+            c.EntityType == SyncConstants.EntityNepRecord));
         Assert.Equal(newStamp, (await db.NepRecords.SingleAsync(r => r.Id == id)).ConcurrencyStamp);
     }
 
@@ -512,6 +531,7 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         var sync = CreateSync();
         var actor = ActorAdmin();
 
+        var afterCatalogs = await CatalogCursorAsync();
         var createOp = Guid.NewGuid().ToString("N");
         var create = await sync.PushAsync(PushCreate("dev-2c", createOp, 40), actor, "i1");
         Assert.Equal(nameof(SyncOperationResult.Accepted), create.Results[0].Result);
@@ -519,9 +539,10 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         var stamp = create.Results[0].ConcurrencyStamp!;
         var seqCreate = create.Results[0].ChangeSequence!.Value;
 
-        var pull1 = await sync.PullAsync(Pull("dev-2c", 0), actor, "p1");
-        Assert.Single(pull1.Changes);
-        Assert.Equal(SyncConstants.ChangeRecordUpserted, pull1.Changes[0].ChangeType);
+        var pull1 = await sync.PullAsync(Pull("dev-2c", afterCatalogs), actor, "p1");
+        var nep1 = NepChanges(pull1);
+        Assert.Single(nep1);
+        Assert.Equal(SyncConstants.ChangeRecordUpserted, nep1[0].ChangeType);
         Assert.Equal(seqCreate, pull1.NextCursor);
 
         var updOp = Guid.NewGuid().ToString("N");
@@ -532,9 +553,10 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         stamp = upd.Results[0].ConcurrencyStamp!;
 
         var pull2 = await sync.PullAsync(Pull("dev-2c", pull1.NextCursor), actor, "p2");
-        Assert.Single(pull2.Changes);
-        Assert.Equal(SyncConstants.ChangeRecordUpserted, pull2.Changes[0].ChangeType);
-        Assert.True(pull2.Changes[0].Payload.GetProperty("updatedAtUtc").ValueKind != JsonValueKind.Null);
+        var nep2 = NepChanges(pull2);
+        Assert.Single(nep2);
+        Assert.Equal(SyncConstants.ChangeRecordUpserted, nep2[0].ChangeType);
+        Assert.True(nep2[0].Payload.GetProperty("updatedAtUtc").ValueKind != JsonValueKind.Null);
 
         var delOp = Guid.NewGuid().ToString("N");
         var del = await sync.PushAsync(PushDelete("dev-2c", delOp, id, stamp), actor, "i3");
@@ -543,14 +565,19 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         Assert.True(seqDelete > seqUpdate);
 
         var pull3 = await sync.PullAsync(Pull("dev-2c", pull2.NextCursor), actor, "p3");
-        Assert.Single(pull3.Changes);
-        Assert.Equal(SyncConstants.ChangeRecordDeleted, pull3.Changes[0].ChangeType);
+        var nep3 = NepChanges(pull3);
+        Assert.Single(nep3);
+        Assert.Equal(SyncConstants.ChangeRecordDeleted, nep3[0].ChangeType);
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c => c.ClientOperationId == createOp));
         Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c => c.ClientOperationId == updOp));
         Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c => c.ClientOperationId == delOp));
-        var sequences = await db.SyncChangeLogs.OrderBy(c => c.Sequence).Select(c => c.Sequence).ToListAsync();
+        var sequences = await db.SyncChangeLogs.AsNoTracking()
+            .Where(c => c.EntityType == SyncConstants.EntityNepRecord)
+            .OrderBy(c => c.Sequence)
+            .Select(c => c.Sequence)
+            .ToListAsync();
         Assert.Equal(3, sequences.Count);
         Assert.True(sequences[0] < sequences[1] && sequences[1] < sequences[2]);
     }
@@ -660,7 +687,11 @@ public sealed class SyncUpdateDeleteTests : IAsyncLifetime
         Assert.Equal(0, await db.NepRecords.CountAsync(r => r.Id == id));
         Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
             c.ChangeType == SyncConstants.ChangeRecordDeleted));
-        var sequences = await db.SyncChangeLogs.OrderBy(c => c.Sequence).Select(c => c.Sequence).ToListAsync();
+        var sequences = await db.SyncChangeLogs.AsNoTracking()
+            .Where(c => c.EntityType == SyncConstants.EntityNepRecord)
+            .OrderBy(c => c.Sequence)
+            .Select(c => c.Sequence)
+            .ToListAsync();
         Assert.Equal(3, sequences.Count);
         Assert.True(sequences[0] < sequences[1] && sequences[1] < sequences[2]);
     }
