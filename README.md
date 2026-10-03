@@ -53,8 +53,12 @@ dotnet run --project src/RegNeps.Web
 
 ## Base de datos
 
-- Desarrollo: SQLite (`regneps_v2.db` en carpeta de ejecución)
-- Intranet: SQL Server — en `appsettings.json`:
+- Desarrollo: SQLite bajo `App_Data` (p. ej. `regneps_v2.db` desde `ConnectionStrings:RegNeps`).
+- Intranet: SQL Server — `Database:UseSqlServer=true` + connection string (User Secrets / Production; no secretos en git).
+- Bootstrap Web (ambos proveedores): `EnsureCreated` + parches idempotentes (`DatabaseInitializer`) — **no** `Database.Migrate`. Ver [docs/FASE2I_BOOTSTRAP_AND_MIGRATION.md](docs/FASE2I_BOOTSTRAP_AND_MIGRATION.md).
+- OfflineStore MAUI: SQLite local con **EF `MigrateAsync`** (distinto del SQLite Web).
+
+Plantilla SQL Server:
 
 ```json
 "ConnectionStrings": {
@@ -87,10 +91,10 @@ cd RegNeps.Net
 dotnet run --project tools/RegNeps.Migrate -- --file ..\FTS\firestore_export.json --db src\RegNeps.Web\regneps_v2.db
 ```
 
-## Fuera de alcance web/PC (o siguiente fase)
+## Fuera de alcance (legado Flutter / no aplicar aquí)
 
-- App Android / offline Hive
-- Firebase Auth, Firestore, FCM push
+- Firebase Auth, Firestore, FCM push (no forman parte de la arquitectura .NET)
+- Offline Hive del Flutter hermano (el offline .NET es OfflineStore/MAUI; ver `docs/ANDROID_APK.md`)
 - Active Directory / Entra ID (hoy: usuarios locales + cookies)
 - Los 25+ tipos de gráfica del builder Flutter (hay analytics + export profesional)
 - Migración automática de datos históricos Firestore → SQL

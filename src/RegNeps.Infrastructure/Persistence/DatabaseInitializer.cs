@@ -7,8 +7,13 @@ using RegNeps.Infrastructure.Sync;
 namespace RegNeps.Infrastructure.Persistence;
 
 /// <summary>
-/// Crea la BD, aplica parches aditivos (SQLite y SQL Server) y repara ownership migrado.
-/// Los parches son idempotentes: reiniciar la app no falla si columnas/índices ya existen.
+/// Bootstrap productivo de <see cref="RegNepsDbContext"/> (Web: SQLite o SQL Server).
+/// Flujo deliberado (FASE 2I):
+/// 1) <c>EnsureCreatedAsync</c> — crea el esquema desde el modelo solo si la BD no existe;
+/// 2) <see cref="ApplySchemaPatchesAsync"/> — evolución aditiva idempotente (no usa <c>Database.Migrate</c>);
+/// 3) seed + baseline de catálogos + repair de ownership.
+/// Las clases bajo <c>Infrastructure/Migrations</c> son canónicas/documentales; el arranque Web no llama <c>Migrate()</c>.
+/// El OfflineStore MAUI usa <c>MigrateAsync</c> por separado (<c>LocalStoreInitializer</c>).
 /// </summary>
 public static class DatabaseInitializer
 {
@@ -16,6 +21,7 @@ public static class DatabaseInitializer
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RegNepsDbContext>();
+        // No sustituir por Migrate(): EnsureCreated + patches es el contrato Web actual (SQLite y SQL Server).
         await db.Database.EnsureCreatedAsync();
         await ApplySchemaPatchesAsync(db);
         await DbSeeder.SeedAsync(db);

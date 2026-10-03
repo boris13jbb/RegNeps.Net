@@ -2,7 +2,7 @@
 
 **Propósito:** checklist reproducible para cerrar el gate **SQL Server** (hoy PENDING por ausencia de instancia).  
 **No ejecutar contra producción.** Usar staging / LocalDB.  
-**No** aplica `Migrate()` automático; el runtime usa `EnsureCreated` + `DatabaseInitializer` (parches idempotentes).
+**No** aplica `Migrate()` automático; el runtime Web usa `EnsureCreated` + `DatabaseInitializer` (parches idempotentes). Ver veredicto EnsureCreated vs Migrate en [`FASE2I_BOOTSTRAP_AND_MIGRATION.md`](FASE2I_BOOTSTRAP_AND_MIGRATION.md).
 
 Documento hermano: [`FASE2H_VALIDATION_READINESS.md`](FASE2H_VALIDATION_READINESS.md).
 
@@ -57,11 +57,13 @@ dotnet run --project src\RegNeps.Web
 
 En el primer arranque `DatabaseInitializer.InitializeAsync`:
 
-1. `EnsureCreatedAsync`
-2. `ApplySqlServerPatchesAsync` + `RoleSchemaPatches`
+1. `EnsureCreatedAsync` (crea esquema si la BD no existe; en upgrade es no-op)
+2. `ApplySqlServerPatchesAsync` + `RoleSchemaPatches` (**único** mecanismo de evolución de esquema en Web)
 3. `DbSeeder.SeedAsync`
 4. `CatalogSyncChangeWriter.EnsureBaselineAsync`
 5. Repair ownership (si aplica datos migrados)
+
+`tools/RegNeps.Migrate` **no** es el migrador de esquema SQL Server (CLI Firestore→SQLite). Para SQL Server: schema vía arranque Web; datos históricos vía UI `/migracion` si aplica.
 
 **PASS arranque:** app responde en `:5080`; login seed funciona; sin excepción de schema en log.
 

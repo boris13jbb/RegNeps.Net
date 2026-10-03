@@ -129,7 +129,7 @@ Resumen:
 | Config | `Database:UseSqlServer = true` |
 | Connection string | `ConnectionStrings:RegNeps` — ej. `Server=…;Database=RegNeps;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=true` |
 | Permisos | CREATE TABLE/INDEX/ALTER; IDENTITY; lectura/escritura app |
-| Bootstrap | `EnsureCreated` + `DatabaseInitializer.ApplySchemaPatchesAsync` (idempotente) + `DbSeeder` + baseline catálogos |
+| Bootstrap | `EnsureCreated` + `DatabaseInitializer.ApplySchemaPatchesAsync` (idempotente) + `DbSeeder` + baseline catálogos — ver FASE 2I |
 | Migración formal EF | `20261002190000_AddSyncChangeLog.cs` es **documental**; **no** se aplica con `Migrate()` automático |
 | OfflineStore | Sigue en SQLite del dispositivo (independiente del motor servidor) |
 
@@ -163,7 +163,7 @@ Tablas/índices críticos a verificar tras primer arranque:
 | adb | `adb devices` → device/emulator `device` |
 | Red | Teléfono y PC en misma LAN; firewall puerto **5080**; WebSockets para hub |
 
-**Doc obsoleta a no seguir al pie de la letra:** `docs/ANDROID_APK.md` aún menciona `net8.0-android` y rama `feature/android-apk-shell`. La fuente de verdad operativa para 2H es este documento + `scripts/build_android_apk.ps1` (`net10.0-android`).
+**Android docs:** `docs/ANDROID_APK.md` alineado a `net10.0-android` en FASE 2I. Bootstrap Web vs OfflineStore: [`FASE2I_BOOTSTRAP_AND_MIGRATION.md`](FASE2I_BOOTSTRAP_AND_MIGRATION.md).
 
 ---
 
@@ -444,7 +444,7 @@ No cifrar en 2H.
 |--------|-----------|------------|
 | SQLite ≠ SQL Server en índices filtrados / tipos | Media | Procedimiento SQL dedicado |
 | `ANDROID_APK.md` desactualizado (net8 / rama) | Baja | Usar este doc + script |
-| EnsureCreated + patches ≠ migraciones EF formales | Media | Validar fresh+upgrade en staging |
+| EnsureCreated + patches ≠ migraciones EF formales | Media (aceptado) | Contrato documentado en FASE 2I; validar fresh+upgrade en staging SQL |
 | ClearAll N grande → ChangeLog volumen | Media | Medir en §12 antes de prod |
 | SQLite sin cifrado en dispositivo | Media | Documentado 2G; fase cifrado |
 | SignalR detrás de proxy sin WebSockets | Media | Checklist IIS/nginx existente |
