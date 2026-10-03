@@ -279,8 +279,9 @@ public sealed class SyncApplyCorrectiveChangeLogTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ClearAll_Blocked_When_SyncChangeLogs_Exist()
+    public async Task ClearAll_With_ChangeLogs_Produces_N_Tombstones()
     {
+        // FASE 2D.12: ya no bloquea; genera RecordDeleted por cada NepRecord.
         var service = CreateOnlineService();
         var actor = ActorAdmin();
         await service.CreateAsync(new CreateNepRecordRequest
@@ -290,23 +291,21 @@ public sealed class SyncApplyCorrectiveChangeLogTests : IAsyncLifetime
             ClientOperationId = Guid.NewGuid().ToString("N")
         }, actor);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.ClearAllAsync(actor));
-        Assert.Contains("offline-first", ex.Message, StringComparison.OrdinalIgnoreCase);
+        await service.ClearAllAsync(actor);
 
         await using var db = _factory.CreateDbContext();
-        Assert.Equal(1, await db.NepRecords.CountAsync());
-        Assert.Equal(1, await db.SyncChangeLogs.CountAsync());
+        Assert.Equal(0, await db.NepRecords.CountAsync());
+        Assert.Equal(1, await db.SyncChangeLogs.CountAsync(c =>
+            c.ChangeType == SyncConstants.ChangeRecordDeleted));
+        Assert.Equal(2, await db.SyncChangeLogs.CountAsync()); // create upsert + deleted
     }
 
     [Fact]
-    public async Task ClearAll_Allowed_Without_SyncChangeLogs_And_Produces_No_Sync_Rows()
+    public async Task ClearAll_Legacy_Without_AtomicStore_Still_Deletes_Rows()
     {
-        // Sin store atómico: Create no escribe ChangeLog → ClearAll permitido.
         var service = new NepRecordService(
             new NepRecordRepository(_factory),
-            new AlertConfigRepository(_factory.CreateDbContext()),
-            syncPersistence: new SyncPersistence(_factory, new AtomicNepRecordCreateStore(_factory)));
+            new AlertConfigRepository(_factory.CreateDbContext()));
 
         var actor = ActorAdmin();
         await service.CreateAsync(new CreateNepRecordRequest
@@ -315,17 +314,10 @@ public sealed class SyncApplyCorrectiveChangeLogTests : IAsyncLifetime
             Neps = 8
         }, actor);
 
-        await using (var peek = _factory.CreateDbContext())
-        {
-            Assert.Equal(0, await peek.SyncChangeLogs.CountAsync());
-            Assert.Equal(1, await peek.NepRecords.CountAsync());
-        }
-
         await service.ClearAllAsync(actor);
 
         await using var db = _factory.CreateDbContext();
         Assert.Equal(0, await db.NepRecords.CountAsync());
-        Assert.Equal(0, await db.SyncChangeLogs.CountAsync());
     }
 
     private sealed class TestDbFactory : IDbContextFactory<RegNepsDbContext>

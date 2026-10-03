@@ -10,7 +10,7 @@ using RegNeps.Infrastructure.Persistence;
 namespace RegNeps.Infrastructure.Sync;
 
 /// <summary>
-/// Escritura atómica NepRecord + SyncChangeLog (Create/Update/Delete/ApplyCorrective) para online y Push.
+/// Escritura atómica NepRecord + SyncChangeLog (Create/Update/Delete/ApplyCorrective/ClearAll) para online y Push.
 /// Idempotencia de mutaciones Push: índice único (ActorUserId, ClientOperationId) en SyncChangeLogs.
 /// </summary>
 public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
@@ -626,6 +626,77 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
                 ErrorCode = "PERSISTENCE",
                 Message = "Error temporal al procesar la operación."
             };
+        }
+        catch
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// ClearAll admin: una TX con N × (RecordDeleted + Remove NepRecord).
+    /// CorrectiveActions caen por cascade FK. Sin stamp/ClientOperationId/ownership por fila.
+    /// Si hay DbUpdateConcurrencyException (stamp rotado concurrentemente), rollback completo.
+    /// </summary>
+    public async Task<AtomicClearAllResult> ClearAllWithTombstonesAsync(
+        RecordActor actor,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actor.UserId);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var entities = await db.NepRecords.ToListAsync(ct);
+            if (entities.Count == 0)
+            {
+                await tx.CommitAsync(ct);
+                return new AtomicClearAllResult
+                {
+                    DeletedCount = 0,
+                    TombstoneCount = 0
+                };
+            }
+
+            var deletedAt = DateTime.UtcNow;
+            var changes = new List<SyncChangeLog>(entities.Count);
+            foreach (var entity in entities)
+            {
+                var owner = string.IsNullOrWhiteSpace(entity.CreatedByUserId)
+                    ? actor.UserId
+                    : entity.CreatedByUserId!;
+                var change = SyncNepRecordPayloadMapper.CreateRecordDeletedEntry(
+                    entity.Id,
+                    owner,
+                    actor.UserId,
+                    entity.ConcurrencyStamp,
+                    clientOperationId: null,
+                    deviceId: null,
+                    deletedAt);
+                changes.Add(change);
+                db.SyncChangeLogs.Add(change);
+                db.NepRecords.Remove(entity);
+            }
+
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            return new AtomicClearAllResult
+            {
+                DeletedCount = entities.Count,
+                TombstoneCount = changes.Count,
+                FirstSequence = changes.Min(c => c.Sequence),
+                LastSequence = changes.Max(c => c.Sequence)
+            };
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            throw new RecordConcurrencyConflictException(
+                "ClearAll no pudo completarse porque algún registro cambió durante la operación. Reintente.");
         }
         catch
         {

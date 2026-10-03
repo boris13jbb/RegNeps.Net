@@ -25,7 +25,6 @@ public sealed class NepRecordService
     private readonly IPermissionService? _permissions;
     private readonly IAlertCriticalPublisher? _criticalPublisher;
     private readonly IAtomicNepRecordCreateStore? _atomicCreate;
-    private readonly ISyncPersistence? _syncPersistence;
 
     public NepRecordService(
         INepRecordRepository records,
@@ -40,7 +39,9 @@ public sealed class NepRecordService
         _permissions = permissions;
         _criticalPublisher = criticalPublisher;
         _atomicCreate = atomicCreate;
-        _syncPersistence = syncPersistence;
+        // syncPersistence se acepta por compatibilidad DI/pruebas; ClearAll ya no lo usa
+        // (FASE 2D.12: tombstones vía store atómico).
+        _ = syncPersistence;
     }
 
     /// <summary>
@@ -643,8 +644,9 @@ public sealed class NepRecordService
     }
 
     /// <summary>
-    /// Vacía todos los NepRecord. <b>Incompatible</b> con sincronización offline-first:
-    /// no genera tombstones. Bloqueado si ya existen entradas en SyncChangeLogs.
+    /// Vacía todos los NepRecord (alcance global de tabla). FASE 2D.12: sync-safe —
+    /// N tombstones <c>RecordDeleted</c> atómicos con la eliminación (online/admin-only).
+    /// Sin Outbox, sin ClientOperationId, sin ExpectedConcurrencyStamp por fila.
     /// </summary>
     public async Task ClearAllAsync(RecordActor actor, CancellationToken ct = default)
     {
@@ -654,19 +656,13 @@ public sealed class NepRecordService
             throw new UnauthorizedRecordAccessException("No tiene permiso para vaciar registros.");
         }
 
-        // FASE 2C.1: ClearAll fuera del protocolo fino de sync.
-        if (_syncPersistence is not null)
+        if (_atomicCreate is not null)
         {
-            var changeLogCount = await _syncPersistence.CountChangeLogsAsync(ct);
-            if (changeLogCount > 0)
-            {
-                throw new InvalidOperationException(
-                    "ClearAll no es compatible con sincronización offline-first: existen cambios en SyncChangeLogs. " +
-                    "No ejecute esta operación mientras haya (o haya habido) clientes sincronizando. " +
-                    "Use eliminaciones individuales/tombstones o un mantenimiento de BD controlado.");
-            }
+            await _atomicCreate.ClearAllWithTombstonesAsync(actor, ct);
+            return;
         }
 
+        // Fallback legacy (pruebas sin store atómico): borrado físico sin ChangeLog.
         await _records.ClearAllAsync(ct);
     }
 

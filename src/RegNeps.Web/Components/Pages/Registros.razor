@@ -406,10 +406,10 @@ else
         <AppModal Title="Vaciar todos los registros" OnClose="() => _confirmClearAll = false">
             <ChildContent>
                 <p>¿Eliminar <strong>todas</strong> las mediciones? Esta acción no se puede deshacer.</p>
-                <p class="small text-danger mb-0">
-                    ClearAll no es compatible con sincronización offline-first: no genera tombstones.
-                    Si ya hubo sync (SyncChangeLogs), el servidor rechazará la operación.
-                    No ejecute esto mientras existan clientes offline activos.
+                <p class="small text-muted mb-0">
+                    Genera un tombstone de sincronización (<code>RecordDeleted</code>) por cada registro
+                    para que los dispositivos offline actualicen su réplica al sincronizar.
+                    Los informes guardados no se borran. Operación administrativa online.
                 </p>
             </ChildContent>
             <Footer>
@@ -1196,8 +1196,9 @@ else
             await RecordService.ClearAllAsync(_session!.ToActor());
             _totalInDb = 0;
             _message =
-                "Todas las mediciones fueron eliminadas. Los informes guardados siguen existiendo, " +
-                "pero al abrirlos la tabla saldrá vacía hasta que capture o migre datos de nuevo.";
+                "Todas las mediciones fueron eliminadas (tombstones de sync generados). " +
+                "Los informes guardados siguen existiendo; al abrirlos la tabla viva puede salir vacía " +
+                "hasta que capture o migre datos de nuevo. Los dispositivos offline se actualizarán al sincronizar.";
             _confirmClearAll = false;
             await LoadAsync();
         }

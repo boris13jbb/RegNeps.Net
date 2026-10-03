@@ -54,6 +54,15 @@ public interface IAtomicNepRecordCreateStore
         string? clientOperationId = null,
         string? deviceId = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// FASE 2D.12: ClearAll admin global — N tombstones RecordDeleted + delete físico
+    /// en una sola transacción. Sin ExpectedConcurrencyStamp ni ClientOperationId.
+    /// No comprueba ownership por fila (autorización = ClearAllRecords en el servicio).
+    /// </summary>
+    Task<AtomicClearAllResult> ClearAllWithTombstonesAsync(
+        RecordActor actor,
+        CancellationToken ct = default);
 }
 
 public sealed class AtomicNepRecordCreateResult
@@ -73,4 +82,13 @@ public sealed class AtomicNepRecordMutationResult
     public string? ServerConcurrencyStamp { get; init; }
     public string? ServerSnapshotJson { get; init; }
     public Guid? EntityId { get; init; }
+}
+
+/// <summary>Resultado de ClearAll sync-safe (N tombstones atómicos).</summary>
+public sealed class AtomicClearAllResult
+{
+    public int DeletedCount { get; init; }
+    public int TombstoneCount { get; init; }
+    public long? FirstSequence { get; init; }
+    public long? LastSequence { get; init; }
 }
