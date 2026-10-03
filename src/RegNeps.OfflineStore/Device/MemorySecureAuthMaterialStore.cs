@@ -17,6 +17,7 @@ public sealed class MemorySecureAuthMaterialStore : ISecureAuthMaterialStore
             throw new ArgumentException("No se permiten contraseñas en el almacén seguro.", nameof(userId));
         }
 
+        SecureAuthMaterialGuard.EnsureNotAuthCookieOrBearer(material);
         _items[userId] = material ?? string.Empty;
         return Task.CompletedTask;
     }

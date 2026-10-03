@@ -58,14 +58,8 @@ public sealed class OfflineSessionService
             throw new ArgumentException("El snapshot de sesión no admite contraseñas ni secretos.");
         }
 
-        // Fase 2D.1: no persistir cookies/tokens vía este API desde el bridge.
-        // El parámetro secureAuthMaterial queda solo para tests/compat; nunca es obligatorio.
-        if (!string.IsNullOrEmpty(secureAuthMaterial) &&
-            LooksLikeHttpCookieOrBearer(secureAuthMaterial))
-        {
-            throw new ArgumentException(
-                "No se permite almacenar cookies ni tokens de autenticación en el material seguro.");
-        }
+        // Fase 2D.1 / 2G: no persistir cookies/tokens vía este API.
+        SecureAuthMaterialGuard.EnsureNotAuthCookieOrBearer(secureAuthMaterial);
 
         var now = DateTime.UtcNow;
         var expires = now.Add(ttl ?? OfflineStoreConstants.DefaultSessionTtl);
@@ -75,26 +69,36 @@ public sealed class OfflineSessionService
             .Select(p => p.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase));
 
+        var newUserId = userId.Trim();
         var hasSecure = false;
         if (!string.IsNullOrEmpty(secureAuthMaterial))
         {
-            await _secureStore.SetAuthMaterialAsync(userId, secureAuthMaterial, ct);
+            await _secureStore.SetAuthMaterialAsync(newUserId, secureAuthMaterial, ct);
             hasSecure = true;
         }
         else
         {
-            var existing = await _secureStore.GetAuthMaterialAsync(userId, ct);
+            var existing = await _secureStore.GetAuthMaterialAsync(newUserId, ct);
             hasSecure = !string.IsNullOrEmpty(existing);
         }
 
         var session = await _db.LocalSessions.FirstOrDefaultAsync(x => x.Id == 1, ct);
+        var previousUserId = session?.UserId?.Trim();
         if (session is null)
         {
             session = new LocalSession { Id = 1 };
             _db.LocalSessions.Add(session);
         }
 
-        session.UserId = userId.Trim();
+        // FASE 2G: cambio de usuario en el mismo dispositivo → cursor Pull desde 0
+        // (evita que B herede NextCursor avanzado por A y pierda sus change logs).
+        if (!string.IsNullOrEmpty(previousUserId)
+            && !string.Equals(previousUserId, newUserId, StringComparison.Ordinal))
+        {
+            await ResetPullCursorAsync(ct);
+        }
+
+        session.UserId = newUserId;
         session.Username = username?.Trim() ?? string.Empty;
         session.RoleCode = roleCode?.Trim() ?? string.Empty;
         session.PermissionsCsv = csv;
@@ -120,8 +124,11 @@ public sealed class OfflineSessionService
         if (session is not null)
         {
             _db.LocalSessions.Remove(session);
-            await _db.SaveChangesAsync(ct);
         }
+
+        // FASE 2G: logout limpia cursor Pull del dispositivo (Outbox/réplica se conservan).
+        await ResetPullCursorAsync(ct);
+        await _db.SaveChangesAsync(ct);
 
         if (!string.IsNullOrWhiteSpace(previousUserId))
         {
@@ -134,6 +141,27 @@ public sealed class OfflineSessionService
             PreviousUserId = previousUserId,
             PendingOperationsRetained = pending
         };
+    }
+
+    /// <summary>
+    /// Reinicia el cursor monotónico de Pull. No borra Outbox ni LocalNepRecord.
+    /// </summary>
+    private async Task ResetPullCursorAsync(CancellationToken ct)
+    {
+        var state = await _db.SyncStates.FirstOrDefaultAsync(x => x.Id == 1, ct);
+        if (state is null)
+        {
+            return;
+        }
+
+        if (state.LastPulledSequence == 0)
+        {
+            return;
+        }
+
+        state.LastPulledSequence = 0;
+        state.UpdatedAtUtc = DateTime.UtcNow;
+        state.LastError = null;
     }
 
     public OfflineSessionViewDto ToView(LocalSession? session, bool treatExpiredAsInvalid = true)
@@ -175,22 +203,4 @@ public sealed class OfflineSessionService
     /// <summary>Inspección de esquema: confirma que LocalSession no define columnas de password.</summary>
     public static IReadOnlyList<string> LocalSessionPropertyNames() =>
         typeof(LocalSession).GetProperties().Select(p => p.Name).ToArray();
-
-    private static bool LooksLikeHttpCookieOrBearer(string material)
-    {
-        var m = material.Trim();
-        if (m.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // Cookie típica de ASP.NET: nombre=valor; ...
-        if (m.Contains("RegNeps.Auth", StringComparison.OrdinalIgnoreCase) ||
-            m.Contains(".AspNetCore.", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return false;
-    }
 }

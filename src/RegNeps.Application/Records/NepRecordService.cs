@@ -899,6 +899,23 @@ public sealed class NepRecordService
         {
             throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
         }
+
+        // FASE 2G: límites alineados con columnas EF (evita payloads desmesurados vía Push).
+        EnsureMaxLength(request.Telar, 64, nameof(request.Telar));
+        EnsureMaxLength(request.Tela, 128, nameof(request.Tela));
+        EnsureMaxLength(request.LoteTrama, 64, nameof(request.LoteTrama));
+        EnsureMaxLength(request.Turno, 32, nameof(request.Turno));
+        EnsureMaxLength(request.Operario, 128, nameof(request.Operario));
+        EnsureMaxLength(request.LineaProduccion, 64, nameof(request.LineaProduccion));
+        EnsureMaxLength(request.Observacion, 2000, nameof(request.Observacion));
+    }
+
+    private static void EnsureMaxLength(string? value, int max, string paramName)
+    {
+        if (!string.IsNullOrEmpty(value) && value.Length > max)
+        {
+            throw new ArgumentException($"El campo supera el máximo de {max} caracteres.", paramName);
+        }
     }
 }
 

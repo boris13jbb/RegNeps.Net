@@ -12,6 +12,8 @@ public sealed class MauiSecureAuthMaterialStore : ISecureAuthMaterialStore
     public async Task SetAuthMaterialAsync(string userId, string material, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userId);
+        // FASE 2G: misma defensa que OfflineSessionService (SecureStorage ≠ almacén de cookies).
+        SecureAuthMaterialGuard.EnsureNotAuthCookieOrBearer(material);
         await SecureStorage.Default.SetAsync(Key(userId), material ?? string.Empty);
     }
 

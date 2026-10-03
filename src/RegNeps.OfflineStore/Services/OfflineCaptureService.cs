@@ -528,9 +528,22 @@ public sealed class OfflineCaptureService
         return ListRecentInternalAsync(take, ct);
     }
 
-    public Task<LocalNepRecord?> GetLocalRecordAsync(Guid localRecordId, CancellationToken ct = default) =>
-        _db.LocalNepRecords.AsNoTracking()
-            .FirstOrDefaultAsync(r => r.Id == localRecordId, ct);
+    /// <summary>
+    /// Lectura local acotada al usuario de la sesión UX vigente (FASE 2G).
+    /// No es autorización de servidor; evita exponer registros de otro usuario en el mismo dispositivo.
+    /// </summary>
+    public async Task<LocalNepRecord?> GetLocalRecordAsync(Guid localRecordId, CancellationToken ct = default)
+    {
+        var session = await _sessions.GetValidSessionAsync(ct);
+        if (session is null)
+        {
+            return null;
+        }
+
+        return await _db.LocalNepRecords.AsNoTracking()
+            .FirstOrDefaultAsync(r =>
+                r.Id == localRecordId && r.UserId == session.UserId, ct);
+    }
 
     private async Task<IReadOnlyList<LocalNepRecord>> ListEligibleAsync<TElig>(
         LocalSession session,
