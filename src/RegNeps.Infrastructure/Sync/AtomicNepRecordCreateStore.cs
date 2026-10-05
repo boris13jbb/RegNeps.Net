@@ -272,6 +272,15 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
         {
             await tx.RollbackAsync(ct);
             await using var read = await _factory.CreateDbContextAsync(ct);
+            // Reintento concurrente del mismo ClientOperationId: la TX que ganó el bloqueo de fila ya lo aplicó.
+            var processedConcurrently = opId is null
+                ? null
+                : await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
+            if (processedConcurrently is not null)
+            {
+                return await ResolveIdempotentUpsertAsync(read, processedConcurrently, fields.EntityId, ct);
+            }
+
             var current = await read.NepRecords.AsNoTracking()
                 .FirstOrDefaultAsync(r => r.Id == fields.EntityId, ct);
             if (current is null)
@@ -583,6 +592,15 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
         {
             await tx.RollbackAsync(ct);
             await using var read = await _factory.CreateDbContextAsync(ct);
+            // Reintento concurrente del mismo ClientOperationId: la TX que ganó el bloqueo de fila ya lo aplicó.
+            var processedConcurrently = opId is null
+                ? null
+                : await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
+            if (processedConcurrently is not null)
+            {
+                return await ResolveIdempotentUpsertAsync(read, processedConcurrently, entityId, ct);
+            }
+
             var current = await read.NepRecords.AsNoTracking()
                 .FirstOrDefaultAsync(r => r.Id == entityId, ct);
             if (current is null)

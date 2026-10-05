@@ -206,7 +206,7 @@ public sealed class SyncPersistence : ISyncPersistence
 
         while (authorized.Count < pageSize)
         {
-            var batch = await db.SyncChangeLogs.AsNoTracking()
+            var batch = await ChangeLogsForCursorScan(db).AsNoTracking()
                 .Where(c => c.Sequence > nextCursor)
                 .OrderBy(c => c.Sequence)
                 .Take(scanBatch)
@@ -263,6 +263,15 @@ public sealed class SyncPersistence : ISyncPersistence
             AuthorizedChanges = authorized
         };
     }
+
+    /// <summary>
+    /// EnsureCreated crea la base SQL Server con READ_COMMITTED_SNAPSHOT ON: sin lectura con bloqueo,
+    /// una Sequence menor aún sin confirmar quedaría invisible y el cursor la saltaría para siempre.
+    /// </summary>
+    private static IQueryable<SyncChangeLog> ChangeLogsForCursorScan(RegNepsDbContext db) =>
+        db.Database.IsSqlServer()
+            ? db.SyncChangeLogs.FromSqlRaw("SELECT * FROM [SyncChangeLogs] WITH (READCOMMITTEDLOCK)")
+            : db.SyncChangeLogs;
 
     public async Task<long> CountChangeLogsAsync(CancellationToken ct = default)
     {
