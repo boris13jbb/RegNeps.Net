@@ -80,7 +80,7 @@ Ejecutar en SSMS/`sqlcmd` contra `RegNeps_2H`.
 ```sql
 SELECT name FROM sys.tables
 WHERE name IN (
-  N'NepRecords', N'SyncChangeLogs', N'Fabrics', N'Lotes',
+  N'NepRecords', N'SyncChangeLogs', N'Fabrics', N'LoteTramaItems',
   N'Users', N'Roles', N'RolePermissions', N'RolePermissionAudits'
 )
 ORDER BY name;
