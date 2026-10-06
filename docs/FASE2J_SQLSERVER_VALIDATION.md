@@ -142,10 +142,35 @@ DeleteRecord): ahora son 19 ejecutados (537 en total) frente a 17 omitidos (535)
 
 ## FASE 2J.1 — Validación en instancia real de intranet
 
-**Resultado: BLOCKED** (2026-10-05). No hay acceso a la instancia SQL Server real de la intranet desde el equipo de
-validación. Según la regla de la fase, no se usó Express, LocalDB, SQLite ni mocks como sustituto.
+**Resultado final: PASS** (2026-10-05, HEAD `3f99e54`).
 
-### Evidencia del bloqueo
+El responsable del proyecto confirmó que `<SERVIDOR>\SA` **es el servidor SQL Server real de RegNeps**: la Web se
+ejecuta en el mismo equipo y se conecta en local. No existe otra instancia de intranet. La revalidación final sobre ese
+servidor por TCP dio:
+
+| Elemento | Valor |
+|---|---|
+| Servidor/instancia | `<SERVIDOR>\SA` (conexión de los tests: `tcp:[::1],1433`, TCP + NTLM) |
+| Versión / edición | SQL Server 2025 RTM-GDR 17.0.1135.8 / Express Edition (64-bit) |
+| Collation | `Modern_Spanish_CI_AS` |
+| RCSI | ON en las bases creadas por `EnsureCreated` (OFF en `model`) |
+| Suite SQL Server | 19 passed / 0 failed / 0 skipped |
+| Suite completa | 537/537 |
+| Web Release | 0 advertencias, 0 errores |
+| Bases `RegNeps_Validation%` restantes | 0 |
+
+Resultados por bloque:
+- **D1:** PASS en UpdateRecord, ApplyCorrective y DeleteRecord.
+- **D2:** PASS.
+- **Bootstrap, Pull/cursor, ClearAll/tombstones, paginación, catálogos y concurrencia:** PASS.
+
+**Exposición de red.** SQL Server escucha solo en loopback, porque solo se conecta la propia Web. Los clientes, Android
+incluido, usan la Web y no SQL Server. Si en el futuro otro equipo necesitara conectarse directamente, habría que
+habilitar la IP de LAN y una regla de firewall restringida a esa subred.
+
+Las subsecciones siguientes conservan el bloqueo registrado antes de esa confirmación.
+
+### Evidencia del bloqueo (antes de la confirmación)
 
 - `src/RegNeps.Web/appsettings.Production.json` y `docs/DESPLIEGUE_INTRANET.md` solo contienen el marcador
   `SERVIDOR\INSTANCIA`, sin nombre de servidor real.
