@@ -194,3 +194,10 @@ regla de firewall restringida a esa subred.
 - Si se acerca al límite de tamaño o el rendimiento no basta, la opción es migrar a Standard u otra edición superior. No
   requiere cambios de código: el esquema y el bootstrap son los mismos.
 
+### WARNING — Credencial inicial del administrador
+
+`DbSeeder.SeedAsync` crea el usuario `admin` (Super Administrador) con una contraseña por defecto que está en el código
+de `main` y, por tanto, es pública en el repositorio. Solo se aplica cuando no existe ningún Super Administrador activo.
+Antes de pasar a producción, hay que comprobar en el servidor real si `admin` conserva esa contraseña y, si es así,
+cambiarla desde la gestión de usuarios de la aplicación. Esta fase no modificó la credencial ni el seed.
+
