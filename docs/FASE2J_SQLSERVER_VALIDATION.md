@@ -57,7 +57,7 @@ Todas las pruebas están en `tests/RegNeps.Tests/SqlServer/` y se ejecutaron con
 | M | Paginación server-side: `ORDER BY CreatedAt DESC, Id DESC` con `OFFSET/FETCH` (SQL capturado), PageSize ≤ 100, COUNT, ownership, SeesAll, sin materializar todo | `Records_Server_Side_Pagination_Filters_Order_Ownership_And_SeesAll` | **PASS** |
 | N | Tela/LoteTrama emiten `CatalogUpserted`/`CatalogDeleted` y el Pull los entrega | `Fabric_And_Lote_Mutations_Emit_Catalog_ChangeLogs_And_Pull_Them` | **PASS** |
 | O | 8 escritores con el mismo stamp: exactamente 1 `Accepted` y el resto `Conflict` | `Concurrent_Updates_With_Same_Stamp_Exactly_One_Accepted_Rest_Conflict` | **PASS** |
-| O | 6 reintentos concurrentes del mismo `ClientOperationId` (Update y ApplyCorrective): 1 `Accepted` y 5 `Duplicate`, con 1 ChangeLog y 1 acción correctiva | `Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate` (teoría ×2) | **PASS tras corregir D1** |
+| O | Reintentos concurrentes del mismo `ClientOperationId` (Update, ApplyCorrective y Delete; 5 rondas × 8 escritores): 1 `Accepted` y 7 `Duplicate`, 0 `Conflict`, 1 ChangeLog y un único efecto | `Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate` (teoría ×3) | **PASS tras corregir D1 (2J y 2J.1)** |
 | P | Incompatibilidades SQLite → SQL Server | Sección 5 | **PASS CON WARNINGS** |
 | Q | `dotnet test` y Web Release | Sección 6 | **PASS** |
 
@@ -70,6 +70,30 @@ Todas las pruebas están en `tests/RegNeps.Tests/SqlServer/` y se ejecutaron con
 - **Corrección.** En ambos `catch (DbUpdateConcurrencyException)`, después del rollback, si hay opId se llama a `FindProcessedByClientOpAsync`. Si se encuentra, se devuelve el resultado idempotente existente (`ResolveIdempotentUpsertAsync`); si no, se mantiene el `Conflict` original. Archivo: `src/RegNeps.Infrastructure/Sync/AtomicNepRecordCreateStore.cs`.
 - **Prueba de regresión.** `Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate` (UpdateRecord y ApplyCorrective).
 - **Resultado.** PASS en SQL Server: 1 `Accepted` y 5 `Duplicate`. La suite SQLite completa sigue verde.
+- **Reapertura en 2J.1.** Al ejecutar por TCP (2J había usado memoria compartida), ApplyCorrective volvió a dar
+  `1 Accepted, 4 Duplicate, 1 Conflict CONCURRENCY`. Hubo una segunda carrera, distinta de la primera:
+  - La TX ganadora confirmaba **entre** la primera comprobación del opId y la lectura del registro.
+  - Con RCSI, la perdedora leía el stamp nuevo sin bloquearse y entraba en la rama «stamp distinto», que devolvía
+    `Conflict` sin volver a mirar el opId.
+  - En Delete, la rama equivalente es «registro ya borrado», que devolvía `Invalid ENTITY_DELETED`.
+- **Corrección 2J.1.** Se añade `FindProcessedAfterRaceAsync`, una segunda comprobación del `ClientOperationId` antes de
+  responder `Conflict` por stamp distinto en Update, ApplyCorrective y Delete, y antes de `ENTITY_DELETED` en Delete. La
+  reutilizan también los `catch (DbUpdateConcurrencyException)` de 2J.
+  - Si el opId ya está procesado, se devuelve el resultado idempotente existente (`ResolveIdempotentUpsertAsync` /
+    `ResolveIdempotentDelete`), sin mutación ni change log nuevos.
+  - Si no, el comportamiento es el de antes.
+  - No cambian el protocolo, los DTO ni el modelo de conflictos.
+- **Regresión 2J.1.** La teoría tiene ahora 3 casos (UpdateRecord, ApplyCorrective, DeleteRecord), con 5 rondas de 8
+  escritores cada uno. Cada ronda comprueba:
+  - 1 `Accepted`, 7 `Duplicate` y 0 `Conflict`;
+  - que un reintento posterior a la carrera da `Duplicate`;
+  - que hay un único change log y un único efecto en el registro;
+  - un control con otro opId y stamp obsoleto, que sigue siendo `Conflict` (o `ENTITY_DELETED` en Delete).
+- **Resultado 2J.1.** PASS por TCP (`tcp:[::1],1433`).
+  - Sin la corrección, la misma prueba falla en Update y ApplyCorrective con `Conflict CONCURRENCY`, así que la regresión
+    detecta el defecto.
+  - La carrera de Delete no llegó a reproducirse en 5 rondas: su rama queda cubierta por consistencia con las otras dos,
+    no por un fallo observado.
 
 ### D2 — El Pull podía saltarse para siempre una Sequence aún no confirmada
 
@@ -98,12 +122,13 @@ Todas las pruebas están en `tests/RegNeps.Tests/SqlServer/` y se ejecutaron con
 |---|---|
 | `dotnet test` con `REGNEPS_SQLSERVER_VALIDATION` | 536 superadas (518 + 18 casos SQL Server), 0 con error |
 | `dotnet test` sin la variable | 518 superadas, 17 omitidas (SQL Server), total 535, 0 con error |
+| `dotnet build src/RegNeps.Web/RegNeps.Web.csproj -c Release` | 0 advertencias, 0 errores |
 
 La diferencia 536 / 535 no es un test perdido: la suite SQL Server tiene 17 métodos. Uno de ellos es la teoría
-`Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate`, con 2 casos (UpdateRecord y
+`Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate`, que en 2J tenía 2 casos (UpdateRecord y
 ApplyCorrective). Cuando está omitida, xUnit no expande sus datos y la cuenta como 1 resultado; cuando se ejecuta, la
-cuenta como 2. Por eso hay 18 casos ejecutados frente a 17 omitidos.
-| `dotnet build src/RegNeps.Web/RegNeps.Web.csproj -c Release` | 0 advertencias, 0 errores |
+cuenta como 2. Por eso había 18 casos ejecutados frente a 17 omitidos. En 2J.1 la teoría pasó a tener 3 casos (se añadió
+DeleteRecord): ahora son 19 ejecutados (537 en total) frente a 17 omitidos (535).
 
 ## 7. Pendientes
 
@@ -173,7 +198,23 @@ No determinables sin acceso a la instancia real.
    dotnet test tests/RegNeps.Tests/RegNeps.Tests.csproj --filter "FullyQualifiedName~RegNeps.Tests.SqlServer"
    ```
 
-   Esperado: 18 superadas, 0 con error. La suite crea y elimina sus propias bases y no toca la productiva.
+   Esperado: 19 superadas, 0 con error. La suite crea y elimina sus propias bases y no toca la productiva.
 
    Si la instancia de intranet tiene RCSI OFF por defecto en `model`, la prueba D2 lo detecta igualmente: las bases las
    crea `EnsureCreated` y EF Core activa RCSI al crearlas.
+
+### Revalidación local por TCP (2026-10-05)
+
+La instancia sigue siendo **local**, no de intranet: esto no cambia el estado BLOCKED de 2J.1 respecto a la intranet.
+
+- **Instancia:** `<SERVIDOR>\SA`, SQL Server 2025 Express 17.0.1135.8, `Modern_Spanish_CI_AS`.
+- **TCP:** 1433 estático, solo en loopback (`127.0.0.1` y `::1`). SQL Browser deshabilitado y sin reglas de firewall.
+- **Autenticación:** Windows (NTLM).
+- **Cadena de los tests:** `Server=tcp:[::1],1433;Integrated Security=True;TrustServerCertificate=True;Encrypt=False`.
+  Con autenticación integrada, `127.0.0.1,1433` falla con el error 18452 y `localhost,1433` es rechazado por SqlClient.
+- **Primera ejecución por TCP:** 17/18 superadas. Falló D1 en ApplyCorrective; ver la reapertura de D1 en la sección 4.
+- **Tras la corrección:**
+  - suite SQL Server: 19 superadas, 0 con error, 0 omitidas;
+  - suite completa: 537/537;
+  - sin la variable: 518 superadas y 17 omitidas;
+  - Web Release: 0 advertencias, 0 errores.

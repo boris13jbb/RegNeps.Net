@@ -747,44 +747,107 @@ public sealed class SqlServerSync2JTests
     }
 
     /// <summary>
-    /// Regresión FASE 2J: en SQL Server el reintento que espera el bloqueo de fila recibía
-    /// DbUpdateConcurrencyException y devolvía Conflict en lugar de Duplicate.
+    /// Regresión D1 (FASE 2J / 2J.1): reintentos concurrentes del mismo ClientOperationId. Por TCP + RCSI la
+    /// TX ganadora puede confirmar después de la primera comprobación del opId; la perdedora no debe responder
+    /// Conflict (stamp distinto) ni ENTITY_DELETED (Delete), sino Duplicate. Varias rondas por la naturaleza
+    /// temporal de la carrera.
     /// </summary>
     [SqlServerTheory]
     [InlineData(SyncConstants.OperationUpdateRecord)]
     [InlineData(SyncConstants.OperationApplyCorrective)]
+    [InlineData(SyncConstants.OperationDeleteRecord)]
     public async Task Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate(string operationType)
     {
         await using var db = await StartAsync("concurrency_op");
         var admin = await db.CreateActorAsync("conc_op_admin", AppUserRole.Admin);
-        var (id, stamp) = await CreateViaPushAsync(db.Sync(), admin, 12);
-        var opId = NewOp();
-        var request = operationType == SyncConstants.OperationUpdateRecord
-            ? PushUpdate(opId, id, stamp, 30)
-            : PushCorrective(opId, id, stamp, "Ajuste concurrente", "QA");
+        const int rounds = 5;
+        const int writers = 8;
 
-        const int writers = 6;
-        var services = Enumerable.Range(0, writers).Select(_ => db.Sync()).ToList();
-        using var gate = new SemaphoreSlim(0);
-        var tasks = services.Select(svc => Task.Run(async () =>
+        for (var round = 1; round <= rounds; round++)
         {
-            await gate.WaitAsync();
-            return Assert.Single((await svc.PushAsync(request, admin, "retry")).Results);
-        })).ToList();
-        gate.Release(writers);
-        var results = await Task.WhenAll(tasks);
+            var (id, stamp) = await CreateViaPushAsync(db.Sync(), admin, 12);
+            var opId = NewOp();
+            var logsBefore = await db.ScalarAsync<int>("SELECT COUNT(*) FROM SyncChangeLogs");
+            var request = RetryRequest(operationType, opId, id, stamp);
 
-        foreach (var r in results)
-        {
-            _output.WriteLine($"{r.Result} {r.ErrorCode}");
+            var services = Enumerable.Range(0, writers).Select(_ => db.Sync()).ToList();
+            using var gate = new SemaphoreSlim(0);
+            var tasks = services.Select(svc => Task.Run(async () =>
+            {
+                await gate.WaitAsync();
+                return Assert.Single((await svc.PushAsync(request, admin, "retry")).Results);
+            })).ToList();
+            gate.Release(writers);
+            var results = await Task.WhenAll(tasks);
+            _output.WriteLine($"{operationType} ronda {round}: " +
+                              string.Join(", ", results.Select(r => $"{r.Result} {r.ErrorCode}".Trim())));
+
+            var accepted = Assert.Single(results, r => r.Result == nameof(SyncOperationResult.Accepted));
+            Assert.Equal(0, results.Count(r => r.Result == nameof(SyncOperationResult.Conflict)));
+            Assert.Equal(writers - 1, results.Count(r => r.Result == nameof(SyncOperationResult.Duplicate)));
+
+            var lateRetry = Assert.Single((await db.Sync().PushAsync(request, admin, "late")).Results);
+            Assert.Equal(nameof(SyncOperationResult.Duplicate), lateRetry.Result);
+
+            Assert.Equal(1, await db.ScalarAsync<int>($"SELECT COUNT(*) FROM SyncChangeLogs WHERE ClientOperationId = N'{opId}'"));
+            Assert.Equal(logsBefore + 1, await db.ScalarAsync<int>("SELECT COUNT(*) FROM SyncChangeLogs"));
+            await AssertSingleEffectAsync(db, operationType, id, accepted);
+
+            // Control: otro ClientOperationId con el stamp ya obsoleto no se convierte en Duplicate.
+            var control = Assert.Single((await db.Sync().PushAsync(
+                RetryRequest(operationType, NewOp(), id, stamp), admin, "control")).Results);
+            if (operationType == SyncConstants.OperationDeleteRecord)
+            {
+                Assert.Equal(nameof(SyncOperationResult.Invalid), control.Result);
+                Assert.Equal("ENTITY_DELETED", control.ErrorCode);
+            }
+            else
+            {
+                Assert.Equal(nameof(SyncOperationResult.Conflict), control.Result);
+                Assert.Equal(accepted.ConcurrencyStamp, control.ServerConcurrencyStamp);
+            }
+
+            Assert.Equal(logsBefore + 1, await db.ScalarAsync<int>("SELECT COUNT(*) FROM SyncChangeLogs"));
         }
+    }
 
-        Assert.Single(results, r => r.Result == nameof(SyncOperationResult.Accepted));
-        Assert.Equal(writers - 1, results.Count(r => r.Result == nameof(SyncOperationResult.Duplicate)));
-        Assert.Equal(1, await db.ScalarAsync<int>($"SELECT COUNT(*) FROM SyncChangeLogs WHERE ClientOperationId = N'{opId}'"));
-        Assert.Equal(
-            operationType == SyncConstants.OperationApplyCorrective ? 1 : 0,
-            await db.ScalarAsync<int>($"SELECT COUNT(*) FROM CorrectiveActions WHERE NepRecordId = '{id}'"));
+    private static SyncPushRequest RetryRequest(string operationType, string opId, Guid id, string stamp) =>
+        operationType switch
+        {
+            SyncConstants.OperationUpdateRecord => PushUpdate(opId, id, stamp, 30),
+            SyncConstants.OperationApplyCorrective => PushCorrective(opId, id, stamp, "Ajuste concurrente", "QA"),
+            SyncConstants.OperationDeleteRecord => PushDelete(opId, id, stamp),
+            _ => throw new ArgumentOutOfRangeException(nameof(operationType), operationType, null)
+        };
+
+    private static async Task AssertSingleEffectAsync(
+        SqlServerValidationDatabase db, string operationType, Guid id, SyncOperationResultDto accepted)
+    {
+        var records = await db.ScalarAsync<int>($"SELECT COUNT(*) FROM NepRecords WHERE Id = '{id}'");
+        var tombstones = await db.ScalarAsync<int>(
+            $"SELECT COUNT(*) FROM SyncChangeLogs WHERE EntityId = '{id}' AND ChangeType = N'{SyncConstants.ChangeRecordDeleted}'");
+        var correctives = await db.ScalarAsync<int>($"SELECT COUNT(*) FROM CorrectiveActions WHERE NepRecordId = '{id}'");
+
+        switch (operationType)
+        {
+            case SyncConstants.OperationDeleteRecord:
+                Assert.Equal(0, records);
+                Assert.Equal(1, tombstones);
+                break;
+            case SyncConstants.OperationApplyCorrective:
+                Assert.Equal(1, records);
+                Assert.Equal(1, correctives);
+                Assert.Equal(accepted.ConcurrencyStamp,
+                    (await db.StringsAsync($"SELECT ConcurrencyStamp FROM NepRecords WHERE Id = '{id}'")).Single());
+                break;
+            default:
+                Assert.Equal(1, records);
+                Assert.Equal(0, correctives);
+                Assert.Equal(30, await db.ScalarAsync<double>($"SELECT Neps FROM NepRecords WHERE Id = '{id}'"));
+                Assert.Equal(accepted.ConcurrencyStamp,
+                    (await db.StringsAsync($"SELECT ConcurrencyStamp FROM NepRecords WHERE Id = '{id}'")).Single());
+                break;
+        }
     }
 
     // ---------- Helpers ----------

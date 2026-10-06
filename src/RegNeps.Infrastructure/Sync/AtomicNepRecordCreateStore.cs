@@ -221,6 +221,15 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             if (stamp is not null
                 && !string.Equals(entity.ConcurrencyStamp, stamp, StringComparison.Ordinal))
             {
+                var processedConcurrently = await FindProcessedAfterRaceAsync(db, actor.UserId, opId, ct);
+                if (processedConcurrently is not null)
+                {
+                    var idempotent = await ResolveIdempotentUpsertAsync(
+                        db, processedConcurrently, fields.EntityId, ct);
+                    await tx.CommitAsync(ct);
+                    return idempotent;
+                }
+
                 var snapshot = SyncNepRecordPayloadMapper.ToPayloadJson(entity);
                 await tx.CommitAsync(ct);
                 return new AtomicNepRecordMutationResult
@@ -272,10 +281,7 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
         {
             await tx.RollbackAsync(ct);
             await using var read = await _factory.CreateDbContextAsync(ct);
-            // Reintento concurrente del mismo ClientOperationId: la TX que ganó el bloqueo de fila ya lo aplicó.
-            var processedConcurrently = opId is null
-                ? null
-                : await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
+            var processedConcurrently = await FindProcessedAfterRaceAsync(read, actor.UserId, opId, ct);
             if (processedConcurrently is not null)
             {
                 return await ResolveIdempotentUpsertAsync(read, processedConcurrently, fields.EntityId, ct);
@@ -367,7 +373,15 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             if (entity is null)
             {
                 var tombstone = await FindLatestTombstoneAsync(db, entityId, ct);
+                var processedConcurrently = tombstone is null
+                    ? null
+                    : await FindProcessedAfterRaceAsync(db, actor.UserId, opId, ct);
                 await tx.CommitAsync(ct);
+                if (processedConcurrently is not null)
+                {
+                    return ResolveIdempotentDelete(processedConcurrently, entityId);
+                }
+
                 if (tombstone is not null)
                 {
                     // Otro ClientOperationId / borrado previo: no re-tumbstone.
@@ -405,8 +419,14 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             if (stamp is not null
                 && !string.Equals(entity.ConcurrencyStamp, stamp, StringComparison.Ordinal))
             {
-                var snapshot = SyncNepRecordPayloadMapper.ToPayloadJson(entity);
+                var processedConcurrently = await FindProcessedAfterRaceAsync(db, actor.UserId, opId, ct);
                 await tx.CommitAsync(ct);
+                if (processedConcurrently is not null)
+                {
+                    return ResolveIdempotentDelete(processedConcurrently, entityId);
+                }
+
+                var snapshot = SyncNepRecordPayloadMapper.ToPayloadJson(entity);
                 return new AtomicNepRecordMutationResult
                 {
                     Result = SyncOperationResult.Conflict,
@@ -537,6 +557,15 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             if (stamp is not null
                 && !string.Equals(entity.ConcurrencyStamp, stamp, StringComparison.Ordinal))
             {
+                var processedConcurrently = await FindProcessedAfterRaceAsync(db, actor.UserId, opId, ct);
+                if (processedConcurrently is not null)
+                {
+                    var idempotent = await ResolveIdempotentUpsertAsync(
+                        db, processedConcurrently, entityId, ct);
+                    await tx.CommitAsync(ct);
+                    return idempotent;
+                }
+
                 var snapshot = SyncNepRecordPayloadMapper.ToPayloadJson(entity);
                 await tx.CommitAsync(ct);
                 return new AtomicNepRecordMutationResult
@@ -592,10 +621,7 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
         {
             await tx.RollbackAsync(ct);
             await using var read = await _factory.CreateDbContextAsync(ct);
-            // Reintento concurrente del mismo ClientOperationId: la TX que ganó el bloqueo de fila ya lo aplicó.
-            var processedConcurrently = opId is null
-                ? null
-                : await FindProcessedByClientOpAsync(read, actor.UserId, opId, ct);
+            var processedConcurrently = await FindProcessedAfterRaceAsync(read, actor.UserId, opId, ct);
             if (processedConcurrently is not null)
             {
                 return await ResolveIdempotentUpsertAsync(read, processedConcurrently, entityId, ct);
@@ -818,6 +844,19 @@ public sealed class AtomicNepRecordCreateStore : IAtomicNepRecordCreateStore
             .FirstOrDefaultAsync(c =>
                 c.ActorUserId == actorUserId
                 && c.ClientOperationId == clientOperationId, ct);
+
+    /// <summary>
+    /// Segunda comprobación del ClientOperationId antes de responder Conflict o ENTITY_DELETED: la TX que ganó
+    /// la carrera con el mismo opId puede confirmar después de la primera comprobación (TCP + RCSI).
+    /// </summary>
+    private static async Task<SyncChangeLog?> FindProcessedAfterRaceAsync(
+        RegNepsDbContext db,
+        string actorUserId,
+        string? clientOperationId,
+        CancellationToken ct) =>
+        clientOperationId is null
+            ? null
+            : await FindProcessedByClientOpAsync(db, actorUserId, clientOperationId, ct);
 
     private static Task<SyncChangeLog?> FindLatestTombstoneAsync(
         RegNepsDbContext db,
