@@ -96,8 +96,13 @@ Todas las pruebas están en `tests/RegNeps.Tests/SqlServer/` y se ejecutaron con
 
 | Comando | Resultado |
 |---|---|
-| `dotnet test` con `REGNEPS_SQLSERVER_VALIDATION` | 536 superadas, 0 con error |
-| `dotnet test` sin la variable | 518 superadas, 17 omitidas (SQL Server), 0 con error |
+| `dotnet test` con `REGNEPS_SQLSERVER_VALIDATION` | 536 superadas (518 + 18 casos SQL Server), 0 con error |
+| `dotnet test` sin la variable | 518 superadas, 17 omitidas (SQL Server), total 535, 0 con error |
+
+La diferencia 536 / 535 no es un test perdido: la suite SQL Server tiene 17 métodos. Uno de ellos es la teoría
+`Concurrent_Retries_With_Same_ClientOperationId_One_Accepted_Others_Duplicate`, con 2 casos (UpdateRecord y
+ApplyCorrective). Cuando está omitida, xUnit no expande sus datos y la cuenta como 1 resultado; cuando se ejecuta, la
+cuenta como 2. Por eso hay 18 casos ejecutados frente a 17 omitidos.
 | `dotnet build src/RegNeps.Web/RegNeps.Web.csproj -c Release` | 0 advertencias, 0 errores |
 
 ## 7. Pendientes
@@ -109,3 +114,66 @@ Todas las pruebas están en `tests/RegNeps.Tests/SqlServer/` y se ejecutaron con
 | Repetir esta suite en la instancia intranet real (versión y collation de destino) | **PENDING** |
 | Parte O: concurrencia real (stamps, reintentos por opId) | PASS |
 | Resto de partes A–N | PASS |
+
+## FASE 2J.1 — Validación en instancia real de intranet
+
+**Resultado: BLOCKED** (2026-10-05). No hay acceso a la instancia SQL Server real de la intranet desde el equipo de
+validación. Según la regla de la fase, no se usó Express, LocalDB, SQLite ni mocks como sustituto.
+
+### Evidencia del bloqueo
+
+- `src/RegNeps.Web/appsettings.Production.json` y `docs/DESPLIEGUE_INTRANET.md` solo contienen el marcador
+  `SERVIDOR\INSTANCIA`, sin nombre de servidor real.
+- `RegNeps.Web` no tiene User Secrets (`UserSecretsId` no configurado).
+- No existen variables de entorno `REGNEPS_*`, `ConnectionStrings__*` ni `Database__*` en los ámbitos de usuario, máquina
+  o proceso.
+- El único servicio SQL del equipo es `MSSQL$SA`, el SQL Server 2025 Express local ya usado en 2J.
+- `sqlcmd -L` no devuelve ningún servidor anunciado en la red.
+
+### Entorno
+
+| Elemento | Valor |
+|---|---|
+| SQL Server / versión / edición | BLOCKED — no identificado |
+| Instancia | BLOCKED — no proporcionada |
+| Collation | BLOCKED |
+| RCSI | BLOCKED |
+| BD de validación | No creada |
+
+### Tests
+
+```text
+SQL Server suite (instancia intranet): no ejecutada — BLOCKED
+Regresión local sin variable: 518 passed / 0 failed / 17 skipped / 535 total
+```
+
+| Bloque | Estado |
+|---|---|
+| D1 — idempotencia concurrente | BLOCKED |
+| D2 — Pull sin saltos con RCSI | BLOCKED |
+| Bootstrap | BLOCKED |
+| Pull/cursor | BLOCKED |
+| Concurrencia | BLOCKED |
+| Collation | BLOCKED |
+| Web Release | 0 advertencias, 0 errores |
+
+### Diferencias respecto a Express local
+
+No determinables sin acceso a la instancia real.
+
+### Para desbloquear
+
+1. Obtener el nombre `SERVIDOR\INSTANCIA` de la intranet y una cuenta con permiso para crear y borrar bases
+   `RegNeps_Validation_2J_*`, con autenticación integrada o credenciales fuera del repositorio.
+2. Ejecutar las consultas de identificación de la instancia, en la Parte C del encargo 2J.1.
+3. Ejecutar la suite:
+
+   ```powershell
+   $env:REGNEPS_SQLSERVER_VALIDATION = "Server=<SERVIDOR\INSTANCIA>;Integrated Security=True;TrustServerCertificate=True;Encrypt=False"
+   dotnet test tests/RegNeps.Tests/RegNeps.Tests.csproj --filter "FullyQualifiedName~RegNeps.Tests.SqlServer"
+   ```
+
+   Esperado: 18 superadas, 0 con error. La suite crea y elimina sus propias bases y no toca la productiva.
+
+   Si la instancia de intranet tiene RCSI OFF por defecto en `model`, la prueba D2 lo detecta igualmente: las bases las
+   crea `EnsureCreated` y EF Core activa RCSI al crearlas.
