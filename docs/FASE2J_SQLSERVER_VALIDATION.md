@@ -1,6 +1,7 @@
 # FASE 2J — Validación física SQL Server
 
-**Gate final: PASS CON WARNINGS**
+**Gate final FASE 2J: PASS CON WARNINGS.** **FASE 2J.1** (revalidación en el servidor real): **PASS**, en la sección
+final.
 
 Se encontraron 2 defectos reales, visibles solo en SQL Server. Ambos se corrigieron con un cambio mínimo, tienen prueba de regresión y se revalidaron en SQL Server real. No se tocó el protocolo Push/Pull, el modelo de conflictos, los tombstones, los criterios NEPS, los permisos, SignalR, OfflineStore ni la estrategia `EnsureCreated + patches`.
 
@@ -114,7 +115,7 @@ Todas las pruebas están en `tests/RegNeps.Tests/SqlServer/` y se ejecutaron con
 - **W7.** Un rollback deja huecos en IDENTITY. El cursor los tolera, pero no debe suponerse continuidad de `Sequence`.
 - **W8.** Tras D2, un Pull concurrente espera a que terminen las transacciones de escritura abiertas (p. ej. un ClearAll con muchos tombstones). Queda una ventana teórica, no reproducida, entre la asignación de IDENTITY y el bloqueo de la fila dentro de la misma sentencia.
 - **W9.** Las consultas a `sys.*` mezclan el collation del catálogo (`Latin1_General_CI_AS_KS_WS`) con el de la base y requieren `COLLATE DATABASE_DEFAULT`. Afectó solo al arnés de pruebas, no al producto.
-- **W10.** La validación se hizo en SQL Server 2025 Express local. Una base intranet creada previamente por un DBA puede tener RCSI OFF; la corrección D2 funciona en ambos casos.
+- **W10.** La validación se hizo en SQL Server 2025 Express, que en 2J.1 se confirmó como el servidor real de RegNeps. Una base creada previamente por un DBA puede tener RCSI OFF; la corrección D2 funciona en ambos casos. Los límites de capacidad de Express se detallan en la sección 2J.1.
 
 ## 6. Pruebas y build
 
@@ -136,17 +137,17 @@ DeleteRecord): ahora son 19 ejecutados (537 en total) frente a 17 omitidos (535)
 |---|---|
 | Android E2E (FASE 2K) | **PENDING** |
 | Prueba de carga formal (volumen/latencia) | **PENDING** |
-| Repetir esta suite en la instancia intranet real (versión y collation de destino) | **PENDING** |
+| Repetir esta suite en el servidor real (versión y collation de destino) | PASS (FASE 2J.1) |
 | Parte O: concurrencia real (stamps, reintentos por opId) | PASS |
 | Resto de partes A–N | PASS |
 
-## FASE 2J.1 — Validación en instancia real de intranet
+## FASE 2J.1 — Validación en el servidor SQL Server real
 
-**Resultado final: PASS** (2026-10-05, HEAD `3f99e54`).
+**Resultado final: PASS** (2026-10-05, código validado en `3f99e54`).
 
-El responsable del proyecto confirmó que `<SERVIDOR>\SA` **es el servidor SQL Server real de RegNeps**: la Web se
-ejecuta en el mismo equipo y se conecta en local. No existe otra instancia de intranet. La revalidación final sobre ese
-servidor por TCP dio:
+El responsable del proyecto confirmó que la instancia `<SERVIDOR>\SA` **es el servidor SQL Server real de RegNeps**. La
+Web se ejecuta en el mismo equipo y se conecta en local, y no existe otra instancia de intranet. La revalidación final
+sobre ese servidor por TCP dio:
 
 | Elemento | Valor |
 |---|---|
@@ -160,86 +161,36 @@ servidor por TCP dio:
 | Bases `RegNeps_Validation%` restantes | 0 |
 
 Resultados por bloque:
-- **D1:** PASS en UpdateRecord, ApplyCorrective y DeleteRecord.
+- **D1:** PASS en UpdateRecord, ApplyCorrective y DeleteRecord, incluida la reapertura por TCP descrita en la sección 4.
 - **D2:** PASS.
 - **Bootstrap, Pull/cursor, ClearAll/tombstones, paginación, catálogos y concurrencia:** PASS.
 
-**Exposición de red.** SQL Server escucha solo en loopback, porque solo se conecta la propia Web. Los clientes, Android
-incluido, usan la Web y no SQL Server. Si en el futuro otro equipo necesitara conectarse directamente, habría que
-habilitar la IP de LAN y una regla de firewall restringida a esa subred.
+**Historial.** Antes de esa confirmación, 2J.1 se registró como BLOCKED porque el repositorio solo contenía el marcador
+`SERVIDOR\INSTANCIA` y no se conocía otra instancia. El bloqueo quedó resuelto al identificar este servidor como el real.
 
-Las subsecciones siguientes conservan el bloqueo registrado antes de esa confirmación.
+### Configuración TCP del servidor
 
-### Evidencia del bloqueo (antes de la confirmación)
-
-- `src/RegNeps.Web/appsettings.Production.json` y `docs/DESPLIEGUE_INTRANET.md` solo contienen el marcador
-  `SERVIDOR\INSTANCIA`, sin nombre de servidor real.
-- `RegNeps.Web` no tiene User Secrets (`UserSecretsId` no configurado).
-- No existen variables de entorno `REGNEPS_*`, `ConnectionStrings__*` ni `Database__*` en los ámbitos de usuario, máquina
-  o proceso.
-- El único servicio SQL del equipo es `MSSQL$SA`, el SQL Server 2025 Express local ya usado en 2J.
-- `sqlcmd -L` no devuelve ningún servidor anunciado en la red.
-
-### Entorno
-
-| Elemento | Valor |
-|---|---|
-| SQL Server / versión / edición | BLOCKED — no identificado |
-| Instancia | BLOCKED — no proporcionada |
-| Collation | BLOCKED |
-| RCSI | BLOCKED |
-| BD de validación | No creada |
-
-### Tests
-
-```text
-SQL Server suite (instancia intranet): no ejecutada — BLOCKED
-Regresión local sin variable: 518 passed / 0 failed / 17 skipped / 535 total
-```
-
-| Bloque | Estado |
-|---|---|
-| D1 — idempotencia concurrente | BLOCKED |
-| D2 — Pull sin saltos con RCSI | BLOCKED |
-| Bootstrap | BLOCKED |
-| Pull/cursor | BLOCKED |
-| Concurrencia | BLOCKED |
-| Collation | BLOCKED |
-| Web Release | 0 advertencias, 0 errores |
-
-### Diferencias respecto a Express local
-
-No determinables sin acceso a la instancia real.
-
-### Para desbloquear
-
-1. Obtener el nombre `SERVIDOR\INSTANCIA` de la intranet y una cuenta con permiso para crear y borrar bases
-   `RegNeps_Validation_2J_*`, con autenticación integrada o credenciales fuera del repositorio.
-2. Ejecutar las consultas de identificación de la instancia, en la Parte C del encargo 2J.1.
-3. Ejecutar la suite:
-
-   ```powershell
-   $env:REGNEPS_SQLSERVER_VALIDATION = "Server=<SERVIDOR\INSTANCIA>;Integrated Security=True;TrustServerCertificate=True;Encrypt=False"
-   dotnet test tests/RegNeps.Tests/RegNeps.Tests.csproj --filter "FullyQualifiedName~RegNeps.Tests.SqlServer"
-   ```
-
-   Esperado: 19 superadas, 0 con error. La suite crea y elimina sus propias bases y no toca la productiva.
-
-   Si la instancia de intranet tiene RCSI OFF por defecto en `model`, la prueba D2 lo detecta igualmente: las bases las
-   crea `EnsureCreated` y EF Core activa RCSI al crearlas.
-
-### Revalidación local por TCP (2026-10-05)
-
-La instancia sigue siendo **local**, no de intranet: esto no cambia el estado BLOCKED de 2J.1 respecto a la intranet.
-
-- **Instancia:** `<SERVIDOR>\SA`, SQL Server 2025 Express 17.0.1135.8, `Modern_Spanish_CI_AS`.
-- **TCP:** 1433 estático, solo en loopback (`127.0.0.1` y `::1`). SQL Browser deshabilitado y sin reglas de firewall.
-- **Autenticación:** Windows (NTLM).
+- **TCP:** 1433 estático, solo en loopback (`127.0.0.1` y `::1`). Las IP de LAN están deshabilitadas, SQL Browser está
+  deshabilitado y no hay reglas de firewall para SQL Server.
+- **Autenticación:** Windows (NTLM). El SPN no está registrado, así que no hay Kerberos.
 - **Cadena de los tests:** `Server=tcp:[::1],1433;Integrated Security=True;TrustServerCertificate=True;Encrypt=False`.
   Con autenticación integrada, `127.0.0.1,1433` falla con el error 18452 y `localhost,1433` es rechazado por SqlClient.
-- **Primera ejecución por TCP:** 17/18 superadas. Falló D1 en ApplyCorrective; ver la reapertura de D1 en la sección 4.
-- **Tras la corrección:**
-  - suite SQL Server: 19 superadas, 0 con error, 0 omitidas;
-  - suite completa: 537/537;
-  - sin la variable: 518 superadas y 17 omitidas;
-  - Web Release: 0 advertencias, 0 errores.
+- **Primera ejecución por TCP:** 17/18 superadas, porque falló D1 en ApplyCorrective (sección 4). Tras la corrección:
+  19/19.
+
+### Exposición de red
+
+SQL Server escucha solo en loopback, porque solo se conecta la propia Web. Los clientes, Android incluido, usan la Web y
+no SQL Server. Si en el futuro otro equipo necesitara conectarse directamente, habría que habilitar la IP de LAN y una
+regla de firewall restringida a esa subred.
+
+### Limitaciones de capacidad (SQL Server Express)
+
+- La edición Express limita cada base a **10 GB** de datos y restringe el uso de CPU y de memoria del buffer pool. Con
+  crecimiento sostenido de `NepRecords` y `SyncChangeLogs`, conviene vigilar el tamaño de la base.
+- Esta validación es **funcional y de concurrencia controlada**, no de carga ni de rendimiento. La prueba de carga formal
+  (volumen, latencia y muchos dispositivos sincronizando a la vez) sigue **PENDING** y sus resultados en Express no
+  serían extrapolables a una edición superior.
+- Si se acerca al límite de tamaño o el rendimiento no basta, la opción es migrar a Standard u otra edición superior. No
+  requiere cambios de código: el esquema y el bootstrap son los mismos.
+
