@@ -1,8 +1,10 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
+using RegNeps.Domain.Services;
 using RegNeps.Infrastructure.Persistence;
 using RegNeps.Infrastructure.Repositories;
 
@@ -29,7 +31,7 @@ public class RecordFilterTests : IAsyncLifetime
         await DbSeeder.SeedAsync(db);
 
         var now = DateTime.UtcNow;
-        // Muchos normales antiguos + críticos recientes: el Take antiguo fallaba al filtrar alerta en memoria.
+        // Muchos OK antiguos + críticos recientes: el Take antiguo fallaba al filtrar alerta en memoria.
         for (var i = 0; i < 40; i++)
         {
             db.NepRecords.Add(new NepRecord
@@ -47,12 +49,23 @@ public class RecordFilterTests : IAsyncLifetime
         db.NepRecords.Add(new NepRecord
         {
             Telar = "t-crit",
-            Neps = 75,
+            Neps = 50,
             Tela = "DENIM",
             LoteTrama = "63E26401",
             Turno = "b",
             Operario = "OP2",
             CreatedAt = now.AddMinutes(-5),
+            RevisadoPorSupervisor = false
+        });
+        db.NepRecords.Add(new NepRecord
+        {
+            Telar = "t-2da",
+            Neps = 75,
+            Tela = "DENIM",
+            LoteTrama = "63E26401",
+            Turno = "b",
+            Operario = "OP2",
+            CreatedAt = now.AddMinutes(-4),
             RevisadoPorSupervisor = false
         });
         db.NepRecords.Add(new NepRecord
@@ -95,18 +108,42 @@ public class RecordFilterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task AlertLevel_Critico_Is_Applied_In_Sql_Before_Take()
+    public async Task AlertLevel_CriticalAdjustment_Is_Applied_In_Sql_Before_Take()
     {
         var repo = CreateRepo();
         var result = await repo.QueryAsync(
-            new RecordFilters { AlertLevel = AlertLevel.Critico },
+            new RecordFilters { AlertLevel = AlertLevel.CriticalAdjustment },
             viewerUserId: null,
             viewerSeesAll: true,
             take: 10);
 
         Assert.NotEmpty(result);
-        Assert.All(result, r => Assert.True(r.Neps >= 60.5));
+        Assert.All(result, r =>
+        {
+            Assert.True(r.Neps >= NepsQualityCriteria.MentionNepsExclusiveUpper);
+            Assert.True(r.Neps < NepsQualityCriteria.CriticalAdjustmentNepsExclusiveUpper);
+            Assert.Equal(AlertLevel.CriticalAdjustment, AlertEvaluator.GetLevel(r.Neps));
+        });
         Assert.Contains(result, r => r.Telar.Equals("t-crit", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AlertLevel_SecondQuality_Is_Applied_In_Sql_Before_Take()
+    {
+        var repo = CreateRepo();
+        var result = await repo.QueryAsync(
+            new RecordFilters { AlertLevel = AlertLevel.SecondQuality },
+            viewerUserId: null,
+            viewerSeesAll: true,
+            take: 10);
+
+        Assert.NotEmpty(result);
+        Assert.All(result, r =>
+        {
+            Assert.True(r.Neps >= NepsQualityCriteria.CriticalAdjustmentNepsExclusiveUpper);
+            Assert.Equal(AlertLevel.SecondQuality, AlertEvaluator.GetLevel(r.Neps));
+        });
+        Assert.Contains(result, r => r.Telar.Equals("t-2da", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -120,7 +157,7 @@ public class RecordFilterTests : IAsyncLifetime
             50);
 
         Assert.Single(result);
-        Assert.Equal(75, result[0].Neps);
+        Assert.Equal(50, result[0].Neps);
     }
 
     [Fact]
@@ -128,7 +165,7 @@ public class RecordFilterTests : IAsyncLifetime
     {
         var repo = CreateRepo();
         var result = await repo.QueryAsync(
-            new RecordFilters { Tela = "denim", Turno = "B" },
+            new RecordFilters { Tela = "denim", Turno = "B", AlertLevel = AlertLevel.CriticalAdjustment },
             null,
             true,
             50);
@@ -138,7 +175,7 @@ public class RecordFilterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SoloPendientes_Excludes_Reviewed_And_Normal()
+    public async Task SoloPendientes_Excludes_Reviewed_And_Ok()
     {
         var repo = CreateRepo();
         var result = await repo.QueryAsync(
@@ -147,9 +184,9 @@ public class RecordFilterTests : IAsyncLifetime
             true,
             50);
 
-        Assert.Equal(2, result.Count);
+        Assert.Equal(3, result.Count);
         Assert.DoesNotContain(result, r => r.RevisadoPorSupervisor);
-        Assert.DoesNotContain(result, r => r.Neps < 30.5);
+        Assert.DoesNotContain(result, r => r.Neps < NepsQualityCriteria.OkNepsExclusiveUpper);
     }
 
     [Fact]
@@ -167,21 +204,34 @@ public class RecordFilterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Boundary_Neps_30_Is_Normal_And_60_Is_Advertencia()
+    public async Task Boundary_Official_Q_Bands_Match_Sql_And_Memory()
     {
         await using var db = new RegNepsDbContext(_options);
         db.NepRecords.AddRange(
-            new NepRecord { Telar = "B30", Neps = 30, CreatedAt = DateTime.UtcNow },
-            new NepRecord { Telar = "B60", Neps = 60, CreatedAt = DateTime.UtcNow });
+            new NepRecord { Telar = "BQ18", Neps = 18, CreatedAt = DateTime.UtcNow },
+            new NepRecord { Telar = "BQ19", Neps = 19, CreatedAt = DateTime.UtcNow },
+            new NepRecord { Telar = "BQ45", Neps = 45, CreatedAt = DateTime.UtcNow },
+            new NepRecord { Telar = "BQ46", Neps = 46, CreatedAt = DateTime.UtcNow },
+            new NepRecord { Telar = "BQ54", Neps = 54, CreatedAt = DateTime.UtcNow },
+            new NepRecord { Telar = "BQ55", Neps = 55, CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
 
         var repo = CreateRepo();
-        var normals = await repo.QueryAsync(
-            new RecordFilters { AlertLevel = AlertLevel.Normal, Telar = "B30" }, null, true, 10);
-        var warns = await repo.QueryAsync(
-            new RecordFilters { AlertLevel = AlertLevel.Advertencia, Telar = "B60" }, null, true, 10);
 
-        Assert.Single(normals);
-        Assert.Single(warns);
+        async Task AssertBand(AlertLevel level, string telar, double neps)
+        {
+            var sql = await repo.QueryAsync(
+                new RecordFilters { AlertLevel = level, Telar = telar }, null, true, 10);
+            Assert.Single(sql);
+            Assert.Equal(neps, sql[0].Neps);
+            Assert.Equal(level, AlertEvaluator.GetLevel(neps));
+        }
+
+        await AssertBand(AlertLevel.Ok, "BQ18", 18);
+        await AssertBand(AlertLevel.Mention, "BQ19", 19);
+        await AssertBand(AlertLevel.Mention, "BQ45", 45);
+        await AssertBand(AlertLevel.CriticalAdjustment, "BQ46", 46);
+        await AssertBand(AlertLevel.CriticalAdjustment, "BQ54", 54);
+        await AssertBand(AlertLevel.SecondQuality, "BQ55", 55);
     }
 }

@@ -8,8 +8,8 @@
     <Grid RowDefinitions="Auto,*">
         <Grid Grid.Row="0"
               Padding="10"
-              ColumnDefinitions="*,Auto,Auto"
-              ColumnSpacing="8"
+              ColumnDefinitions="*,Auto,Auto,Auto"
+              ColumnSpacing="6"
               BackgroundColor="White">
             <Entry x:Name="ServerEntry"
                    Grid.Column="0"
@@ -19,14 +19,21 @@
 
             <Button Grid.Column="1"
                     Text="Conectar"
-                    Padding="14,8"
+                    Padding="12,8"
                     Clicked="OnConnectClicked" />
 
             <Button Grid.Column="2"
                     Text="↻"
                     FontSize="20"
-                    Padding="12,8"
+                    Padding="10,8"
                     Clicked="OnReloadClicked" />
+
+            <Button Grid.Column="3"
+                    Text="Offline"
+                    Padding="12,8"
+                    BackgroundColor="#9A3412"
+                    TextColor="White"
+                    Clicked="OnOfflineClicked" />
         </Grid>
 
         <Grid Grid.Row="1">
@@ -53,6 +60,12 @@
                             Text="Reintentar"
                             IsVisible="False"
                             Clicked="OnReloadClicked" />
+                    <Button x:Name="GoOfflineButton"
+                            Text="Abrir captura offline"
+                            IsVisible="False"
+                            BackgroundColor="#9A3412"
+                            TextColor="White"
+                            Clicked="OnOfflineClicked" />
                 </VerticalStackLayout>
             </Grid>
         </Grid>

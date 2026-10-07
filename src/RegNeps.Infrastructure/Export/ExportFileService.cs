@@ -74,8 +74,10 @@ public sealed class ExportFileService : IExportFileService
         WriteGroupSheet(workbook, "Resumen por telar", GroupBy(sorted, r => r.Telar, "(sin telar)", config));
         WriteGroupSheet(workbook, "Resumen por tela", GroupBy(sorted, r => r.Tela, "(sin tela)", config));
         WriteGroupSheet(workbook, "Resumen por lote", GroupBy(sorted, r => r.LoteTrama, "(sin lote)", config));
-        WriteAlertSheet(workbook, "Alertas críticas", sorted, config, AlertLevel.Critico);
-        WriteAlertSheet(workbook, "Advertencias", sorted, config, AlertLevel.Advertencia);
+        // Excel limita el nombre de hoja a 31 caracteres.
+        WriteAlertSheet(workbook, "Critico y 2da Calidad", sorted, config,
+            static l => NepsQualityCriteria.IsCriticalNotificationLevel(l));
+        WriteAlertSheet(workbook, "Mención", sorted, config, static l => l == AlertLevel.Mention);
         WriteTrendSheet(workbook, sorted);
 
         workbook.Worksheet("Registros").Position = 1;
@@ -99,7 +101,8 @@ public sealed class ExportFileService : IExportFileService
         var sorted = SortForReport(records);
         var cols = ReportColumnIds.Normalize(columns);
         var summary = Summarize(sorted);
-        var critical = sorted.Where(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Critico).ToList();
+        var critical = sorted.Where(r =>
+            NepsQualityCriteria.IsCriticalNotificationLevel(AlertEvaluator.GetLevel(r.Neps, config))).ToList();
         var byTelar = GroupBy(sorted, r => r.Telar, "(sin telar)", config);
         var topTelars = byTelar.OrderByDescending(g => g.TotalNeps).Take(10).ToList();
         var bestTelars = byTelar
@@ -117,7 +120,8 @@ public sealed class ExportFileService : IExportFileService
         var recommendations = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in critical.Take(15))
         {
-            foreach (var tip in AlertEvaluator.GetRecommendations(AlertLevel.Critico))
+            var lvl = AlertEvaluator.GetLevel(r.Neps, config);
+            foreach (var tip in AlertEvaluator.GetRecommendations(lvl))
                 recommendations.Add(tip);
         }
 
@@ -383,12 +387,13 @@ public sealed class ExportFileService : IExportFileService
         sb.AppendLine($"Registros,{summary.TotalRecords}");
         sb.AppendLine($"Promedio neps,{FormatDecimal(summary.AverageNeps)}");
         sb.AppendLine($"Total mts,{FormatMts(summary.TotalMts)}");
-        sb.AppendLine($"Criticos,{summary.CriticalCount}");
-        sb.AppendLine($"Advertencias,{summary.WarningCount}");
+        sb.AppendLine($"Criticos (ajuste+2da),{summary.CriticalCount}");
+        sb.AppendLine($"Menciones,{summary.WarningCount}");
+        sb.AppendLine($"OK,{summary.NormalCount}");
         sb.AppendLine($"Indice calidad,{FormatDecimal(summary.QualityIndex)}");
         sb.AppendLine();
 
-        sb.AppendLine("Telar,Promedio,Registros,Criticos,Advertencias,Mts");
+        sb.AppendLine("Telar,Promedio,Registros,Criticos,Menciones,Mts");
         foreach (var g in summary.ByTelar)
         {
             sb.Append(EscapeText(g.Key)).Append(',');
@@ -401,7 +406,7 @@ public sealed class ExportFileService : IExportFileService
         }
 
         sb.AppendLine();
-        sb.AppendLine("Tela,Promedio,Registros,Criticos,Advertencias,Mts");
+        sb.AppendLine("Tela,Promedio,Registros,Criticos,Menciones,Mts");
         foreach (var g in summary.ByTela)
         {
             sb.Append(EscapeText(g.Key)).Append(',');
@@ -447,9 +452,9 @@ public sealed class ExportFileService : IExportFileService
         kpis.Cell(start + 1, 2).Value = summary.AverageNeps;
         kpis.Cell(start + 2, 1).Value = "Total mts";
         kpis.Cell(start + 2, 2).Value = summary.TotalMts;
-        kpis.Cell(start + 3, 1).Value = "Críticos";
+        kpis.Cell(start + 3, 1).Value = "Críticos (ajuste + 2da)";
         kpis.Cell(start + 3, 2).Value = summary.CriticalCount;
-        kpis.Cell(start + 4, 1).Value = "Advertencias";
+        kpis.Cell(start + 4, 1).Value = "Menciones";
         kpis.Cell(start + 4, 2).Value = summary.WarningCount;
         kpis.Cell(start + 5, 1).Value = "Índice calidad %";
         kpis.Cell(start + 5, 2).Value = summary.QualityIndex;
@@ -623,7 +628,7 @@ public sealed class ExportFileService : IExportFileService
         kpis.Cell(row, 1).Value = "Índice calidad %";
         kpis.Cell(row, 2).Value = result.QualityIndex;
         row++;
-        kpis.Cell(row, 1).Value = "Normal / Adv / Crít %";
+        kpis.Cell(row, 1).Value = "OK / Mención / Crít %";
         kpis.Cell(row, 2).Value =
             $"{FormatDecimal(result.NormalPercent)} / {FormatDecimal(result.WarningPercent)} / {FormatDecimal(result.CriticalPercent)}";
         kpis.Columns().AdjustToContents();
@@ -696,8 +701,8 @@ public sealed class ExportFileService : IExportFileService
                             $"Min/Max neps: {FormatDecimal(result.MinNeps)} – {FormatDecimal(result.MaxNeps)} | " +
                             $"Calidad: {FormatDecimal(result.QualityIndex)}%");
                         box.Item().Text(
-                            $"Normal {FormatDecimal(result.NormalPercent)}% · Advertencia {FormatDecimal(result.WarningPercent)}% · " +
-                            $"Crítico {FormatDecimal(result.CriticalPercent)}%");
+                            $"OK {FormatDecimal(result.NormalPercent)}% · Mención {FormatDecimal(result.WarningPercent)}% · " +
+                            $"Crítico/2da {FormatDecimal(result.CriticalPercent)}%");
                     });
 
                     if (chartImages is { Count: > 0 })
@@ -784,7 +789,7 @@ public sealed class ExportFileService : IExportFileService
         var headers = new[]
         {
             "Grupo", "Registros", "Suma neps", "Promedio", "Mts", "Min", "Max",
-            "Normal", "Advertencia", "Crítico", "Normal %", "Adv %", "Crít %", "Calidad %", "Neps/m²"
+            "OK", "Mención", "Crítico/2da", "OK %", "Men %", "Crít %", "Calidad %", "Neps/m²"
         };
         for (var c = 0; c < headers.Length; c++)
         {
@@ -886,7 +891,7 @@ public sealed class ExportFileService : IExportFileService
         sheet.Cell(1, 2).Value = "Promedio";
         sheet.Cell(1, 3).Value = "Registros";
         sheet.Cell(1, 4).Value = "Críticos";
-        sheet.Cell(1, 5).Value = "Advertencias";
+        sheet.Cell(1, 5).Value = "Menciones";
         sheet.Cell(1, 6).Value = "Mts";
         sheet.Row(1).Style.Font.SetBold();
         var row = 2;
@@ -1121,7 +1126,7 @@ public sealed class ExportFileService : IExportFileService
     private static void WriteGroupSheet(XLWorkbook workbook, string name, IReadOnlyList<GroupSummary> groups)
     {
         var sheet = workbook.Worksheets.Add(name);
-        var headers = new[] { "Clave", "Registros", "Total neps", "Promedio neps", "Críticos", "Advertencias" };
+        var headers = new[] { "Clave", "Registros", "Total neps", "Promedio neps", "Críticos", "Menciones" };
         for (var i = 0; i < headers.Length; i++)
             sheet.Cell(1, i + 1).Value = headers[i];
         sheet.Row(1).Style.Font.SetBold().Fill.BackgroundColor = XLColor.FromHtml("#1F2A2E");
@@ -1147,7 +1152,7 @@ public sealed class ExportFileService : IExportFileService
         string name,
         IReadOnlyList<NepRecord> all,
         AlertConfig config,
-        AlertLevel level)
+        Func<AlertLevel, bool> match)
     {
         var sheet = workbook.Worksheets.Add(name);
         var headers = new[]
@@ -1159,7 +1164,7 @@ public sealed class ExportFileService : IExportFileService
         sheet.Row(1).Style.Font.SetBold().Fill.BackgroundColor = XLColor.FromHtml("#1F2A2E");
         sheet.Row(1).Style.Font.FontColor = XLColor.FromHtml("#F7EAC5");
 
-        var alerts = SortForReport(all.Where(r => AlertEvaluator.GetLevel(r.Neps, config) == level).ToList());
+        var alerts = SortForReport(all.Where(r => match(AlertEvaluator.GetLevel(r.Neps, config))).ToList());
         var row = 2;
         foreach (var r in alerts)
         {
@@ -1419,8 +1424,9 @@ public sealed class ExportFileService : IExportFileService
                     list.Count,
                     total,
                     list.Count == 0 ? 0 : total / list.Count,
-                    list.Count(x => AlertEvaluator.GetLevel(x.Neps, config) == AlertLevel.Critico),
-                    list.Count(x => AlertEvaluator.GetLevel(x.Neps, config) == AlertLevel.Advertencia));
+                    list.Count(x => NepsQualityCriteria.IsCriticalNotificationLevel(
+                        AlertEvaluator.GetLevel(x.Neps, config))),
+                    list.Count(x => AlertEvaluator.GetLevel(x.Neps, config) == AlertLevel.Mention));
             })
             .OrderByDescending(g => g.TotalNeps)
             .ToList();
@@ -1445,9 +1451,10 @@ public sealed class ExportFileService : IExportFileService
     {
         cell.Style.Fill.BackgroundColor = level switch
         {
-            AlertLevel.Normal => XLColor.FromHtml("#C8E6C9"),
-            AlertLevel.Advertencia => XLColor.FromHtml("#FFE0B2"),
-            AlertLevel.Critico => XLColor.FromHtml("#FFCDD2"),
+            AlertLevel.Ok => XLColor.FromHtml("#C8E6C9"),
+            AlertLevel.Mention => XLColor.FromHtml("#FFE0B2"),
+            AlertLevel.CriticalAdjustment => XLColor.FromHtml("#FFCDD2"),
+            AlertLevel.SecondQuality => XLColor.FromHtml("#EF9A9A"),
             _ => XLColor.NoColor
         };
     }

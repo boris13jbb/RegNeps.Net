@@ -30,7 +30,7 @@ else
             }
             @if (_canClearAllInUi)
             {
-                <button class="btn btn-outline-danger btn-sm" @onclick="ClearAllAsync" disabled="@_loading">
+                <button class="btn btn-outline-danger btn-sm" @onclick="() => _confirmClearAll = true" disabled="@_loading">
                     Vaciar todos
                 </button>
             }
@@ -107,9 +107,10 @@ else
                 <label class="rn-field-label" for="filter-alerta">Alerta</label>
                 <select id="filter-alerta" class="form-select form-select-sm" @bind="_filterAlert">
                     <option value="">Todas</option>
-                    <option value="Normal">Normal</option>
-                    <option value="Advertencia">Advertencia</option>
-                    <option value="Critico">Crítico</option>
+                    <option value="Ok">OK</option>
+                    <option value="Mention">Mención</option>
+                    <option value="CriticalAdjustment">Crítico - Realizar Ajuste</option>
+                    <option value="SecondQuality">2da Calidad</option>
                 </select>
             </div>
             <div class="col-6 col-md-1">
@@ -281,7 +282,7 @@ else
                                 {
                                     <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenEdit(r)">Editar</button>
                                 }
-                                @if (_canCorrectInUi && level != AlertLevel.Normal)
+                                @if (_canCorrectInUi && level != AlertLevel.Ok)
                                 {
                                     <button class="btn btn-link btn-sm p-0 me-2" @onclick="() => OpenCorrective(r)">Acción</button>
                                 }
@@ -301,7 +302,7 @@ else
         </div>
         <div class="d-flex flex-wrap align-items-center gap-2 mt-2 mb-3" style="max-width: 1100px;">
             <span class="small text-muted">
-                Página @_page de @TotalPages · @_records.Count registros · @PageSize por página
+                Página @_page de @TotalPages · @(_pagingFromSnapshot ? _records.Count : _filteredTotal) registros · @PageSize por página
             </span>
             <button class="btn btn-sm btn-outline-secondary" disabled="@(_page <= 1)" @onclick="() => GoToPageAsync(_page - 1)">Anterior</button>
             <button class="btn btn-sm btn-outline-secondary" disabled="@(_page >= TotalPages)" @onclick="() => GoToPageAsync(_page + 1)">Siguiente</button>
@@ -400,6 +401,24 @@ else
         </AppModal>
     }
 
+    @if (_confirmClearAll)
+    {
+        <AppModal Title="Vaciar todos los registros" OnClose="() => _confirmClearAll = false">
+            <ChildContent>
+                <p>¿Eliminar <strong>todas</strong> las mediciones? Esta acción no se puede deshacer.</p>
+                <p class="small text-muted mb-0">
+                    Genera un tombstone de sincronización (<code>RecordDeleted</code>) por cada registro
+                    para que los dispositivos offline actualicen su réplica al sincronizar.
+                    Los informes guardados no se borran. Operación administrativa online.
+                </p>
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary" @onclick="() => _confirmClearAll = false">Cancelar</button>
+                <button class="btn btn-danger" @onclick="ClearAllAsync" disabled="@_loading">Vaciar todos</button>
+            </Footer>
+        </AppModal>
+    }
+
     @if (_showSaveReportModal)
     {
         <AppModal Title="Guardar informe de la selección" OnClose="() => _showSaveReportModal = false">
@@ -417,9 +436,12 @@ else
 }
 
 @code {
-    private const int PageSize = 50;
+    private const int PageSize = RecordPaging.DefaultPageSize;
 
+    /// <summary>Página actual (vivo) o snapshot completo (informe). No materializa todo el dataset vivo.</summary>
     private IReadOnlyList<NepRecord> _records = [];
+    private int _filteredTotal;
+    private bool _pagingFromSnapshot;
     private AlertConfig _config = new();
     private bool _loading = true;
     private bool _allowed;
@@ -458,6 +480,7 @@ else
     private readonly HashSet<Guid> _selectedIds = [];
     private int _page = 1;
     private bool _confirmDeleteSelected;
+    private bool _confirmClearAll;
     private bool _deletingSelected;
     private bool _showSaveReportModal;
     private string _saveReportName = "";
@@ -483,10 +506,13 @@ else
 
     private bool _recordsReady;
 
-    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_records.Count / (double)PageSize));
+    private int TotalPages =>
+        Math.Max(1, (int)Math.Ceiling((_pagingFromSnapshot ? _records.Count : _filteredTotal) / (double)PageSize));
 
     private IReadOnlyList<NepRecord> PageRecords =>
-        _records.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+        _pagingFromSnapshot
+            ? _records.Skip((_page - 1) * PageSize).Take(PageSize).ToList()
+            : _records;
 
     private bool AllPageSelected
     {
@@ -729,11 +755,22 @@ else
         return LoadAsync();
     }
 
-    private Task GoToPageAsync(int page)
+    private async Task GoToPageAsync(int page)
     {
         RecordSelectionRules.ClearOnPageOrFilterChange(_selectedIds);
-        _page = Math.Clamp(page, 1, TotalPages);
-        return Task.CompletedTask;
+        var target = Math.Clamp(page, 1, TotalPages);
+        if (target == _page && !_pagingFromSnapshot)
+        {
+            return;
+        }
+
+        _page = target;
+        if (_pagingFromSnapshot)
+        {
+            return;
+        }
+
+        await LoadAsync();
     }
 
     private void ClearSelection() => _selectedIds.Clear();
@@ -886,7 +923,7 @@ else
             _config = await AlertConfigRepository.GetAsync();
             AlertLevel? alert = null;
             if (!string.IsNullOrEmpty(_filterAlert) &&
-                Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
+                AlertLevelExtensions.TryParseFilter(_filterAlert, out var parsed))
             {
                 alert = parsed;
             }
@@ -904,7 +941,10 @@ else
                         var snapshot = await ExportService.LoadAccessibleSnapshotAsync(reportId, access);
                         if (snapshot.Count > 0)
                         {
+                            // Snapshot: ya materializado por diseño del informe; paginación solo en memoria.
+                            _pagingFromSnapshot = true;
                             _records = snapshot;
+                            _filteredTotal = snapshot.Count;
                             _totalInDb = await RecordService.CountAllAsync();
                             if (_page > TotalPages)
                             {
@@ -962,16 +1002,17 @@ else
                 ReportDateRange.FromLocalCalendarDates(fromDay, toDay).ApplyTo(filters);
             }
 
-            // Con rango de fechas: traer todo el periodo (hasta 50k). Sin rango: últimos 1000.
-            var take = filters.FromUtc is not null || filters.ToExclusiveUtc is not null || filters.ToUtc is not null
-                ? 50_000
-                : 1_000;
-            _records = await RecordService.QueryAsync(
-                filters, _session.ToActor(), RecordQueryScope.Default, take);
-            if (_page > TotalPages)
-            {
-                _page = TotalPages;
-            }
+            // FASE 2F: solo la página solicitada (filtros + auth + ORDER en SQL).
+            _pagingFromSnapshot = false;
+            var paged = await RecordService.QueryPagedAsync(
+                filters,
+                _session.ToActor(),
+                pageNumber: _page,
+                pageSize: PageSize,
+                RecordQueryScope.Default);
+            _records = paged.Items;
+            _filteredTotal = paged.TotalCount;
+            _page = paged.PageNumber;
 
             RecordSelectionRules.PruneToVisible(_selectedIds, PageRecords.Select(r => r.Id));
         }
@@ -979,6 +1020,8 @@ else
         {
             _error = $"No se pudieron cargar los registros: {ex.Message}";
             _records = [];
+            _filteredTotal = 0;
+            _pagingFromSnapshot = false;
         }
         finally
         {
@@ -1156,6 +1199,7 @@ else
     {
         if (_isReadOnlyView)
         {
+            _confirmClearAll = false;
             _error = "No puede vaciar registros mientras visualiza un informe guardado.";
             return;
         }
@@ -1163,6 +1207,7 @@ else
         if (!await CurrentUser.HasAsync(AppPermission.ClearAllRecords))
         {
             await RefreshAccessAsync();
+            _confirmClearAll = false;
             _error = "No tiene permiso para vaciar registros.";
             return;
         }
@@ -1174,12 +1219,15 @@ else
             await RecordService.ClearAllAsync(_session!.ToActor());
             _totalInDb = 0;
             _message =
-                "Todas las mediciones fueron eliminadas. Los informes guardados siguen existiendo, " +
-                "pero al abrirlos la tabla saldrá vacía hasta que capture o migre datos de nuevo.";
+                "Todas las mediciones fueron eliminadas (tombstones de sync generados). " +
+                "Los informes guardados siguen existiendo; al abrirlos la tabla viva puede salir vacía " +
+                "hasta que capture o migre datos de nuevo. Los dispositivos offline se actualizarán al sincronizar.";
+            _confirmClearAll = false;
             await LoadAsync();
         }
         catch (Exception ex)
         {
+            _confirmClearAll = false;
             _error = ex.Message;
         }
     }
@@ -1212,9 +1260,10 @@ else
 
     private static string BadgeTone(AlertLevel level) => level switch
     {
-        AlertLevel.Normal => "normal",
-        AlertLevel.Advertencia => "warning",
-        AlertLevel.Critico => "critical",
+        AlertLevel.Ok => "normal",
+        AlertLevel.Mention => "warning",
+        AlertLevel.CriticalAdjustment => "critical",
+        AlertLevel.SecondQuality => "critical",
         _ => "muted"
     };
 }

@@ -1,0 +1,75 @@
+@inject CurrentUserService CurrentUser
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+@implements IAsyncDisposable
+
+@* Sincroniza snapshot UX LocalSession hacia MAUI tras login online. Sin cookies ni contraseñas. *@
+
+@code {
+    private string? _lastSyncedKey;
+    private bool _disposed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            var session = await CurrentUser.GetAsync();
+            if (session is null || string.IsNullOrWhiteSpace(session.UserId))
+            {
+                return;
+            }
+
+            var permissions = Enum.GetValues<AppPermission>()
+                .Where(p => p != AppPermission.ManageSettings)
+                .Where(session.Has)
+                .Select(p => p.ToString())
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToArray();
+
+            var key = $"{session.UserId}|{session.EffectiveRoleCode}|{string.Join(',', permissions)}";
+            if (string.Equals(key, _lastSyncedKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var available = await Js.InvokeAsync<bool>("regnepsOfflineBridge.isNativeAvailable");
+            if (!available)
+            {
+                return;
+            }
+
+            var baseUrl = Nav.BaseUri.TrimEnd('/');
+            await Js.InvokeVoidAsync("regnepsOfflineBridge.saveSession", new Dictionary<string, object?>
+            {
+                ["userId"] = session.UserId,
+                ["username"] = session.Username,
+                ["roleCode"] = session.EffectiveRoleCode,
+                ["permissions"] = permissions,
+                ["serverBaseUrl"] = baseUrl
+            });
+
+            _lastSyncedKey = key;
+        }
+        catch (JSException)
+        {
+            /* Bridge no cargado o navegador sin MAUI */
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        return ValueTask.CompletedTask;
+    }
+}

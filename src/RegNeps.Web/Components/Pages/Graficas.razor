@@ -98,9 +98,10 @@ else
                 <label class="rn-field-label" for="graficas-alerta">Alerta</label>
                 <select id="graficas-alerta" class="form-select form-select-sm" @bind="_filterAlert">
                     <option value="">Todas</option>
-                    <option value="Normal">Normal</option>
-                    <option value="Advertencia">Advertencia</option>
-                    <option value="Critico">Crítico</option>
+                    <option value="Ok">OK</option>
+                    <option value="Mention">Mención</option>
+                    <option value="CriticalAdjustment">Crítico - Realizar Ajuste</option>
+                    <option value="SecondQuality">2da Calidad</option>
                 </select>
             </div>
             <div class="col-6 col-md-2">
@@ -163,13 +164,13 @@ else
                 <KpiCard Label="Mts calc.">@_summary.TotalMts.ToString("0.#")</KpiCard>
             </div>
             <div class="col-6 col-md-3 col-xl-2">
-                <KpiCard Label="Advertencias" Tone="warning">@_summary.WarningCount</KpiCard>
+                <KpiCard Label="Menciones" Tone="warning">@_summary.WarningCount</KpiCard>
             </div>
             <div class="col-6 col-md-3 col-xl-2">
                 <KpiCard Label="Críticos" Tone="danger">@_summary.CriticalCount</KpiCard>
             </div>
             <div class="col-6 col-md-3 col-xl-2">
-                <KpiCard Label="% normales" Tone="success">@NormalPct.ToString("0.#")%</KpiCard>
+                <KpiCard Label="% OK" Tone="success">@NormalPct.ToString("0.#")%</KpiCard>
             </div>
             <div class="col-6 col-md-3 col-xl-2">
                 <KpiCard Label="Índice calidad" Tone="success">@_summary.QualityIndex.ToString("0.#")%</KpiCard>
@@ -271,7 +272,7 @@ else
                             <th>Promedio</th>
                             <th>Registros</th>
                             <th>Críticos</th>
-                            <th>Advertencias</th>
+                            <th>Menciones</th>
                             <th>Mts</th>
                         </tr>
                     </thead>
@@ -321,7 +322,7 @@ else
                             <th>Promedio</th>
                             <th>Registros</th>
                             <th>Críticos</th>
-                            <th>Advertencias</th>
+                            <th>Menciones</th>
                             <th>Mts</th>
                         </tr>
                     </thead>
@@ -780,7 +781,7 @@ else
         error = null;
         AlertLevel? alert = null;
         if (!string.IsNullOrEmpty(_filterAlert) &&
-            Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
+            AlertLevelExtensions.TryParseFilter(_filterAlert, out var parsed))
         {
             alert = parsed;
         }
@@ -927,7 +928,7 @@ else
                 type = "doughnut",
                 data = new
                 {
-                    labels = new[] { "Normal", "Advertencia", "Crítico" },
+                    labels = new[] { "OK", "Mención", "Crítico / 2da Calidad" },
                     datasets = new object[]
                     {
                         new

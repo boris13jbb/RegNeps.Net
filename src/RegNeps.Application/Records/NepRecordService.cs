@@ -1,5 +1,6 @@
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Alerts;
+using RegNeps.Application.Common;
 using RegNeps.Application.Permissions;
 using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
@@ -24,17 +25,24 @@ public sealed class NepRecordService
     private readonly IAlertConfigRepository _alertConfig;
     private readonly IPermissionService? _permissions;
     private readonly IAlertCriticalPublisher? _criticalPublisher;
+    private readonly IAtomicNepRecordCreateStore? _atomicCreate;
 
     public NepRecordService(
         INepRecordRepository records,
         IAlertConfigRepository alertConfig,
         IPermissionService? permissions = null,
-        IAlertCriticalPublisher? criticalPublisher = null)
+        IAlertCriticalPublisher? criticalPublisher = null,
+        IAtomicNepRecordCreateStore? atomicCreate = null,
+        ISyncPersistence? syncPersistence = null)
     {
         _records = records;
         _alertConfig = alertConfig;
         _permissions = permissions;
         _criticalPublisher = criticalPublisher;
+        _atomicCreate = atomicCreate;
+        // syncPersistence se acepta por compatibilidad DI/pruebas; ClearAll ya no lo usa
+        // (FASE 2D.12: tombstones vía store atómico).
+        _ = syncPersistence;
     }
 
     /// <summary>
@@ -120,6 +128,19 @@ public sealed class NepRecordService
             ConcurrencyStamp = Guid.NewGuid().ToString("N")
         };
 
+        // FASE 2B.1: creación online observable por sync (NepRecord + ChangeLog atómicos).
+        // DeviceId=null: captura Blazor no inventa identidad de dispositivo.
+        if (_atomicCreate is not null)
+        {
+            var outcome = await _atomicCreate.CreateWithChangeLogAsync(
+                record,
+                actor.UserId,
+                deviceId: null,
+                ct);
+            return (outcome.Record, outcome.Inserted);
+        }
+
+        // Fallback para tests unitarios que no registran el store atómico.
         var saved = await _records.AddAsync(record, ct);
         return (saved, true);
     }
@@ -213,9 +234,10 @@ public sealed class NepRecordService
         }
 
         NepRecord saved;
+        bool inserted;
         try
         {
-            (saved, _) = await CreateInternalAsync(request, actor, ct);
+            (saved, inserted) = await CreateInternalAsync(request, actor, ct);
         }
         catch (UnauthorizedRecordAccessException ex)
         {
@@ -234,8 +256,8 @@ public sealed class NepRecordService
             };
         }
 
-        // Tras insert: Saved. Idempotencia previa ya devolvió AlreadySaved.
-        return await BuildSavedResultAsync(saved, alreadySaved: false, ct);
+        // Inserted=false: carrera/idempotencia → AlreadySaved (sin segundo ChangeLog).
+        return await BuildSavedResultAsync(saved, alreadySaved: !inserted, ct);
     }
 
     private async Task<RecordSaveResult> BuildSavedResultAsync(
@@ -255,7 +277,9 @@ public sealed class NepRecordService
             alertFailed = true;
         }
 
-        if (!alreadySaved && level == AlertLevel.Critico)
+        if (!alreadySaved
+            && level is not null
+            && NepsQualityCriteria.IsCriticalNotificationLevel(level.Value))
         {
             await TryPublishCriticalAlertAsync(saved, ct);
         }
@@ -274,7 +298,7 @@ public sealed class NepRecordService
         try
         {
             var eval = await EvaluateAsync(record.Neps, record.Telar, ct);
-            if (eval.Level == AlertLevel.Critico)
+            if (NepsQualityCriteria.IsCriticalNotificationLevel(eval.Level))
             {
                 await TryPublishCriticalAlertAsync(record, ct);
             }
@@ -317,6 +341,34 @@ public sealed class NepRecordService
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));
         if (request.Neps <= 0)
             throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
+
+        // FASE 2C: Update online observable por sync (mismo camino atómico que Push UpdateRecord).
+        if (_atomicCreate is not null)
+        {
+            var fields = new Sync.SyncUpdateRecordPayload
+            {
+                EntityId = request.Id,
+                Telar = request.Telar,
+                Neps = request.Neps,
+                Tela = request.Tela,
+                LoteTrama = request.LoteTrama,
+                Turno = request.Turno,
+                Operario = request.Operario,
+                LineaProduccion = request.LineaProduccion,
+                Observacion = request.Observacion
+            };
+
+            var outcome = await _atomicCreate.UpdateWithChangeLogAsync(
+                fields,
+                request.ExpectedConcurrencyStamp,
+                clientOperationId: null,
+                captureSessionId: null,
+                actor,
+                deviceId: null,
+                ct);
+
+            return MapMutationOrThrow(outcome);
+        }
 
         var record = await _records.GetByIdAsync(request.Id, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
@@ -377,9 +429,7 @@ public sealed class NepRecordService
             throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
         }
 
-        var seesAll = scope == RecordQueryScope.PersonalOnly
-            ? false
-            : actor.SeesAllRecords;
+        var seesAll = ResolveSeesAll(actor, scope);
 
         if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
         {
@@ -388,6 +438,56 @@ public sealed class NepRecordService
         }
 
         return _records.QueryAsync(filters, actor.UserId, seesAll, take, ct);
+    }
+
+    /// <summary>FASE 2F — página server-side (filtros + autorización + ORDER + OFFSET/FETCH).</summary>
+    public Task<PagedResult<NepRecord>> QueryPagedAsync(
+        RecordFilters filters,
+        RecordActor actor,
+        int pageNumber,
+        int pageSize = RecordPaging.DefaultPageSize,
+        RecordQueryScope scope = RecordQueryScope.Default,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!ActorHas(actor, AppPermission.ViewRecords) && !ActorHas(actor, AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
+        }
+
+        var seesAll = ResolveSeesAll(actor, scope);
+
+        if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "Se requiere un usuario autenticado con identificador válido.");
+        }
+
+        return _records.QueryPagedAsync(filters, actor.UserId, seesAll, pageNumber, pageSize, ct);
+    }
+
+    /// <summary>COUNT filtrado (mismos filtros/autorización que Query/QueryPaged).</summary>
+    public Task<int> CountFilteredAsync(
+        RecordFilters filters,
+        RecordActor actor,
+        RecordQueryScope scope = RecordQueryScope.Default,
+        CancellationToken ct = default)
+    {
+        EnsureAuthenticated(actor);
+        if (!ActorHas(actor, AppPermission.ViewRecords) && !ActorHas(actor, AppPermission.CaptureRecords))
+        {
+            throw new UnauthorizedRecordAccessException("No tiene permiso para consultar registros.");
+        }
+
+        var seesAll = ResolveSeesAll(actor, scope);
+
+        if (!seesAll && string.IsNullOrWhiteSpace(actor.UserId))
+        {
+            throw new UnauthorizedRecordAccessException(
+                "Se requiere un usuario autenticado con identificador válido.");
+        }
+
+        return _records.CountFilteredAsync(filters, actor.UserId, seesAll, ct);
     }
 
     /// <summary>Compatibilidad interna/tests: consulta con parámetros explícitos (fail-closed en repo).</summary>
@@ -399,6 +499,9 @@ public sealed class NepRecordService
         CancellationToken ct = default) =>
         _records.QueryAsync(filters, viewerUserId, viewerSeesAll, take, ct);
 
+    private static bool ResolveSeesAll(RecordActor actor, RecordQueryScope scope) =>
+        scope != RecordQueryScope.PersonalOnly && actor.SeesAllRecords;
+
     public async Task<(AlertLevel Level, IReadOnlyList<string> Recommendations, bool Reincidencia)> EvaluateAsync(
         double neps,
         string? telar = null,
@@ -407,7 +510,8 @@ public sealed class NepRecordService
         var config = await _alertConfig.GetAsync(ct);
         var level = AlertEvaluator.GetLevel(neps, config);
         var reincidencia = false;
-        if (!string.IsNullOrWhiteSpace(telar) && level == AlertLevel.Critico)
+        if (!string.IsNullOrWhiteSpace(telar)
+            && NepsQualityCriteria.IsCriticalNotificationLevel(level))
         {
             var recent = await _records.GetRecentAsync(500, ct);
             reincidencia = AlertEvaluator.HasCriticalRecurrence(recent, telar, config);
@@ -437,6 +541,20 @@ public sealed class NepRecordService
 
         EnsureCanMutate(actor, record, requireEditPermission: false);
 
+        // FASE 2C.1: correctivo online observable por sync (mutación + RecordUpserted atómicos).
+        if (_atomicCreate is not null)
+        {
+            var outcome = await _atomicCreate.ApplyCorrectiveWithChangeLogAsync(
+                request.RecordId,
+                request.Accion,
+                request.Responsable ?? string.Empty,
+                request.MarcarRevisado,
+                actor,
+                ct: ct);
+            EnsureMutationSucceeded(outcome);
+            return;
+        }
+
         var entry = new CorrectiveActionEntry
         {
             NepRecordId = record.Id,
@@ -464,11 +582,64 @@ public sealed class NepRecordService
             throw new UnauthorizedRecordAccessException("No tiene permiso para eliminar registros.");
         }
 
+        // FASE 2C: Delete online con tombstone atómico (mismo camino que Push DeleteRecord).
+        if (_atomicCreate is not null)
+        {
+            var current = await _records.GetByIdAsync(id, ct)
+                ?? throw new InvalidOperationException("Registro no encontrado.");
+            EnsureCanMutate(actor, current, requireEditPermission: false);
+
+            var outcome = await _atomicCreate.DeleteWithTombstoneAsync(
+                id,
+                expectedConcurrencyStamp: current.ConcurrencyStamp,
+                clientOperationId: null,
+                actor,
+                deviceId: null,
+                ct);
+
+            EnsureMutationSucceeded(outcome);
+            return;
+        }
+
         var record = await _records.GetByIdAsync(id, ct)
             ?? throw new InvalidOperationException("Registro no encontrado.");
 
         EnsureCanMutate(actor, record, requireEditPermission: false);
         await _records.DeleteAsync(id, ct);
+    }
+
+    private static NepRecord MapMutationOrThrow(Abstractions.AtomicNepRecordMutationResult outcome)
+    {
+        EnsureMutationSucceeded(outcome);
+        return outcome.Record
+               ?? throw new InvalidOperationException("Actualización sin entidad.");
+    }
+
+    private static void EnsureMutationSucceeded(Abstractions.AtomicNepRecordMutationResult outcome)
+    {
+        if (outcome.Result is Sync.SyncOperationResult.Accepted or Sync.SyncOperationResult.Duplicate)
+        {
+            return;
+        }
+
+        if (outcome.Result == Sync.SyncOperationResult.Conflict)
+        {
+            throw new RecordConcurrencyConflictException(
+                "Este registro fue modificado por otro usuario. Recargue y revise antes de guardar.");
+        }
+
+        if (outcome.Result == Sync.SyncOperationResult.Forbidden)
+        {
+            throw new UnauthorizedRecordAccessException(
+                outcome.Message ?? "No autorizado.");
+        }
+
+        if (outcome.ErrorCode is "ENTITY_NOT_FOUND" or "ENTITY_DELETED")
+        {
+            throw new InvalidOperationException(outcome.Message ?? "Registro no encontrado.");
+        }
+
+        throw new InvalidOperationException(outcome.Message ?? "No se pudo completar la operación.");
     }
 
     /// <summary>
@@ -505,15 +676,8 @@ public sealed class NepRecordService
             ct.ThrowIfCancellationRequested();
             try
             {
-                var record = await _records.GetByIdAsync(id, ct);
-                if (record is null)
-                {
-                    failed.Add(id);
-                    continue;
-                }
-
-                EnsureCanMutate(actor, record, requireEditPermission: false);
-                await _records.DeleteAsync(id, ct);
+                // Reutiliza DeleteAsync (tombstone + ChangeLog cuando hay store atómico).
+                await DeleteAsync(id, actor, ct);
                 deleted.Add(id);
             }
             catch
@@ -531,6 +695,11 @@ public sealed class NepRecordService
         };
     }
 
+    /// <summary>
+    /// Vacía todos los NepRecord (alcance global de tabla). FASE 2D.12: sync-safe —
+    /// N tombstones <c>RecordDeleted</c> atómicos con la eliminación (online/admin-only).
+    /// Sin Outbox, sin ClientOperationId, sin ExpectedConcurrencyStamp por fila.
+    /// </summary>
     public async Task ClearAllAsync(RecordActor actor, CancellationToken ct = default)
     {
         EnsureAuthenticated(actor);
@@ -539,6 +708,13 @@ public sealed class NepRecordService
             throw new UnauthorizedRecordAccessException("No tiene permiso para vaciar registros.");
         }
 
+        if (_atomicCreate is not null)
+        {
+            await _atomicCreate.ClearAllWithTombstonesAsync(actor, ct);
+            return;
+        }
+
+        // Fallback legacy (pruebas sin store atómico): borrado físico sin ChangeLog.
         await _records.ClearAllAsync(ct);
     }
 
@@ -555,8 +731,9 @@ public sealed class NepRecordService
         var total = records.Count;
         var sumNeps = records.Sum(r => r.Neps);
         var sumMts = records.Sum(r => r.MtsCalculados);
-        var criticos = records.Count(r => r.GetAlertLevel(config) == AlertLevel.Critico);
-        var advertencias = records.Count(r => r.GetAlertLevel(config) == AlertLevel.Advertencia);
+        var criticos = records.Count(r =>
+            NepsQualityCriteria.IsCriticalNotificationLevel(r.GetAlertLevel(config)));
+        var menciones = records.Count(r => r.GetAlertLevel(config) == AlertLevel.Mention);
         var pendientes = records.Count(r => r.RequiereSeguimiento(config));
 
         return new DashboardSummary
@@ -565,7 +742,7 @@ public sealed class NepRecordService
             PromedioNeps = total == 0 ? 0 : sumNeps / total,
             TotalMts = sumMts,
             Criticos = criticos,
-            Advertencias = advertencias,
+            Advertencias = menciones,
             PendientesRevision = pendientes,
             Ultimos = records.Take(10).ToList()
         };
@@ -584,7 +761,7 @@ public sealed class NepRecordService
         var config = await _alertConfig.GetAsync(ct);
         var all = await QueryAsync(new RecordFilters(), actor, RecordQueryScope.Default, 1000, ct);
         return all
-            .Where(r => r.GetAlertLevel(config) != AlertLevel.Normal)
+            .Where(r => NepsQualityCriteria.RequiresFollowUp(r.GetAlertLevel(config)))
             .OrderByDescending(r => r.GetAlertLevel(config))
             .ThenByDescending(r => r.CreatedAt)
             .ToList();
@@ -705,8 +882,14 @@ public sealed class NepRecordService
         }
     }
 
-    private static void Validate(CreateNepRecordRequest request)
+    private static void Validate(CreateNepRecordRequest request) =>
+        ValidateCreateRequest(request);
+
+    /// <summary>Validación compartida con Push sync (mismas reglas que Captura online).</summary>
+    public static void ValidateCreateRequest(CreateNepRecordRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
         if (string.IsNullOrWhiteSpace(request.Telar))
         {
             throw new ArgumentException("El telar es obligatorio.", nameof(request.Telar));
@@ -715,6 +898,23 @@ public sealed class NepRecordService
         if (request.Neps <= 0)
         {
             throw new ArgumentException("Los neps deben ser mayores que cero.", nameof(request.Neps));
+        }
+
+        // FASE 2G: límites alineados con columnas EF (evita payloads desmesurados vía Push).
+        EnsureMaxLength(request.Telar, 64, nameof(request.Telar));
+        EnsureMaxLength(request.Tela, 128, nameof(request.Tela));
+        EnsureMaxLength(request.LoteTrama, 64, nameof(request.LoteTrama));
+        EnsureMaxLength(request.Turno, 32, nameof(request.Turno));
+        EnsureMaxLength(request.Operario, 128, nameof(request.Operario));
+        EnsureMaxLength(request.LineaProduccion, 64, nameof(request.LineaProduccion));
+        EnsureMaxLength(request.Observacion, 2000, nameof(request.Observacion));
+    }
+
+    private static void EnsureMaxLength(string? value, int max, string paramName)
+    {
+        if (!string.IsNullOrEmpty(value) && value.Length > max)
+        {
+            throw new ArgumentException($"El campo supera el máximo de {max} caracteres.", paramName);
         }
     }
 }

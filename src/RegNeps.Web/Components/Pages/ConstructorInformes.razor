@@ -83,9 +83,10 @@ else
                 <label class="rn-field-label" for="rb-alerta">Alerta</label>
                 <select id="rb-alerta" class="form-select form-select-sm" @bind="_filterAlert">
                     <option value="">Todas</option>
-                    <option value="Normal">Normal</option>
-                    <option value="Advertencia">Advertencia</option>
-                    <option value="Critico">Crítico</option>
+                    <option value="Ok">OK</option>
+                    <option value="Mention">Mención</option>
+                    <option value="CriticalAdjustment">Crítico - Realizar Ajuste</option>
+                    <option value="SecondQuality">2da Calidad</option>
                 </select>
             </div>
             <div class="col-6 col-md-2">
@@ -159,9 +160,9 @@ else
             <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Promedio neps">@_result.AverageNeps.ToString("0.##")</KpiCard></div>
             <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Total mts">@_result.TotalMts.ToString("0.#")</KpiCard></div>
             <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Índice calidad" Tone="success">@_result.QualityIndex.ToString("0.#")%</KpiCard></div>
-            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Normal">@_result.NormalCount (@_result.NormalPercent.ToString("0.#")%)</KpiCard></div>
-            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Advertencia" Tone="warning">@_result.WarningCount</KpiCard></div>
-            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Crítico" Tone="danger">@_result.CriticalCount</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="OK">@_result.NormalCount (@_result.NormalPercent.ToString("0.#")%)</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Mención" Tone="warning">@_result.WarningCount</KpiCard></div>
+            <div class="col-6 col-md-3 col-xl-2"><KpiCard Label="Crítico / 2da" Tone="danger">@_result.CriticalCount</KpiCard></div>
         </div>
 
         <div class="row g-3 mb-4">
@@ -198,8 +199,8 @@ else
                         <th>Mts</th>
                         <th>Min</th>
                         <th>Max</th>
-                        <th>Normal</th>
-                        <th>Adv.</th>
+                        <th>OK</th>
+                        <th>Men.</th>
                         <th>Crít.</th>
                         <th>Calidad %</th>
                         <th>Neps/m²</th>
@@ -352,7 +353,7 @@ else
         validationError = null;
         AlertLevel? alert = null;
         if (!string.IsNullOrEmpty(_filterAlert) &&
-            Enum.TryParse<AlertLevel>(_filterAlert, ignoreCase: true, out var parsed))
+            AlertLevelExtensions.TryParseFilter(_filterAlert, out var parsed))
         {
             alert = parsed;
         }
@@ -532,7 +533,7 @@ else
                 type = "doughnut",
                 data = new
                 {
-                    labels = new[] { "Normal", "Advertencia", "Crítico" },
+                    labels = new[] { "OK", "Mención", "Crítico / 2da Calidad" },
                     datasets = new object[]
                     {
                         new

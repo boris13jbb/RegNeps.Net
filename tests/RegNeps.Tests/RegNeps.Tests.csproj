@@ -29,6 +29,7 @@
     <ProjectReference Include="..\..\src\RegNeps.Application\RegNeps.Application.csproj" />
     <ProjectReference Include="..\..\src\RegNeps.Infrastructure\RegNeps.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\RegNeps.Web\RegNeps.Web.csproj" />
+    <ProjectReference Include="..\..\src\RegNeps.OfflineStore\RegNeps.OfflineStore.csproj" />
   </ItemGroup>
 
 </Project>

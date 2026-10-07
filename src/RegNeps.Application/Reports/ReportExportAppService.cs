@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using RegNeps.Application.Abstractions;
 using RegNeps.Application.Analytics;
+using RegNeps.Domain.Constants;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
@@ -338,7 +339,8 @@ public sealed class ReportExportAppService
         string? userName,
         CancellationToken ct)
     {
-        var criticos = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Critico);
+        var criticos = records.Count(r =>
+            NepsQualityCriteria.IsCriticalNotificationLevel(AlertEvaluator.GetLevel(r.Neps, config)));
         var avg = records.Average(r => r.Neps);
 
         var fromLabel = filters.FromUtc?.ToLocalTime().ToString("dd/MM/yyyy")
@@ -388,7 +390,8 @@ public sealed class ReportExportAppService
 
         var config = await _alertConfig.GetAsync(ct);
         var records = await _records.QueryAsync(filters, userId, viewerSeesAll, 50_000, ct);
-        var criticos = records.Count(r => AlertEvaluator.GetLevel(r.Neps, config) == AlertLevel.Critico);
+        var criticos = records.Count(r =>
+            NepsQualityCriteria.IsCriticalNotificationLevel(AlertEvaluator.GetLevel(r.Neps, config)));
         var avg = records.Count > 0 ? records.Average(r => r.Neps) : 0d;
 
         var fromLabel = filters.FromUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "?";
@@ -711,12 +714,12 @@ public sealed class ReportExportAppService
 
         if (summary.CriticalCount > 0)
         {
-            conclusions.Add($"Se detectaron {summary.CriticalCount} mediciones críticas en el periodo.");
+            conclusions.Add($"Se detectaron {summary.CriticalCount} mediciones críticas (ajuste o 2da calidad) en el periodo.");
         }
 
         if (summary.WarningCount > 0)
         {
-            conclusions.Add($"Hay {summary.WarningCount} advertencias que requieren seguimiento.");
+            conclusions.Add($"Hay {summary.WarningCount} menciones que requieren seguimiento.");
         }
 
         if (summary.WorstTelars.Count > 0)

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="RegNeps.Mobile.OfflineOperationDetailPage"
+             Title="Detalle de operación"
+             BackgroundColor="#F4F5F2">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="10">
+            <Label x:Name="TitleLabel" FontAttributes="Bold" FontSize="18" />
+            <Label x:Name="StatusLabel" FontSize="15" TextColor="#B45309" />
+
+            <Border Stroke="#D1D5DB" Padding="12" BackgroundColor="White">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Información" FontAttributes="Bold" />
+                    <Label x:Name="SummaryLabel" FontSize="13" />
+                    <Label x:Name="LocalLabel" FontSize="13" />
+                    <Label x:Name="ServerLabel" FontSize="13" TextColor="#1E3A5F" />
+                    <Label x:Name="LocalIdLabel" FontSize="12" TextColor="#6B7280" />
+                    <Label x:Name="ServerIdLabel" FontSize="12" TextColor="#6B7280" />
+                    <Label x:Name="CreatedLabel" FontSize="12" TextColor="#6B7280" />
+                    <Label x:Name="AttemptsLabel" FontSize="12" TextColor="#6B7280" />
+                    <Label x:Name="ErrorLabel" FontSize="13" TextColor="#7C2D12" />
+                    <Label x:Name="ConflictStampLabel" FontSize="12" TextColor="#92400E" IsVisible="False" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Stroke="#E5E7EB" Padding="12" BackgroundColor="#F9FAFB">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="Información técnica" FontAttributes="Bold" FontSize="13" TextColor="#6B7280" />
+                    <Label x:Name="TechClientOpLabel" FontSize="11" TextColor="#6B7280" />
+                    <Label x:Name="TechCodeLabel" FontSize="11" TextColor="#6B7280" />
+                    <Label x:Name="TechCaptureLabel" FontSize="11" TextColor="#6B7280" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label x:Name="ActionHintLabel" FontSize="13" TextColor="#374151" />
+
+            <Button x:Name="RetryButton"
+                    Text="Reintentar sincronización"
+                    Clicked="OnRetryClicked"
+                    IsVisible="False"
+                    BackgroundColor="#1E3A5F"
+                    TextColor="White" />
+
+            <Button x:Name="SyncNowButton"
+                    Text="Sincronizar ahora"
+                    Clicked="OnSyncNowClicked"
+                    IsVisible="False"
+                    BackgroundColor="#1E3A5F"
+                    TextColor="White" />
+
+            <Button x:Name="ReloginButton"
+                    Text="Volver a iniciar sesión"
+                    Clicked="OnReloginClicked"
+                    IsVisible="False"
+                    BackgroundColor="#92400E"
+                    TextColor="White" />
+
+            <Button x:Name="ReviewButton"
+                    Text="Resolver conflicto"
+                    Clicked="OnResolveConflictClicked"
+                    IsEnabled="True"
+                    IsVisible="False"
+                    BackgroundColor="#F59E0B"
+                    TextColor="White" />
+
+            <Button x:Name="EditRecordButton"
+                    Text="Editar registro offline"
+                    Clicked="OnEditRecordClicked"
+                    IsVisible="False"
+                    BackgroundColor="#294D1E"
+                    TextColor="White" />
+
+            <Button x:Name="DeleteRecordButton"
+                    Text="Eliminar registro offline"
+                    Clicked="OnDeleteRecordClicked"
+                    IsVisible="False"
+                    BackgroundColor="#7C2D12"
+                    TextColor="White" />
+
+            <Label x:Name="MessageLabel" FontSize="13" />
+
+            <Button Text="Volver" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

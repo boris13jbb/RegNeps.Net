@@ -1,16 +1,19 @@
 using System.Net;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RegNeps.Application.Reports;
 using RegNeps.Domain.Entities;
 using RegNeps.Domain.Enums;
 using RegNeps.Domain.Filters;
 using RegNeps.Infrastructure.Persistence;
+using RegNeps.Web.Realtime;
 using Xunit;
 
 namespace RegNeps.Tests;
@@ -22,6 +25,7 @@ public sealed class ExportAuthorizationHttpTests : IAsyncLifetime
     private RegNepsWebFactory _factory = null!;
 
     private Guid _authorId;
+    private Guid _operarioId;
     private Guid _supervisorId;
     private Guid _foreignReportId;
     private Guid _authorReportId;
@@ -71,6 +75,7 @@ public sealed class ExportAuthorizationHttpTests : IAsyncLifetime
             db.Users.AddRange(author, operario, supervisor);
             await db.SaveChangesAsync();
             _authorId = author.Id;
+            _operarioId = operario.Id;
             _supervisorId = supervisor.Id;
 
             // Registro vivo para que el export por filtros (sin snapshot) no devuelva 404 vacío.
@@ -207,8 +212,9 @@ public sealed class ExportAuthorizationHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Operario_Without_ViewAlerts_Cannot_Connect_Alert_Hub()
+    public async Task Operario_Without_ViewAlerts_Can_Connect_Hub_For_Sync_Recovery_Only()
     {
+        // FASE 2E: Capture/View permiten hub para SyncRecoverySuggested; no grupo de alertas.
         var cookieHeader = await CaptureAuthCookieAsync("http_operario", "HttpTestOnly!");
         var hubUrl = new Uri(_factory.Server.BaseAddress!, "/hubs/alerts");
 
@@ -220,19 +226,20 @@ public sealed class ExportAuthorizationHttpTests : IAsyncLifetime
             })
             .Build();
 
-        var rejected = false;
-        try
-        {
-            await connection.StartAsync();
-            await Task.Delay(500);
-            rejected = connection.State != HubConnectionState.Connected;
-        }
-        catch
-        {
-            rejected = true;
-        }
+        var alertReceived = false;
+        connection.On<object>(AlertNotificationHub.CriticalAlertMethod, _ => alertReceived = true);
 
-        Assert.True(rejected, "Operario sin ViewAlerts no debería mantenerse conectado al hub de alertas.");
+        await connection.StartAsync();
+        await Task.Delay(400);
+        Assert.Equal(HubConnectionState.Connected, connection.State);
+
+        // Sin ViewAlerts no está en alert-user:{id}; notificación al grupo de alertas no le llega.
+        var hub = _factory.Services.GetRequiredService<IHubContext<AlertNotificationHub>>();
+        await hub.Clients
+            .Group(AlertNotificationHub.UserGroupName(_operarioId.ToString()))
+            .SendAsync(AlertNotificationHub.CriticalAlertMethod, new { summary = "x" });
+        await Task.Delay(400);
+        Assert.False(alertReceived, "Operario sin ViewAlerts no debe recibir CriticalAlertReceived.");
     }
 
     [Fact]

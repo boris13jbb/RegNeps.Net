@@ -14,8 +14,9 @@ public static class DbSeeder
             db.AlertConfigs.Add(new AlertConfig
             {
                 Id = 1,
-                LimiteNormalMax = 30,
-                LimiteAdvertenciaMax = 60,
+                // Legacy/deprecado: no se usan para calificación (NepsQualityCriteria).
+                LimiteNormalMax = 18,
+                LimiteAdvertenciaMax = 45,
                 CantidadReincidenciasCriticas = 3,
                 DiasParaReincidencia = 1,
                 AlertasActivas = true

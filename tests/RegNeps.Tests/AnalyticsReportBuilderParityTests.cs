@@ -16,7 +16,7 @@ public sealed class AnalyticsReportBuilderParityTests
     [Fact]
     public async Task Same_Dataset_Yields_Same_Global_Totals()
     {
-        var config = new AlertConfig { LimiteNormalMax = 30, LimiteAdvertenciaMax = 60 };
+        var config = new AlertConfig { LimiteNormalMax = 18, LimiteAdvertenciaMax = 45 };
         var records = new List<NepRecord>
         {
             Make("003", 20),
@@ -70,6 +70,28 @@ public sealed class AnalyticsReportBuilderParityTests
             RecordFilters filters, string? viewerUserId, bool viewerSeesAll, int take = 500,
             CancellationToken ct = default) =>
             Task.FromResult(_records);
+
+        public Task<RegNeps.Application.Common.PagedResult<NepRecord>> QueryPagedAsync(
+            RecordFilters filters,
+            string? viewerUserId,
+            bool viewerSeesAll,
+            int pageNumber,
+            int pageSize,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RegNeps.Application.Common.PagedResult<NepRecord>
+            {
+                Items = _records.Take(pageSize).ToList(),
+                PageNumber = Math.Max(1, pageNumber),
+                PageSize = pageSize,
+                TotalCount = _records.Count
+            });
+
+        public Task<int> CountFilteredAsync(
+            RecordFilters filters,
+            string? viewerUserId,
+            bool viewerSeesAll,
+            CancellationToken ct = default) =>
+            Task.FromResult(_records.Count);
 
         public Task<IReadOnlyList<NepRecord>> GetRecentAsync(int take = 100, CancellationToken ct = default) =>
             Task.FromResult(_records);

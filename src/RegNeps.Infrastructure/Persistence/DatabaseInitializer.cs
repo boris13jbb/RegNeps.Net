@@ -2,12 +2,18 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RegNeps.Infrastructure.Migration;
+using RegNeps.Infrastructure.Sync;
 
 namespace RegNeps.Infrastructure.Persistence;
 
 /// <summary>
-/// Crea la BD, aplica parches aditivos (SQLite y SQL Server) y repara ownership migrado.
-/// Los parches son idempotentes: reiniciar la app no falla si columnas/índices ya existen.
+/// Bootstrap productivo de <see cref="RegNepsDbContext"/> (Web: SQLite o SQL Server).
+/// Flujo deliberado (FASE 2I):
+/// 1) <c>EnsureCreatedAsync</c> — crea el esquema desde el modelo solo si la BD no existe;
+/// 2) <see cref="ApplySchemaPatchesAsync"/> — evolución aditiva idempotente (no usa <c>Database.Migrate</c>);
+/// 3) seed + baseline de catálogos + repair de ownership.
+/// Las clases bajo <c>Infrastructure/Migrations</c> son canónicas/documentales; el arranque Web no llama <c>Migrate()</c>.
+/// El OfflineStore MAUI usa <c>MigrateAsync</c> por separado (<c>LocalStoreInitializer</c>).
 /// </summary>
 public static class DatabaseInitializer
 {
@@ -15,9 +21,12 @@ public static class DatabaseInitializer
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RegNepsDbContext>();
+        // No sustituir por Migrate(): EnsureCreated + patches es el contrato Web actual (SQLite y SQL Server).
         await db.Database.EnsureCreatedAsync();
         await ApplySchemaPatchesAsync(db);
         await DbSeeder.SeedAsync(db);
+        // FASE 2D.9: baseline ChangeLog de Fabric/Lote para Pull (idempotente).
+        await CatalogSyncChangeWriter.EnsureBaselineAsync(db);
 
         var migration = scope.ServiceProvider.GetRequiredService<HistoricalDataMigrationService>();
         var repaired = await migration.RepairRecordOwnershipAsync();
@@ -117,13 +126,17 @@ public static class DatabaseInitializer
         }
 
         // Índice único parcial: permite muchos históricos con ClientOperationId NULL.
-        if (!await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_ClientOperation"))
+        // Solo si existen ambas columnas (esquemas legacy pueden no tener CreatedByUserId aún).
+        // Identificadores sin comillas dobles: SQLite 3.50+ / DQS puede tratar "Col" como literal.
+        if (await SqliteColumnExistsAsync(db, "NepRecords", "CreatedByUserId")
+            && await SqliteColumnExistsAsync(db, "NepRecords", "ClientOperationId")
+            && !await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_ClientOperation"))
         {
             await TryExecuteAsync(db,
                 """
-                CREATE UNIQUE INDEX IF NOT EXISTS "IX_NepRecords_CreatedBy_ClientOperation"
-                ON "NepRecords" ("CreatedByUserId", "ClientOperationId")
-                WHERE "ClientOperationId" IS NOT NULL AND "ClientOperationId" <> ''
+                CREATE UNIQUE INDEX IF NOT EXISTS IX_NepRecords_CreatedBy_ClientOperation
+                ON NepRecords (CreatedByUserId, ClientOperationId)
+                WHERE ClientOperationId IS NOT NULL AND ClientOperationId <> ''
                 """);
         }
 
@@ -133,12 +146,14 @@ public static class DatabaseInitializer
                 """ALTER TABLE "NepRecords" ADD COLUMN "CaptureSessionId" TEXT NULL""");
         }
 
-        if (!await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_CaptureSession"))
+        if (await SqliteColumnExistsAsync(db, "NepRecords", "CreatedByUserId")
+            && await SqliteColumnExistsAsync(db, "NepRecords", "CaptureSessionId")
+            && !await SqliteIndexExistsAsync(db, "IX_NepRecords_CreatedBy_CaptureSession"))
         {
             await TryExecuteAsync(db,
                 """
-                CREATE INDEX IF NOT EXISTS "IX_NepRecords_CreatedBy_CaptureSession"
-                ON "NepRecords" ("CreatedByUserId", "CaptureSessionId")
+                CREATE INDEX IF NOT EXISTS IX_NepRecords_CreatedBy_CaptureSession
+                ON NepRecords (CreatedByUserId, CaptureSessionId)
                 """);
         }
 
@@ -152,6 +167,7 @@ public static class DatabaseInitializer
                 """);
         }
 
+        await EnsureSyncChangeLogsSqliteAsync(db);
     }
 
     private static async Task ApplySqlServerPatchesAsync(RegNepsDbContext db)
@@ -210,6 +226,8 @@ public static class DatabaseInitializer
                 """);
         }
 
+        await EnsureSyncChangeLogsSqlServerAsync(db);
+
         if (!await SqlServerIndexExistsAsync(db, "Fabrics", "IX_Fabrics_Name_Unique"))
         {
             await TryExecuteAsync(db,
@@ -219,6 +237,133 @@ public static class DatabaseInitializer
                 """);
         }
 
+    }
+
+    /// <summary>FASE 2B: SyncChangeLogs (aditivo; compatible con EnsureCreated existente).</summary>
+    private static async Task EnsureSyncChangeLogsSqliteAsync(RegNepsDbContext db)
+    {
+        if (!await SqliteTableExistsAsync(db, "SyncChangeLogs"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE TABLE IF NOT EXISTS "SyncChangeLogs" (
+                    "Sequence" INTEGER NOT NULL CONSTRAINT "PK_SyncChangeLogs" PRIMARY KEY AUTOINCREMENT,
+                    "EntityType" TEXT NOT NULL,
+                    "EntityId" TEXT NOT NULL,
+                    "ChangeType" TEXT NOT NULL,
+                    "OccurredAtUtc" TEXT NOT NULL,
+                    "ActorUserId" TEXT NOT NULL,
+                    "OwnerUserId" TEXT NOT NULL,
+                    "ClientOperationId" TEXT NULL,
+                    "DeviceId" TEXT NULL,
+                    "PayloadJson" TEXT NOT NULL
+                )
+                """);
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_Sequence"))
+        {
+            await TryExecuteAsync(db,
+                """CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_Sequence" ON "SyncChangeLogs" ("Sequence")""");
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_EntityType_EntityId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_EntityType_EntityId"
+                ON "SyncChangeLogs" ("EntityType", "EntityId")
+                """);
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_Owner_Sequence"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_Owner_Sequence"
+                ON "SyncChangeLogs" ("OwnerUserId", "Sequence")
+                """);
+        }
+
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_ClientOperationId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE INDEX IF NOT EXISTS "IX_SyncChangeLogs_ClientOperationId"
+                ON "SyncChangeLogs" ("ClientOperationId")
+                """);
+        }
+
+        // FASE 2C: idempotencia mutaciones sync (ActorUserId + ClientOperationId).
+        if (!await SqliteIndexExistsAsync(db, "IX_SyncChangeLogs_Actor_ClientOperation"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_SyncChangeLogs_Actor_ClientOperation"
+                ON "SyncChangeLogs" ("ActorUserId", "ClientOperationId")
+                WHERE "ClientOperationId" IS NOT NULL AND "ClientOperationId" <> ''
+                """);
+        }
+    }
+
+    private static async Task EnsureSyncChangeLogsSqlServerAsync(RegNepsDbContext db)
+    {
+        await TryExecuteAsync(db,
+            """
+            IF OBJECT_ID(N'[dbo].[SyncChangeLogs]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[SyncChangeLogs] (
+                    [Sequence] bigint IDENTITY(1,1) NOT NULL,
+                    [EntityType] nvarchar(64) NOT NULL,
+                    [EntityId] uniqueidentifier NOT NULL,
+                    [ChangeType] nvarchar(64) NOT NULL,
+                    [OccurredAtUtc] datetime2 NOT NULL,
+                    [ActorUserId] nvarchar(64) NOT NULL,
+                    [OwnerUserId] nvarchar(64) NOT NULL,
+                    [ClientOperationId] nvarchar(64) NULL,
+                    [DeviceId] nvarchar(64) NULL,
+                    [PayloadJson] nvarchar(max) NOT NULL,
+                    CONSTRAINT [PK_SyncChangeLogs] PRIMARY KEY CLUSTERED ([Sequence])
+                );
+            END
+            """);
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_EntityType_EntityId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_EntityType_EntityId]
+                ON [SyncChangeLogs] ([EntityType], [EntityId])
+                """);
+        }
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_Owner_Sequence"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_Owner_Sequence]
+                ON [SyncChangeLogs] ([OwnerUserId], [Sequence])
+                """);
+        }
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_ClientOperationId"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE NONCLUSTERED INDEX [IX_SyncChangeLogs_ClientOperationId]
+                ON [SyncChangeLogs] ([ClientOperationId])
+                """);
+        }
+
+        if (!await SqlServerIndexExistsAsync(db, "SyncChangeLogs", "IX_SyncChangeLogs_Actor_ClientOperation"))
+        {
+            await TryExecuteAsync(db,
+                """
+                CREATE UNIQUE NONCLUSTERED INDEX [IX_SyncChangeLogs_Actor_ClientOperation]
+                ON [SyncChangeLogs] ([ActorUserId], [ClientOperationId])
+                WHERE [ClientOperationId] IS NOT NULL AND [ClientOperationId] <> ''
+                """);
+        }
     }
 
     private static async Task TryExecuteAsyncPrivate(RegNepsDbContext db, string sql, object[]? parameters = null)

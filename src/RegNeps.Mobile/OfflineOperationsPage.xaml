@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="RegNeps.Mobile.OfflineOperationsPage"
+             Title="Operaciones offline"
+             BackgroundColor="#F4F5F2">
+
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Padding="12" RowSpacing="8">
+        <Label Grid.Row="0"
+               x:Name="SessionHintLabel"
+               FontSize="12"
+               TextColor="#6B7280"
+               Text="Solo operaciones de tu sesión local." />
+
+        <ScrollView Grid.Row="1" Orientation="Horizontal" HeightRequest="44">
+            <HorizontalStackLayout Spacing="8">
+                <Button x:Name="FilterAllButton" Text="Todos" Clicked="OnFilterClicked" CommandParameter="All"
+                        BackgroundColor="#1E3A5F" TextColor="White" FontSize="12" Padding="12,6" />
+                <Button x:Name="FilterPendingButton" Text="Pendientes" Clicked="OnFilterClicked" CommandParameter="Pending"
+                        BackgroundColor="#E5E7EB" TextColor="#111" FontSize="12" Padding="12,6" />
+                <Button x:Name="FilterSyncedButton" Text="Sincronizados" Clicked="OnFilterClicked" CommandParameter="Synced"
+                        BackgroundColor="#E5E7EB" TextColor="#111" FontSize="12" Padding="12,6" />
+                <Button x:Name="FilterErrorButton" Text="Errores" Clicked="OnFilterClicked" CommandParameter="SyncError"
+                        BackgroundColor="#E5E7EB" TextColor="#111" FontSize="12" Padding="12,6" />
+                <Button x:Name="FilterConflictButton" Text="Conflictos" Clicked="OnFilterClicked" CommandParameter="Conflict"
+                        BackgroundColor="#E5E7EB" TextColor="#111" FontSize="12" Padding="12,6" />
+            </HorizontalStackLayout>
+        </ScrollView>
+
+        <CollectionView Grid.Row="2" x:Name="OperationsList" SelectionMode="Single" SelectionChanged="OnSelectionChanged">
+            <CollectionView.EmptyView>
+                <Label Text="No hay operaciones en este filtro."
+                       HorizontalOptions="Center"
+                       VerticalOptions="Center"
+                       TextColor="#6B7280"
+                       Margin="24" />
+            </CollectionView.EmptyView>
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Stroke="#D1D5DB" StrokeThickness="1" Padding="12" Margin="0,0,0,8" BackgroundColor="White">
+                        <VerticalStackLayout Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <Label Grid.Column="0" Text="{Binding OperationTypeLabel}" FontAttributes="Bold" />
+                                <Label Grid.Column="1" Text="{Binding StatusLabel}" FontSize="12" TextColor="#B45309" />
+                            </Grid>
+                            <Label Text="{Binding RecordSummary}" FontSize="13" />
+                            <Label Text="{Binding SyncResultLabel}" FontSize="12" TextColor="#374151" />
+                            <Label Text="{Binding CreatedLocalText}" FontSize="11" TextColor="#6B7280" />
+                            <Label Text="{Binding AttemptsText}" FontSize="11" TextColor="#6B7280" />
+                        </VerticalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+        <VerticalStackLayout Grid.Row="3" Spacing="6">
+            <Label x:Name="LimitLabel" FontSize="11" TextColor="#9CA3AF"
+                   Text="Mostrando hasta 100 operaciones (sin paginación)." />
+            <Label x:Name="MessageLabel" FontSize="12" />
+            <Button Text="Volver" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

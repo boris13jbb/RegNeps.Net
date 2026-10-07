@@ -1,0 +1,78 @@
+using RegNeps.Application.Records;
+using RegNeps.Application.Sync;
+using RegNeps.Domain.Entities;
+
+namespace RegNeps.Application.Abstractions;
+
+/// <summary>
+/// Persistencia atómica de sync sobre un único DbContext/transacción.
+/// </summary>
+public interface ISyncPersistence
+{
+    Task<SyncCreatePersistResult> CreateRecordAtomicallyAsync(
+        CreateNepRecordRequest request,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
+    Task<AtomicNepRecordMutationResult> UpdateRecordAtomicallyAsync(
+        SyncUpdateRecordPayload fields,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        string? captureSessionId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
+    Task<AtomicNepRecordMutationResult> DeleteRecordAtomicallyAsync(
+        Guid entityId,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
+    /// <summary>FASE 2D.10: ApplyCorrective vía Push (idempotente, ConcurrencyStamp).</summary>
+    Task<AtomicNepRecordMutationResult> ApplyCorrectiveAtomicallyAsync(
+        Guid entityId,
+        string accion,
+        string responsable,
+        bool marcarRevisado,
+        string expectedConcurrencyStamp,
+        string clientOperationId,
+        RecordActor actor,
+        string deviceId,
+        CancellationToken ct = default);
+
+    Task<SyncPullPersistResult> PullAuthorizedChangesAsync(
+        RecordActor actor,
+        long cursor,
+        int pageSize,
+        CancellationToken ct = default);
+
+    /// <summary>FASE 2D.9: asegura ChangeLogs baseline de Fabric/Lote (idempotente).</summary>
+    Task EnsureCatalogBaselineAsync(CancellationToken ct = default);
+
+    Task<long> CountChangeLogsAsync(CancellationToken ct = default);
+
+    Task<int> CountRecordsByClientOperationAsync(
+        string userId,
+        string clientOperationId,
+        CancellationToken ct = default);
+}
+
+public sealed class SyncCreatePersistResult
+{
+    public SyncOperationResult Result { get; init; }
+    public string? Message { get; init; }
+    public string? ErrorCode { get; init; }
+    public NepRecord? Record { get; init; }
+    public long? ChangeSequence { get; init; }
+}
+
+public sealed class SyncPullPersistResult
+{
+    public long NextCursor { get; init; }
+    public bool HasMore { get; init; }
+    public IReadOnlyList<SyncChangeLog> AuthorizedChanges { get; init; } = [];
+}

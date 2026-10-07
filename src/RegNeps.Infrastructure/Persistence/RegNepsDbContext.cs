@@ -19,6 +19,7 @@ public sealed class RegNepsDbContext : DbContext
     public DbSet<AppRole> Roles => Set<AppRole>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<RolePermissionAudit> RolePermissionAudits => Set<RolePermissionAudit>();
+    public DbSet<SyncChangeLog> SyncChangeLogs => Set<SyncChangeLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -149,6 +150,37 @@ public sealed class RegNepsDbContext : DbContext
             e.Property(x => x.Permission).HasConversion<int>();
             e.HasIndex(x => x.ChangedAt);
             e.HasIndex(x => x.RoleId);
+        });
+
+        modelBuilder.Entity<SyncChangeLog>(e =>
+        {
+            e.ToTable("SyncChangeLogs");
+            e.HasKey(x => x.Sequence);
+            e.Property(x => x.Sequence).ValueGeneratedOnAdd();
+            e.Property(x => x.EntityType).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ChangeType).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ActorUserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.OwnerUserId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ClientOperationId).HasMaxLength(64);
+            e.Property(x => x.DeviceId).HasMaxLength(64);
+            e.Property(x => x.PayloadJson).IsRequired();
+            e.HasIndex(x => x.Sequence)
+                .HasDatabaseName("IX_SyncChangeLogs_Sequence");
+            e.HasIndex(x => new { x.EntityType, x.EntityId })
+                .HasDatabaseName("IX_SyncChangeLogs_EntityType_EntityId");
+            e.HasIndex(x => new { x.OwnerUserId, x.Sequence })
+                .HasDatabaseName("IX_SyncChangeLogs_Owner_Sequence");
+            e.HasIndex(x => x.ClientOperationId)
+                .HasDatabaseName("IX_SyncChangeLogs_ClientOperationId");
+
+            // FASE 2C: idempotencia Update/Delete (y Create vía ChangeLog) por actor + ClientOperationId.
+            var clientOpFilter = Database.IsSqlServer()
+                ? "[ClientOperationId] IS NOT NULL AND [ClientOperationId] <> ''"
+                : "\"ClientOperationId\" IS NOT NULL AND \"ClientOperationId\" <> ''";
+            e.HasIndex(x => new { x.ActorUserId, x.ClientOperationId })
+                .IsUnique()
+                .HasFilter(clientOpFilter)
+                .HasDatabaseName("IX_SyncChangeLogs_Actor_ClientOperation");
         });
     }
 }

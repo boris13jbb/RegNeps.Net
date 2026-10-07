@@ -51,12 +51,18 @@ Hay un JSON de ejemplo (sin datos reales) en `FTS/firestore_export_sample.json`.
 5. Confirmar contraseña temporal  
 6. Importar  
 
-### Opción B — CLI
+### Opción B — CLI (`tools/RegNeps.Migrate`)
+
+Herramienta de **importación de datos** hacia **SQLite** (`EnsureCreated` + `HistoricalDataMigrationService`).  
+**No** es el migrador de esquema de producción ni aplica el pipeline completo de `DatabaseInitializer` (SyncChangeLogs, índices, roles).  
+**No** está cableada a SQL Server. Tras el CLI, arrancar `RegNeps.Web` al menos una vez para parches/seed. Detalle: [`FASE2I_BOOTSTRAP_AND_MIGRATION.md`](FASE2I_BOOTSTRAP_AND_MIGRATION.md).
 
 ```powershell
 cd RegNeps.Net
-dotnet run --project tools/RegNeps.Migrate -- --file ..\FTS\firestore_export.json --db src\RegNeps.Web\regneps_v2.db
+dotnet run --project tools/RegNeps.Migrate -- --file ..\FTS\firestore_export.json --db src\RegNeps.Web\App_Data\regneps_v2.db
 ```
+
+(Preferir la ruta bajo `App_Data` que usa el Web en runtime; si el archivo aún no existe, el CLI lo crea con `EnsureCreated`.)
 
 ### Opción C — API
 

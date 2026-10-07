@@ -41,8 +41,8 @@ else
             @foreach (var r in _alerts)
             {
                 var level = r.GetAlertLevel(_config);
-                var itemTone = level == AlertLevel.Critico ? "rn-alert-item--critical"
-                    : level == AlertLevel.Advertencia ? "rn-alert-item--warning"
+                var itemTone = NepsQualityCriteria.IsCriticalNotificationLevel(level) ? "rn-alert-item--critical"
+                    : level == AlertLevel.Mention ? "rn-alert-item--warning"
                     : "";
                 <div class="rn-alert-item @itemTone">
                     <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
@@ -202,9 +202,10 @@ else
 
     private static string BadgeTone(AlertLevel level) => level switch
     {
-        AlertLevel.Advertencia => "warning",
-        AlertLevel.Critico => "critical",
-        AlertLevel.Normal => "normal",
+        AlertLevel.Mention => "warning",
+        AlertLevel.CriticalAdjustment => "critical",
+        AlertLevel.SecondQuality => "critical",
+        AlertLevel.Ok => "normal",
         _ => "muted"
     };
 }

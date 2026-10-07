@@ -7,11 +7,13 @@ using RegNeps.Application.Auth;
 using RegNeps.Application.Permissions;
 using RegNeps.Application.Records;
 using RegNeps.Application.Reports;
+using RegNeps.Application.Sync;
 using RegNeps.Infrastructure.Export;
 using RegNeps.Infrastructure.Import;
 using RegNeps.Infrastructure.Migration;
 using RegNeps.Infrastructure.Persistence;
 using RegNeps.Infrastructure.Repositories;
+using RegNeps.Infrastructure.Sync;
 
 namespace RegNeps.Infrastructure;
 
@@ -64,7 +66,10 @@ public static class DependencyInjection
 
         services.AddSingleton<IAlertRealtimeNotifier, NoOpAlertRealtimeNotifier>();
         services.AddScoped<IAlertCriticalPublisher, AlertCriticalPublisher>();
+        services.AddScoped<IAtomicNepRecordCreateStore, AtomicNepRecordCreateStore>();
         services.AddScoped<NepRecordService>();
+        services.AddScoped<ISyncPersistence, SyncPersistence>();
+        services.AddScoped<SyncAppService>();
         services.AddScoped<AuthService>();
         services.AddScoped<UserAdminService>();
         services.AddScoped<AnalyticsService>();

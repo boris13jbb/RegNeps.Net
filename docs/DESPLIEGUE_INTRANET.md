@@ -38,6 +38,8 @@ Para SQL Server en intranet, edite `appsettings.Production.json` o use variables
 
 Tras el primer arranque en Production, cambie la contraseña del usuario seed `admin` (si se creó) y no deje credenciales por defecto.
 
+**Esquema:** el arranque ejecuta `EnsureCreated` (solo BD nueva) + parches aditivos idempotentes (`DatabaseInitializer`). No se usa `Database.Migrate()` en Web. Detalle: [FASE2I_BOOTSTRAP_AND_MIGRATION.md](FASE2I_BOOTSTRAP_AND_MIGRATION.md). Backup previo: [CHECKLIST_DESPLIEGUE_PARIDAD.md](CHECKLIST_DESPLIEGUE_PARIDAD.md).
+
 ## Firewall
 
 Abrir puerto **5080** (o 80 si pone un reverse proxy IIS) solo en la red corporativa.

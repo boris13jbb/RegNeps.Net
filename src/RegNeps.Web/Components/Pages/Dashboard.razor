@@ -119,7 +119,7 @@ else
                     </KpiCard>
                 </div>
                 <div class="col-6 col-md-4 col-xl-2">
-                    <KpiCard Soft Icon="warn" Tone="warning" Label="Advertencias"
+                    <KpiCard Soft Icon="warn" Tone="warning" Label="Menciones"
                              Delta="@DeltaText(_summary.WarningCount, _prev?.WarningCount)"
                              DeltaTone="@DeltaToneInt(_summary.WarningCount, _prev?.WarningCount, invert: true)">
                         @_summary.WarningCount
@@ -349,20 +349,23 @@ else
             var range = ReportDateRange.FromLocalCalendarDates(fromUtc.ToLocalTime().Date, toUtc.ToLocalTime().Date);
             var filters = new RecordFilters();
             range.ApplyTo(filters);
-            var records = await RecordService.QueryAsync(
-                filters, _session.ToActor(), RecordQueryScope.Default, 50_000);
-            _pendientes = records.Count(r => r.RequiereSeguimiento(_config));
-            _ultimos = records
-                .OrderByDescending(r => r.CreatedAt)
-                .Take(15)
-                .ToList();
+            var actor = _session.ToActor();
+
+            // FASE 2F: no materializar hasta 50k solo para «últimos» + pendientes.
+            var ultimosPage = await RecordService.QueryPagedAsync(
+                filters, actor, pageNumber: 1, pageSize: 15, RecordQueryScope.Default);
+            _ultimos = ultimosPage.Items;
+
+            var pendFilters = new RecordFilters { SoloPendientes = true };
+            range.ApplyTo(pendFilters);
+            _pendientes = await RecordService.CountFilteredAsync(
+                pendFilters, actor, RecordQueryScope.Default);
 
             var prevRange = ReportDateRange.FromLocalCalendarDates(prevFrom.ToLocalTime().Date, prevTo.ToLocalTime().Date.AddDays(-1));
-            var prevFilters = new RecordFilters();
-            prevRange.ApplyTo(prevFilters);
-            var prevRecords = await RecordService.QueryAsync(
-                prevFilters, _session.ToActor(), RecordQueryScope.Default, 50_000);
-            _prevPendientes = prevRecords.Count(r => r.RequiereSeguimiento(_config));
+            var prevPendFilters = new RecordFilters { SoloPendientes = true };
+            prevRange.ApplyTo(prevPendFilters);
+            _prevPendientes = await RecordService.CountFilteredAsync(
+                prevPendFilters, actor, RecordQueryScope.Default);
 
             _currentPage = 1;
             _chartsDirty = true;
@@ -392,8 +395,9 @@ else
 
             var dayLabels = _summary.ByDay.Select(d => d.Date.ToString("dd MMM", System.Globalization.CultureInfo.GetCultureInfo("es-ES"))).ToArray();
             var dayAvg = _summary.ByDay.Select(d => Math.Round(d.AverageNeps, 2)).ToArray();
-            var warnLine = dayLabels.Select(_ => (double)_config.LimiteNormalMax).ToArray();
-            var critLine = dayLabels.Select(_ => (double)_config.LimiteAdvertenciaMax).ToArray();
+            var mentionLine = dayLabels.Select(_ => (double)NepsQualityCriteria.OkScoreMax).ToArray();
+            var criticalLine = dayLabels.Select(_ => (double)NepsQualityCriteria.MentionScoreMax).ToArray();
+            var secondQualityLine = dayLabels.Select(_ => (double)NepsQualityCriteria.CriticalAdjustmentScoreMax).ToArray();
 
             await Js.InvokeVoidAsync("regnepsCharts.upsertChart", "dash-trend", new
             {
@@ -405,7 +409,7 @@ else
                     {
                         new
                         {
-                            label = "Promedio neps",
+                            label = "Promedio neps (Q)",
                             data = dayAvg,
                             borderColor = "#2563EB",
                             backgroundColor = "rgba(37, 99, 235, 0.12)",
@@ -416,8 +420,8 @@ else
                         },
                         new
                         {
-                            label = "Límite advertencia",
-                            data = warnLine,
+                            label = "Límite OK (18)",
+                            data = mentionLine,
                             borderColor = "#F59E0B",
                             borderDash = new[] { 6, 4 },
                             pointRadius = 0,
@@ -426,10 +430,20 @@ else
                         },
                         new
                         {
-                            label = "Límite crítico",
-                            data = critLine,
+                            label = "Límite Mención (45)",
+                            data = criticalLine,
                             borderColor = "#DC2626",
                             borderDash = new[] { 6, 4 },
+                            pointRadius = 0,
+                            fill = false,
+                            tension = 0
+                        },
+                        new
+                        {
+                            label = "Límite Crítico (54)",
+                            data = secondQualityLine,
+                            borderColor = "#7F1D1D",
+                            borderDash = new[] { 4, 4 },
                             pointRadius = 0,
                             fill = false,
                             tension = 0
@@ -456,7 +470,7 @@ else
                 type = "doughnut",
                 data = new
                 {
-                    labels = new[] { "Normal", "Advertencia", "Crítico" },
+                    labels = new[] { "OK", "Mención", "Crítico / 2da Calidad" },
                     datasets = new object[]
                     {
                         new
@@ -496,9 +510,10 @@ else
 
     private static string BadgeTone(AlertLevel level) => level switch
     {
-        AlertLevel.Normal => "normal",
-        AlertLevel.Advertencia => "warning",
-        AlertLevel.Critico => "critical",
+        AlertLevel.Ok => "normal",
+        AlertLevel.Mention => "warning",
+        AlertLevel.CriticalAdjustment => "critical",
+        AlertLevel.SecondQuality => "critical",
         _ => "muted"
     };
 

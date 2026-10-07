@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="RegNeps.Mobile.OfflineConflictResolvePage"
+             Title="Resolver conflicto"
+             BackgroundColor="#F4F5F2">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="12">
+            <Label x:Name="KindLabel" FontAttributes="Bold" FontSize="18" />
+            <Label x:Name="ReasonLabel" FontSize="14" TextColor="#92400E" />
+            <Label x:Name="EntityLabel" FontSize="12" TextColor="#6B7280" />
+
+            <Border Stroke="#D1D5DB" Padding="12" BackgroundColor="White">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Estado local" FontAttributes="Bold" />
+                    <Label x:Name="LocalSummaryLabel" FontSize="13" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Stroke="#D1D5DB" Padding="12" BackgroundColor="#EFF6FF">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Estado servidor" FontAttributes="Bold" TextColor="#1E3A5F" />
+                    <Label x:Name="ServerSummaryLabel" FontSize="13" TextColor="#1E3A5F" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Stroke="#E5E7EB" Padding="12" BackgroundColor="#F9FAFB">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="Diferencias" FontAttributes="Bold" FontSize="13" />
+                    <Label x:Name="DiffsLabel" FontSize="12" TextColor="#374151" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label x:Name="EditSectionTitle" Text="Editar y reintentar" FontAttributes="Bold" IsVisible="False" />
+            <VerticalStackLayout x:Name="EditFields" Spacing="8" IsVisible="False">
+                <Entry x:Name="TelarEntry" Placeholder="Telar" />
+                <Entry x:Name="NepsEntry" Placeholder="Neps" Keyboard="Numeric" TextChanged="OnNepsChanged" />
+                <Label x:Name="QualityLabel" FontSize="12" TextColor="#294D1E" />
+                <Entry x:Name="TelaEntry" Placeholder="Tela" />
+                <Entry x:Name="LoteEntry" Placeholder="Lote trama" />
+                <Entry x:Name="TurnoEntry" Placeholder="Turno" />
+                <Entry x:Name="OperarioEntry" Placeholder="Operario" />
+                <Entry x:Name="LineaEntry" Placeholder="Línea" />
+                <Editor x:Name="ObservacionEditor" Placeholder="Observación" AutoSize="TextChanges" HeightRequest="72" />
+            </VerticalStackLayout>
+            <VerticalStackLayout x:Name="CorrectiveEditFields" Spacing="8" IsVisible="False">
+                <Entry x:Name="AccionEntry" Placeholder="Acción correctiva *" />
+                <Entry x:Name="ResponsableEntry" Placeholder="Responsable" />
+                <HorizontalStackLayout Spacing="8">
+                    <CheckBox x:Name="MarcarRevisadoCheck" IsChecked="True" />
+                    <Label Text="Marcar revisado por supervisor" VerticalOptions="Center" />
+                </HorizontalStackLayout>
+            </VerticalStackLayout>
+
+            <Label x:Name="BlockedHintLabel" FontSize="13" TextColor="#7C2D12" IsVisible="False" />
+
+            <Button x:Name="KeepServerButton"
+                    Text="Aceptar versión del servidor"
+                    Clicked="OnKeepServerClicked"
+                    IsVisible="False"
+                    BackgroundColor="#1E3A5F"
+                    TextColor="White" />
+
+            <Button x:Name="KeepLocalButton"
+                    Text="Mantener mis cambios"
+                    Clicked="OnKeepLocalClicked"
+                    IsVisible="False"
+                    BackgroundColor="#294D1E"
+                    TextColor="White" />
+
+            <Button x:Name="EditRetryButton"
+                    Text="Editar y resolver"
+                    Clicked="OnEditRetryClicked"
+                    IsVisible="False"
+                    BackgroundColor="#B45309"
+                    TextColor="White" />
+
+            <Label x:Name="MessageLabel" FontSize="13" />
+
+            <Button Text="Volver" Clicked="OnBackClicked" BackgroundColor="Transparent" TextColor="#294D1E" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

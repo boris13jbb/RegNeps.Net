@@ -13,7 +13,7 @@
 else
 {
     <PageHeader Title="Configuración"
-                Subtitle="Umbrales de neps y reglas de seguimiento operativo." />
+                Subtitle="Criterios oficiales de calidad NEPS y reglas de notificación." />
 
     @if (!string.IsNullOrEmpty(_error))
     {
@@ -30,38 +30,42 @@ else
     }
     else
     {
-        <div class="rn-panel" style="max-width: 560px;">
+        <div class="rn-panel" style="max-width: 640px;">
             <div class="rn-panel-body">
+                <h2 class="h6 mb-2">Criterios oficiales de calidad (fijos)</h2>
+                <p class="small text-muted mb-2">
+                    La calificación de cada registro se calcula siempre con estos criterios
+                    (<code>NepsQualityCriteria</code>). No son editables.
+                    Fórmula: NEPS/m² = NEPS / 0.09.
+                </p>
+                <ul class="small mb-3 ps-3">
+                    <li><strong>OK:</strong> Q 0–18 / NEPS/m² ≤ 200</li>
+                    <li><strong>Mención:</strong> Q 19–45 / NEPS/m² &gt; 200 y ≤ 500</li>
+                    <li><strong>Crítico - Realizar Ajuste:</strong> Q 46–54 / NEPS/m² &gt; 500 y ≤ 600</li>
+                    <li><strong>2da Calidad:</strong> Q ≥ 55 / NEPS/m² &gt; 600</li>
+                </ul>
+
                 <fieldset disabled="@(!_canEdit)" class="row g-3">
-                    <legend class="visually-hidden">Umbrales y reincidencias</legend>
-                    <div class="col-md-6">
-                        <label class="form-label" for="cfg-normal">Límite normal máx.</label>
-                        <InputNumber id="cfg-normal" class="form-control" @bind-Value="_config.LimiteNormalMax" />
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label" for="cfg-advertencia">Límite advertencia máx.</label>
-                        <InputNumber id="cfg-advertencia" class="form-control" @bind-Value="_config.LimiteAdvertenciaMax" />
-                    </div>
+                    <legend class="visually-hidden">Notificaciones y reincidencias</legend>
                     <div class="col-md-6">
                         <label class="form-label" for="cfg-reincidencias">Reincidencias críticas</label>
                         <InputNumber id="cfg-reincidencias" class="form-control" @bind-Value="_config.CantidadReincidenciasCriticas" />
+                        <div class="form-text">Cantidad de mediciones críticas (ajuste o 2da calidad) en la ventana para marcar reincidencia.</div>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label" for="cfg-dias">Días para reincidencia</label>
                         <InputNumber id="cfg-dias" class="form-control" @bind-Value="_config.DiasParaReincidencia" />
+                        <div class="form-text">Ventana en días (= @_config.VentanaReincidenciasHoras h informativo).</div>
                     </div>
                     <div class="col-12">
                         <div class="form-check">
                             <InputCheckbox class="form-check-input" @bind-Value="_config.AlertasActivas" id="alertas" />
                             <label class="form-check-label" for="alertas">Alertas activas</label>
                         </div>
-                    </div>
-                    <div class="col-12">
-                        <p class="small text-muted mb-0">
-                            Crítico desde: @_config.LimiteCriticoMin ·
-                            Ventana reincidencias (informativo): @_config.VentanaReincidenciasHoras h
-                            (= @_config.DiasParaReincidencia días × 24). La evaluación usa días.
-                        </p>
+                        <div class="form-text">
+                            Si está desactivado, no se envían notificaciones automáticas (p. ej. SignalR).
+                            La calificación de calidad del registro no cambia.
+                        </div>
                     </div>
                     @if (_canEdit)
                     {
@@ -85,7 +89,7 @@ else
 
         @if (_canMigrate)
         {
-            <div class="rn-panel mt-3" style="max-width: 560px;">
+            <div class="rn-panel mt-3" style="max-width: 640px;">
                 <div class="rn-panel-body">
                     <h2 class="h6 mb-2">Datos históricos</h2>
                     <p class="small text-muted mb-3">
@@ -143,9 +147,14 @@ else
         _saving = true;
         try
         {
-            if (_config.LimiteNormalMax < 0 || _config.LimiteAdvertenciaMax <= _config.LimiteNormalMax)
+            if (_config.CantidadReincidenciasCriticas < 1)
             {
-                throw new InvalidOperationException("Los límites deben ser coherentes (advertencia > normal ≥ 0).");
+                throw new InvalidOperationException("Las reincidencias críticas deben ser al menos 1.");
+            }
+
+            if (_config.DiasParaReincidencia < 1)
+            {
+                throw new InvalidOperationException("Los días para reincidencia deben ser al menos 1.");
             }
 
             await AlertConfig.SaveAsync(_config);

@@ -10,34 +10,51 @@ public class AlertEvaluatorTests
 {
     private static AlertConfig DefaultConfig() => new()
     {
-        LimiteNormalMax = 30,
-        LimiteAdvertenciaMax = 60,
+        LimiteNormalMax = 18,
+        LimiteAdvertenciaMax = 45,
         AlertasActivas = true
     };
 
     [Theory]
-    [InlineData(0, AlertLevel.Normal)]
-    [InlineData(30, AlertLevel.Normal)]
-    [InlineData(31, AlertLevel.Advertencia)]
-    [InlineData(60, AlertLevel.Advertencia)]
-    [InlineData(61, AlertLevel.Critico)]
-    [InlineData(100, AlertLevel.Critico)]
-    public void GetLevel_Uses_Thresholds_30_And_60(double neps, AlertLevel expected)
+    [InlineData(0, AlertLevel.Ok)]
+    [InlineData(18, AlertLevel.Ok)]
+    [InlineData(19, AlertLevel.Mention)]
+    [InlineData(45, AlertLevel.Mention)]
+    [InlineData(46, AlertLevel.CriticalAdjustment)]
+    [InlineData(54, AlertLevel.CriticalAdjustment)]
+    [InlineData(55, AlertLevel.SecondQuality)]
+    [InlineData(100, AlertLevel.SecondQuality)]
+    public void GetLevel_Uses_Official_Q_Boundaries(double neps, AlertLevel expected)
     {
         var level = AlertEvaluator.GetLevel(neps, DefaultConfig());
         Assert.Equal(expected, level);
     }
 
     [Fact]
-    public void GetLevel_When_Alerts_Disabled_Returns_Normal()
+    public void GetLevel_Ignores_Legacy_Config_Thresholds()
     {
-        var cfg = DefaultConfig();
-        cfg.AlertasActivas = false;
-        Assert.Equal(AlertLevel.Normal, AlertEvaluator.GetLevel(999, cfg));
+        var cfg = new AlertConfig
+        {
+            LimiteNormalMax = 30,
+            LimiteAdvertenciaMax = 60,
+            AlertasActivas = true
+        };
+
+        Assert.Equal(AlertLevel.Mention, AlertEvaluator.GetLevel(30, cfg));
+        Assert.Equal(AlertLevel.SecondQuality, AlertEvaluator.GetLevel(61, cfg));
     }
 
     [Fact]
-    public void HasCriticalRecurrence_Requires_Configured_Count()
+    public void GetLevel_When_Alerts_Disabled_Still_Classifies_Quality()
+    {
+        var cfg = DefaultConfig();
+        cfg.AlertasActivas = false;
+        Assert.Equal(AlertLevel.SecondQuality, AlertEvaluator.GetLevel(999, cfg));
+        Assert.Equal(AlertLevel.Ok, AlertEvaluator.GetLevel(10, cfg));
+    }
+
+    [Fact]
+    public void HasCriticalRecurrence_Counts_Both_Critical_Levels()
     {
         var cfg = DefaultConfig();
         cfg.CantidadReincidenciasCriticas = 3;
@@ -45,9 +62,9 @@ public class AlertEvaluatorTests
         var now = DateTime.UtcNow;
         var records = new List<NepRecord>
         {
-            new() { Telar = "T1", Neps = 70, CreatedAt = now.AddHours(-2) },
-            new() { Telar = "T1", Neps = 80, CreatedAt = now.AddHours(-1) },
-            new() { Telar = "T1", Neps = 90, CreatedAt = now.AddMinutes(-10) },
+            new() { Telar = "T1", Neps = 50, CreatedAt = now.AddHours(-2) },
+            new() { Telar = "T1", Neps = 55, CreatedAt = now.AddHours(-1) },
+            new() { Telar = "T1", Neps = 70, CreatedAt = now.AddMinutes(-10) },
         };
 
         Assert.True(AlertEvaluator.HasCriticalRecurrence(records, "T1", cfg, now));

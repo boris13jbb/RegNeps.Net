@@ -17,6 +17,7 @@ using RegNeps.Application.Alerts;
 using RegNeps.Web.Auth;
 using RegNeps.Web.Components;
 using RegNeps.Web.Realtime;
+using RegNeps.Web.Sync;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -279,7 +280,7 @@ app.MapGet("/api/export/analytics/{format}", async (
     };
 
     if (!string.IsNullOrWhiteSpace(alerta) &&
-        Enum.TryParse<AlertLevel>(alerta, ignoreCase: true, out var alertLevel))
+        AlertLevelExtensions.TryParseFilter(alerta, out var alertLevel))
     {
         filters.AlertLevel = alertLevel;
     }
@@ -462,6 +463,8 @@ app.MapPost("/api/migration/import", async (
 }).DisableAntiforgery().RequireAuthorization();
 
 app.MapHub<AlertNotificationHub>("/hubs/alerts");
+
+app.MapSyncApi();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
